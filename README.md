@@ -152,7 +152,22 @@ docker compose up --build
 
 ---
 
-### 方式三：仅启动应用编排
+### 方式三：使用预构建镜像快速部署（推荐）
+
+如果你不想本地编译，可以直接使用自动构建的 Docker 镜像：
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+前端地址：`http://localhost:4173`  
+后端地址：`http://localhost:8080`
+
+> 📖 了解更多镜像构建、版本管理和部署细节，请查看 [Docker 镜像与部署指南](./DOCKER_DEPLOY.md)
+
+---
+
+### 方式四：仅启动应用编排
 
 如果你希望单独使用项目提供的完整应用编排文件，也可以执行：
 
