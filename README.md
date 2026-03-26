@@ -4,6 +4,12 @@
 
 后端基于 Go + Gin，前端基于 React + Vite + TypeScript，向量数据库使用 Qdrant，适合个人或小团队在本地环境、自托管环境中快速搭建可用的知识库问答系统。
 
+## 界面预览
+
+### 首页
+
+![首页预览](./assets/home-page.png)
+
 ## 功能特性
 
 ### 核心能力
@@ -191,6 +197,8 @@ docker compose -f docker-compose.app.yml up --build
 
 打开前端后，进入 Settings 页面，分别配置 Chat 与 Embedding。
 
+![设置页面](./assets/setting.png)
+
 #### Ollama 示例
 
 **Chat 配置**
@@ -236,6 +244,13 @@ docker compose -f docker-compose.app.yml up --build
 2. 选择目标知识库
 3. 输入问题并发送
 4. 系统会自动完成检索、重排、上下文拼装与模型调用
+
+### Demo 演示
+
+<p align="center">
+  <img src="./assets/demo-1.1.png" alt="Demo 1" width="48%" />
+  <img src="./assets/demo-1.2.png" alt="Demo 2" width="48%" />
+</p>
 
 ### 4. 查看持久化数据
 
