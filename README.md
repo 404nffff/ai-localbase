@@ -414,3 +414,9 @@ npm run build
 - 更多文档类型支持
 - 知识库导入与导出
 - 多用户隔离与权限能力
+
+**如果这个项目对你有帮助，请给个 ⭐ Star!**
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/image?repos=veyliss/ai-localbase&type=date&legend=top-left)](https://www.star-history.com/?repos=veyliss%2Fai-localbase&type=date&legend=top-left)
