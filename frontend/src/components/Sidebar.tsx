@@ -3,6 +3,7 @@ import {
   AppConfig,
   ChatConfig,
   Conversation,
+  DirectoryUploadTask,
   EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
@@ -20,6 +21,10 @@ interface SidebarProps {
   onCreateKnowledgeBase: (name: string, description: string) => void
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
+  onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
+  directoryUploadTask: DirectoryUploadTask
+  onCancelDirectoryUpload: () => void
+  onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
   conversations: Conversation[]
   activeConversationId: string | null
@@ -58,6 +63,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   onCreateKnowledgeBase,
   onDeleteKnowledgeBase,
   onUploadFiles,
+  onUploadDirectory,
+  directoryUploadTask,
+  onCancelDirectoryUpload,
+  onContinueDirectoryUpload,
   onRemoveDocument,
   conversations,
   activeConversationId,
@@ -300,6 +309,10 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCreateKnowledgeBase={onCreateKnowledgeBase}
         onDeleteKnowledgeBase={onDeleteKnowledgeBase}
         onUploadFiles={onUploadFiles}
+        onUploadDirectory={onUploadDirectory}
+        directoryUploadTask={directoryUploadTask}
+        onCancelDirectoryUpload={onCancelDirectoryUpload}
+        onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}
         onClose={onToggleKnowledgePanel}
       />

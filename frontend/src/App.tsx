@@ -1,7 +1,7 @@
 import './App.css'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -176,6 +176,74 @@ interface UploadResponse {
   uploaded: BackendDocumentItem
 }
 
+interface UploadQueueItem {
+  file: File
+  name: string
+  path: string
+}
+
+interface DirectoryUploadIssueItem {
+  name: string
+  path: string
+  reason: string
+}
+
+export type DirectoryUploadStatus =
+  | 'idle'
+  | 'scanning'
+  | 'uploading'
+  | 'canceling'
+  | 'canceled'
+  | 'done'
+  | 'partial-failed'
+  | 'failed'
+
+export interface DirectoryUploadTask {
+  knowledgeBaseId: string | null
+  status: DirectoryUploadStatus
+  totalFiles: number
+  eligibleFiles: number
+  skippedFiles: number
+  successFiles: number
+  failedFiles: number
+  pendingFiles: number
+  processedFiles: number
+  currentFileName: string
+  currentFilePath: string
+  failedItems: DirectoryUploadIssueItem[]
+  skippedItems: DirectoryUploadIssueItem[]
+  summaryMessage: string
+}
+
+const DIRECTORY_UPLOAD_ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.pdf'])
+
+const createEmptyDirectoryUploadTask = (): DirectoryUploadTask => ({
+  knowledgeBaseId: null,
+  status: 'idle',
+  totalFiles: 0,
+  eligibleFiles: 0,
+  skippedFiles: 0,
+  successFiles: 0,
+  failedFiles: 0,
+  pendingFiles: 0,
+  processedFiles: 0,
+  currentFileName: '',
+  currentFilePath: '',
+  failedItems: [],
+  skippedItems: [],
+  summaryMessage: '',
+})
+
+const getUploadFilePath = (file: File) => {
+  const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath
+  return relativePath && relativePath.trim() ? relativePath : file.name
+}
+
+const getFileExtension = (fileName: string) => {
+  const dotIndex = fileName.lastIndexOf('.')
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ''
+}
+
 const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
   id: document.id,
   name: document.name,
@@ -245,6 +313,22 @@ const extractErrorMessage = async (response: Response) => {
   }
 }
 
+const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
+  const parts = [
+    `总文件 ${task.totalFiles}`,
+    `可上传 ${task.eligibleFiles}`,
+    `成功 ${task.successFiles}`,
+    `失败 ${task.failedFiles}`,
+    `跳过 ${task.skippedFiles}`,
+  ]
+
+  if (task.pendingFiles > 0) {
+    parts.push(`未执行 ${task.pendingFiles}`)
+  }
+
+  return parts.join(' · ')
+}
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
@@ -258,6 +342,11 @@ function App() {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isKnowledgePanelOpen, setIsKnowledgePanelOpen] = useState(false)
+  const [directoryUploadTask, setDirectoryUploadTask] = useState<DirectoryUploadTask>(
+    createEmptyDirectoryUploadTask,
+  )
+  const [directoryUploadPendingFiles, setDirectoryUploadPendingFiles] = useState<UploadQueueItem[]>([])
+  const directoryUploadCancelRef = useRef(false)
 
   const loadConversationDetail = async (conversationId: string): Promise<Conversation> => {
     const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`)
@@ -689,6 +778,145 @@ function App() {
     setSelectedDocumentId(documentId)
   }
 
+  const uploadSingleKnowledgeBaseFile = async (knowledgeBaseId: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response))
+    }
+
+    const data = (await response.json()) as UploadResponse
+    return normalizeDocument(data.uploaded)
+  }
+
+  const appendUploadedDocument = (knowledgeBaseId: string, document: DocumentItem) => {
+    setKnowledgeBases((prev) =>
+      prev.map((knowledgeBase) =>
+        knowledgeBase.id === knowledgeBaseId
+          ? {
+              ...knowledgeBase,
+              documents: [document, ...knowledgeBase.documents],
+            }
+          : knowledgeBase,
+      ),
+    )
+  }
+
+  const processDirectoryUploadQueue = async (
+    knowledgeBaseId: string,
+    queue: UploadQueueItem[],
+    mode: 'new' | 'resume',
+  ) => {
+    if (queue.length === 0) {
+      setDirectoryUploadTask((prev) => {
+        const nextTask: DirectoryUploadTask = {
+          ...prev,
+          knowledgeBaseId,
+          status: prev.failedFiles > 0 ? 'partial-failed' : 'done',
+          pendingFiles: 0,
+          currentFileName: '',
+          currentFilePath: '',
+        }
+        return {
+          ...nextTask,
+          summaryMessage: buildDirectoryUploadSummary(nextTask),
+        }
+      })
+      return
+    }
+
+    directoryUploadCancelRef.current = false
+    setSelectedKnowledgeBaseId(knowledgeBaseId)
+
+    setDirectoryUploadTask((prev) => ({
+      ...prev,
+      knowledgeBaseId,
+      status: 'uploading',
+      currentFileName: mode === 'resume' ? prev.currentFileName : '',
+      currentFilePath: mode === 'resume' ? prev.currentFilePath : '',
+      pendingFiles: queue.length,
+      summaryMessage: '',
+    }))
+
+    const nextPendingQueue: UploadQueueItem[] = []
+    let firstUploadedDocumentId: string | null = null
+
+    for (let index = 0; index < queue.length; index += 1) {
+      if (directoryUploadCancelRef.current) {
+        nextPendingQueue.push(...queue.slice(index))
+        break
+      }
+
+      const item = queue[index]
+
+      setDirectoryUploadTask((prev) => ({
+        ...prev,
+        status: prev.status === 'canceling' ? 'canceling' : 'uploading',
+        currentFileName: item.name,
+        currentFilePath: item.path,
+        pendingFiles: queue.length - index,
+      }))
+
+      try {
+        const uploaded = await uploadSingleKnowledgeBaseFile(knowledgeBaseId, item.file)
+        appendUploadedDocument(knowledgeBaseId, uploaded)
+        firstUploadedDocumentId = firstUploadedDocumentId ?? uploaded.id
+
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          successFiles: prev.successFiles + 1,
+          processedFiles: prev.processedFiles + 1,
+          pendingFiles: Math.max(queue.length - index - 1, 0),
+        }))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '上传文档失败，请稍后重试。'
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          failedFiles: prev.failedFiles + 1,
+          processedFiles: prev.processedFiles + 1,
+          pendingFiles: Math.max(queue.length - index - 1, 0),
+          failedItems: [...prev.failedItems, { name: item.name, path: item.path, reason }],
+        }))
+      }
+    }
+
+    setDirectoryUploadPendingFiles(nextPendingQueue)
+    if (firstUploadedDocumentId) {
+      setSelectedDocumentId((current) => current ?? firstUploadedDocumentId)
+    }
+
+    setDirectoryUploadTask((prev) => {
+      let status: DirectoryUploadStatus = 'done'
+
+      if (directoryUploadCancelRef.current) {
+        status = 'canceled'
+      } else if (prev.successFiles === 0 && prev.failedFiles > 0) {
+        status = 'failed'
+      } else if (prev.failedFiles > 0) {
+        status = 'partial-failed'
+      }
+
+      const nextTask: DirectoryUploadTask = {
+        ...prev,
+        status,
+        currentFileName: '',
+        currentFilePath: '',
+        pendingFiles: nextPendingQueue.length,
+      }
+
+      return {
+        ...nextTask,
+        summaryMessage: buildDirectoryUploadSummary(nextTask),
+      }
+    })
+  }
+
   const handleUploadFiles = async (knowledgeBaseId: string, files: FileList | null) => {
     if (!files || files.length === 0) {
       return
@@ -698,23 +926,8 @@ function App() {
       const uploadedDocuments: DocumentItem[] = []
 
       for (const file of Array.from(files)) {
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const response = await fetch(
-          `${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents`,
-          {
-            method: 'POST',
-            body: formData,
-          },
-        )
-
-        if (!response.ok) {
-          throw new Error(await extractErrorMessage(response))
-        }
-
-        const data = (await response.json()) as UploadResponse
-        uploadedDocuments.push(normalizeDocument(data.uploaded))
+        const uploaded = await uploadSingleKnowledgeBaseFile(knowledgeBaseId, file)
+        uploadedDocuments.push(uploaded)
       }
 
       setKnowledgeBases((prev) =>
@@ -735,6 +948,104 @@ function App() {
         error instanceof Error ? error.message : '上传文档失败，请稍后重试。'
       window.alert(`上传文档失败：${message}`)
     }
+  }
+
+  const handleUploadDirectory = async (knowledgeBaseId: string, files: FileList | null) => {
+    if (!files || files.length === 0) {
+      return
+    }
+
+    directoryUploadCancelRef.current = false
+    const allItems = Array.from(files).map((file) => ({
+      file,
+      name: file.name,
+      path: getUploadFilePath(file),
+    }))
+
+    const eligibleItems: UploadQueueItem[] = []
+    const skippedItems: DirectoryUploadIssueItem[] = []
+
+    setDirectoryUploadTask({
+      knowledgeBaseId,
+      status: 'scanning',
+      totalFiles: allItems.length,
+      eligibleFiles: 0,
+      skippedFiles: 0,
+      successFiles: 0,
+      failedFiles: 0,
+      pendingFiles: 0,
+      processedFiles: 0,
+      currentFileName: '',
+      currentFilePath: '',
+      failedItems: [],
+      skippedItems: [],
+      summaryMessage: '',
+    })
+
+    for (const item of allItems) {
+      const extension = getFileExtension(item.name)
+      if (DIRECTORY_UPLOAD_ALLOWED_EXTENSIONS.has(extension)) {
+        eligibleItems.push(item)
+      } else {
+        skippedItems.push({
+          name: item.name,
+          path: item.path,
+          reason: extension ? `不支持的后缀 ${extension}` : '缺少文件后缀',
+        })
+      }
+    }
+
+    setDirectoryUploadPendingFiles(eligibleItems)
+
+    const scannedTask: DirectoryUploadTask = {
+      knowledgeBaseId,
+      status: eligibleItems.length > 0 ? 'uploading' : 'done',
+      totalFiles: allItems.length,
+      eligibleFiles: eligibleItems.length,
+      skippedFiles: skippedItems.length,
+      successFiles: 0,
+      failedFiles: 0,
+      pendingFiles: eligibleItems.length,
+      processedFiles: 0,
+      currentFileName: '',
+      currentFilePath: '',
+      failedItems: [],
+      skippedItems,
+      summaryMessage: '',
+    }
+
+    setDirectoryUploadTask({
+      ...scannedTask,
+      summaryMessage:
+        eligibleItems.length === 0 ? '所选目录中没有可上传的 .txt、.md 或 .pdf 文件。' : '',
+    })
+
+    if (eligibleItems.length === 0) {
+      return
+    }
+
+    await processDirectoryUploadQueue(knowledgeBaseId, eligibleItems, 'new')
+  }
+
+  const handleCancelDirectoryUpload = () => {
+    directoryUploadCancelRef.current = true
+    setDirectoryUploadTask((prev) => ({
+      ...prev,
+      status: prev.status === 'uploading' ? 'canceling' : prev.status,
+      summaryMessage: prev.status === 'uploading' ? '正在取消，当前文件处理完成后停止。' : prev.summaryMessage,
+    }))
+  }
+
+  const handleContinueDirectoryUpload = async () => {
+    if (!directoryUploadTask.knowledgeBaseId || directoryUploadPendingFiles.length === 0) {
+      return
+    }
+
+    await processDirectoryUploadQueue(
+      directoryUploadTask.knowledgeBaseId,
+      directoryUploadPendingFiles,
+      'resume',
+    )
   }
 
   const handleRemoveDocument = async (knowledgeBaseId: string, documentId: string) => {
@@ -1058,6 +1369,10 @@ function App() {
         onCreateKnowledgeBase={handleCreateKnowledgeBase}
         onDeleteKnowledgeBase={handleDeleteKnowledgeBase}
         onUploadFiles={handleUploadFiles}
+        onUploadDirectory={handleUploadDirectory}
+        directoryUploadTask={directoryUploadTask}
+        onCancelDirectoryUpload={handleCancelDirectoryUpload}
+        onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
         conversations={conversations}
         activeConversationId={activeConversation?.id ?? null}

@@ -1,5 +1,5 @@
-import React, { ChangeEvent, useState } from 'react'
-import { KnowledgeBase } from '../../App'
+import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { DirectoryUploadTask, KnowledgeBase } from '../../App'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -13,6 +13,10 @@ interface KnowledgePanelProps {
   onCreateKnowledgeBase: (name: string, description: string) => void
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
+  onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
+  directoryUploadTask: DirectoryUploadTask
+  onCancelDirectoryUpload: () => void
+  onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
   onClose: () => void
 }
@@ -29,6 +33,10 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCreateKnowledgeBase,
   onDeleteKnowledgeBase,
   onUploadFiles,
+  onUploadDirectory,
+  directoryUploadTask,
+  onCancelDirectoryUpload,
+  onContinueDirectoryUpload,
   onRemoveDocument,
   onClose,
 }) => {
@@ -36,12 +44,27 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
-
-  if (!open) return null
+  const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
+  const [showFailedItems, setShowFailedItems] = useState(false)
+  const [showSkippedItems, setShowSkippedItems] = useState(false)
+  const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
     onUploadFiles(knowledgeBaseId, event.target.files)
     event.target.value = ''
+  }
+
+  const handleDirectoryChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
+    onUploadDirectory(knowledgeBaseId, event.target.files)
+    event.target.value = ''
+  }
+
+  const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
+    directoryInputRefs.current[knowledgeBaseId] = element
+    if (element) {
+      element.setAttribute('webkitdirectory', '')
+      element.setAttribute('directory', '')
+    }
   }
 
   const handleOpenCreate = () => {
@@ -70,6 +93,43 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
     return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
   }
+
+  const uploadProgressPercent =
+    directoryUploadTask.eligibleFiles > 0
+      ? Math.round((directoryUploadTask.processedFiles / directoryUploadTask.eligibleFiles) * 100)
+      : 0
+
+  const visibleFailedItems = useMemo(() => directoryUploadTask.failedItems, [directoryUploadTask.failedItems])
+
+  const visibleSkippedItems = useMemo(
+    () => directoryUploadTask.skippedItems,
+    [directoryUploadTask.skippedItems],
+  )
+
+  const isTaskVisible = directoryUploadTask.status !== 'idle'
+  const canCancelUpload =
+    directoryUploadTask.status === 'uploading' || directoryUploadTask.status === 'canceling'
+  const canContinueUpload =
+    (directoryUploadTask.status === 'canceled' || directoryUploadTask.status === 'partial-failed') &&
+    directoryUploadTask.pendingFiles > 0
+
+  const isTaskActive =
+    directoryUploadTask.status === 'scanning' ||
+    directoryUploadTask.status === 'uploading' ||
+    directoryUploadTask.status === 'canceling'
+
+  useEffect(() => {
+    if (isTaskActive) {
+      setShowUploadTaskDetails(true)
+    }
+  }, [isTaskActive])
+
+  useEffect(() => {
+    setShowFailedItems(false)
+    setShowSkippedItems(false)
+  }, [directoryUploadTask.knowledgeBaseId, directoryUploadTask.status])
+
+  if (!open) return null
 
   return (
     <>
@@ -133,13 +193,23 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                         </button>
                         <div className="kb-card-actions">
                           <label className="kb-upload-btn" title="上传文档">
-                            <span>📤</span> 上传
+                            <span>📤</span> 上传文件
                             <input
                               type="file"
                               multiple
-                              accept=".txt,.md,.pdf,.docx"
+                              accept=".txt,.md,.pdf"
                               className="hidden-input"
                               onChange={(e) => handleFileChange(kb.id, e)}
+                            />
+                          </label>
+                          <label className="kb-upload-btn kb-upload-btn--secondary" title="上传目录">
+                            <span>🗂️</span> 上传目录
+                            <input
+                              ref={(element) => registerDirectoryInput(kb.id, element)}
+                              type="file"
+                              multiple
+                              className="hidden-input"
+                              onChange={(e) => handleDirectoryChange(kb.id, e)}
                             />
                           </label>
                           <button
@@ -179,6 +249,156 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           )}
                         </div>
                       </div>
+
+                      {isSelected && isTaskVisible && directoryUploadTask.knowledgeBaseId === kb.id && (
+                        <div className="kb-upload-task-shell">
+                          <div className="kb-upload-task-compact">
+                            <div className="kb-upload-task-compact-main">
+                              <span className={`kb-upload-task-pill kb-upload-task-pill--${directoryUploadTask.status}`}>
+                                {directoryUploadTask.status === 'scanning' && '扫描中'}
+                                {directoryUploadTask.status === 'uploading' && '上传中'}
+                                {directoryUploadTask.status === 'canceling' && '取消中'}
+                                {directoryUploadTask.status === 'canceled' && '已取消'}
+                                {directoryUploadTask.status === 'done' && '已完成'}
+                                {directoryUploadTask.status === 'partial-failed' && '部分完成'}
+                                {directoryUploadTask.status === 'failed' && '失败'}
+                              </span>
+                              <div className="kb-upload-task-compact-text">
+                                <div className="kb-upload-task-compact-title">目录上传任务</div>
+                                <div className="kb-upload-task-compact-summary">
+                                  {directoryUploadTask.processedFiles}/{directoryUploadTask.eligibleFiles} · 成功 {directoryUploadTask.successFiles} · 失败 {directoryUploadTask.failedFiles} · 跳过 {directoryUploadTask.skippedFiles}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="kb-upload-task-actions">
+                              <button
+                                className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                onClick={() => setShowUploadTaskDetails((prev) => !prev)}
+                              >
+                                {showUploadTaskDetails ? '收起' : '详情'}
+                              </button>
+                              {canContinueUpload && (
+                                <button className="kb-upload-task-btn" onClick={onContinueDirectoryUpload}>
+                                  继续上传
+                                </button>
+                              )}
+                              {canCancelUpload && (
+                                <button
+                                  className="kb-upload-task-btn kb-upload-task-btn--danger"
+                                  onClick={onCancelDirectoryUpload}
+                                  disabled={directoryUploadTask.status === 'canceling'}
+                                >
+                                  {directoryUploadTask.status === 'canceling' ? '取消中…' : '取消上传'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {showUploadTaskDetails && (
+                            <div className="kb-upload-task">
+                              <div className="kb-upload-progress-meta">
+                                <span>
+                                  已处理 {directoryUploadTask.processedFiles} / {directoryUploadTask.eligibleFiles}
+                                </span>
+                                <span>{uploadProgressPercent}%</span>
+                              </div>
+                              <div className="kb-upload-progress-track">
+                                <div
+                                  className="kb-upload-progress-fill"
+                                  style={{ width: `${uploadProgressPercent}%` }}
+                                />
+                              </div>
+
+                              <div className="kb-upload-stats-grid">
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">总文件</span>
+                                  <strong>{directoryUploadTask.totalFiles}</strong>
+                                </div>
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">可上传</span>
+                                  <strong>{directoryUploadTask.eligibleFiles}</strong>
+                                </div>
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">成功</span>
+                                  <strong>{directoryUploadTask.successFiles}</strong>
+                                </div>
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">失败</span>
+                                  <strong>{directoryUploadTask.failedFiles}</strong>
+                                </div>
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">跳过</span>
+                                  <strong>{directoryUploadTask.skippedFiles}</strong>
+                                </div>
+                                <div className="kb-upload-stat-card">
+                                  <span className="kb-upload-stat-label">未执行</span>
+                                  <strong>{directoryUploadTask.pendingFiles}</strong>
+                                </div>
+                              </div>
+
+                              {directoryUploadTask.currentFilePath && (
+                                <div className="kb-upload-current-file">
+                                  当前处理：{directoryUploadTask.currentFilePath}
+                                </div>
+                              )}
+
+                              {directoryUploadTask.summaryMessage && (
+                                <div className="kb-upload-summary">{directoryUploadTask.summaryMessage}</div>
+                              )}
+
+                              {directoryUploadTask.failedItems.length > 0 && (
+                                <div className="kb-upload-issues-toggle-row">
+                                  <button
+                                    className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                    onClick={() => setShowFailedItems((prev) => !prev)}
+                                  >
+                                    {showFailedItems
+                                      ? '隐藏失败文件'
+                                      : `查看失败文件（${directoryUploadTask.failedItems.length}）`}
+                                  </button>
+                                </div>
+                              )}
+
+                              {showFailedItems && visibleFailedItems.length > 0 && (
+                                <div className="kb-upload-issues">
+                                  <div className="kb-upload-issues-title">失败文件</div>
+                                  {visibleFailedItems.map((item) => (
+                                    <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
+                                      <span className="kb-upload-issue-path">{item.path}</span>
+                                      <span className="kb-upload-issue-reason">{item.reason}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {directoryUploadTask.skippedItems.length > 0 && (
+                                <div className="kb-upload-issues-toggle-row">
+                                  <button
+                                    className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                    onClick={() => setShowSkippedItems((prev) => !prev)}
+                                  >
+                                    {showSkippedItems
+                                      ? '隐藏已跳过文件'
+                                      : `查看已跳过文件（${directoryUploadTask.skippedItems.length}）`}
+                                  </button>
+                                </div>
+                              )}
+
+                              {showSkippedItems && visibleSkippedItems.length > 0 && (
+                                <div className="kb-upload-issues kb-upload-issues--muted">
+                                  <div className="kb-upload-issues-title">已跳过文件</div>
+                                  {visibleSkippedItems.map((item) => (
+                                    <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
+                                      <span className="kb-upload-issue-path">{item.path}</span>
+                                      <span className="kb-upload-issue-reason">{item.reason}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* 查询范围选择 */}
                       {isSelected && (
