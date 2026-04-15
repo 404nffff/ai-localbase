@@ -13,8 +13,8 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: ./docker/backend.Dockerfile
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
     container_name: ai-localbase-backend
     restart: unless-stopped
     depends_on:
