@@ -28,6 +28,7 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-768}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - APP_AUTH_TOKEN=${APP_AUTH_TOKEN:-change-me-app-token}
       - SERVER_PORT=8080
     extra_hosts:
       - "host.docker.internal:host-gateway"

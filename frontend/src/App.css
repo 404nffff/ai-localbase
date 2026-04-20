@@ -242,6 +242,209 @@
   background: rgba(255, 255, 255, 0.1);
 }
 
+.access-gate-loading-shell,
+.access-gate-backdrop {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.16), transparent 42%),
+    linear-gradient(180deg, #0f172a 0%, #111827 100%);
+}
+
+.access-gate-loading-card,
+.access-gate-card {
+  width: min(480px, 100%);
+  padding: 28px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.32);
+}
+
+.access-gate-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.access-gate-loading-card h1,
+.access-gate-card h1 {
+  margin: 18px 0 10px;
+  color: #111827;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.access-gate-loading-card p,
+.access-gate-card p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.6;
+}
+
+.access-gate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.access-gate-field span {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.access-gate-field input {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 14px;
+  padding: 14px 16px;
+  font: inherit;
+  color: #111827;
+  background: #ffffff;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.access-gate-field input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.access-gate-hint {
+  margin-top: 12px;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.access-gate-error {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.access-gate-error-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.access-gate-error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.access-gate-error-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.access-gate-error-copy strong {
+  color: inherit;
+  font-size: 14px;
+}
+
+.access-gate-error-copy span {
+  color: inherit;
+  opacity: 0.82;
+  font-size: 12px;
+}
+
+.access-gate-error p {
+  margin: 12px 0 0;
+  color: inherit;
+}
+
+.access-gate-error-token {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.access-gate-error-token .access-gate-error-icon {
+  background: rgba(185, 28, 28, 0.12);
+}
+
+.access-gate-error-network {
+  color: #92400e;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.access-gate-error-network .access-gate-error-icon {
+  background: rgba(146, 64, 14, 0.12);
+}
+
+.access-gate-error-warming {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.access-gate-error-warming .access-gate-error-icon {
+  background: rgba(29, 78, 216, 0.12);
+}
+
+.access-gate-error-general {
+  color: #312e81;
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.access-gate-error-general .access-gate-error-icon {
+  background: rgba(49, 46, 129, 0.12);
+}
+
+.access-gate-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.access-gate-submit {
+  border: none;
+  border-radius: 14px;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.24);
+}
+
+.access-gate-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.access-gate-submit:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
 /* Settings modal */
 .settings-modal-backdrop {
   position: fixed;
@@ -313,6 +516,27 @@
 .settings-modal-scroll {
   overflow-y: auto;
   padding: 24px;
+}
+
+.settings-save-notice {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.settings-save-notice.success {
+  color: #166534;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.settings-save-notice.error {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
 }
 
 .settings-panel-block {
@@ -2436,12 +2660,20 @@
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   overflow-x: auto;
+  min-width: 0;
 }
 
 .md-mermaid svg {
   display: block;
   max-width: 100%;
   height: auto;
+}
+
+.md-mermaid-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
 }
 
 .md-mermaid-loading,
@@ -2462,8 +2694,9 @@
   color: #b91c1c;
 }
 
+.md-mermaid-fallback .md-mermaid-error,
 .md-mermaid-fallback .md-code-block {
-  margin-top: 8px;
+  margin: 0;
 }
 
 /* ── 分隔线 ── */

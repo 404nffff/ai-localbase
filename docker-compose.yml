@@ -22,6 +22,7 @@ services:
     environment:
       PORT: "8080"
       UPLOAD_DIR: data/uploads
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN:-change-me-app-token}
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION_PREFIX: kb_
       QDRANT_VECTOR_SIZE: "768"

@@ -1,4 +1,6 @@
 import './App.css'
+import AccessTokenGate from './components/AccessTokenGate'
+import type { AccessTokenGateFeedback } from './components/AccessTokenGate'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -112,13 +114,16 @@ interface StreamEventPayload {
 
 interface HealthResponse {
   status?: string
+  auth_required?: boolean
 }
 
 const API_BASE_PATH = ''
 const AI_CONFIG_STORAGE_KEY = 'ai-localbase:app-config'
+const APP_ACCESS_TOKEN_STORAGE_KEY = 'ai-localbase:access-token'
 const STREAM_FIRST_CHUNK_TIMEOUT_MS = 60000
 const STREAM_REQUEST_TIMEOUT_MS = 150000
 const FALLBACK_REQUEST_TIMEOUT_MS = 90000
+const UNAUTHORIZED_ERROR_MESSAGE = 'unauthorized'
 
 const createId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -320,6 +325,53 @@ const extractErrorMessage = async (response: Response) => {
   }
 }
 
+// 统一识别后端 401/unauthorized 响应，便于前端转成明确的引导提示。
+const isUnauthorizedErrorMessage = (message: string) => {
+  const normalizedMessage = message.trim().toLowerCase()
+  return (
+    normalizedMessage === UNAUTHORIZED_ERROR_MESSAGE ||
+    normalizedMessage === '401' ||
+    normalizedMessage.includes('401 unauthorized')
+  )
+}
+
+const buildChatAccessTokenHint = () =>
+  '当前后端已开启访问鉴权，请先完成访问令牌验证，再继续使用聊天与知识库功能。'
+
+const buildAccessGateFeedback = (message: string): AccessTokenGateFeedback => {
+  const normalizedMessage = message.trim()
+  if (isUnauthorizedErrorMessage(normalizedMessage)) {
+    return {
+      kind: 'token',
+      title: '访问令牌无效',
+      message: '请输入正确的访问令牌后再次验证。',
+    }
+  }
+  if (
+    normalizedMessage.includes('Failed to fetch') ||
+    normalizedMessage.includes('NetworkError') ||
+    normalizedMessage.includes('ERR_CONNECTION_REFUSED')
+  ) {
+    return {
+      kind: 'network',
+      title: '无法连接后端服务',
+      message: '请确认后端已启动、代理可达，再重新尝试验证。',
+    }
+  }
+  if (normalizedMessage.includes('后端服务尚未就绪')) {
+    return {
+      kind: 'warming',
+      title: '后端仍在启动',
+      message: '服务还没有完全就绪，请稍候片刻后重新验证。',
+    }
+  }
+  return {
+    kind: 'general',
+    title: '访问验证失败',
+    message: normalizedMessage,
+  }
+}
+
 const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
   const parts = [
     `总文件 ${task.totalFiles}`,
@@ -358,9 +410,38 @@ function App() {
   const directoryUploadCancelRef = useRef(false)
   const chatAbortControllerRef = useRef<AbortController | null>(null)
   const activeChatRequestRef = useRef<{ requestId: string; conversationId: string } | null>(null)
+  const [accessToken, setAccessToken] = useState(() => {
+    if (typeof window === 'undefined') {
+      return ''
+    }
+    return window.localStorage.getItem(APP_ACCESS_TOKEN_STORAGE_KEY) ?? ''
+  })
+  const [accessTokenRequired, setAccessTokenRequired] = useState(false)
+  const [accessTokenValidated, setAccessTokenValidated] = useState(false)
+  const [accessGateFeedback, setAccessGateFeedback] = useState<AccessTokenGateFeedback | null>(null)
+  const [isAccessGateSubmitting, setIsAccessGateSubmitting] = useState(false)
+  const [isEntryReady, setIsEntryReady] = useState(false)
+
+  const buildRequestHeaders = (headers?: HeadersInit, accessTokenOverride?: string) => {
+    const nextHeaders = new Headers(headers)
+    const normalizedAccessToken = (accessTokenOverride ?? accessToken).trim()
+    if (normalizedAccessToken) {
+      // 应用访问令牌独立于模型 API Key，只用于访问当前后端。
+      nextHeaders.set('Authorization', `Bearer ${normalizedAccessToken}`)
+    }
+    return nextHeaders
+  }
+
+  const apiFetch = (path: string, init: RequestInit = {}, accessTokenOverride?: string) => {
+    const nextHeaders = buildRequestHeaders(init.headers, accessTokenOverride)
+    return fetch(`${API_BASE_PATH}${path}`, {
+      ...init,
+      headers: nextHeaders,
+    })
+  }
 
   const loadConversationDetail = async (conversationId: string): Promise<Conversation> => {
-    const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`)
+    const response = await apiFetch(`/api/conversations/${conversationId}`)
     if (!response.ok) {
       throw new Error(await extractErrorMessage(response))
     }
@@ -371,13 +452,18 @@ function App() {
   const waitForBackendReady = async (attempts = 12, delayMs = 1500) => {
     for (let index = 0; index < attempts; index += 1) {
       try {
-        const response = await fetch(`${API_BASE_PATH}/health`)
+        const response = await apiFetch('/health')
         if (response.ok) {
           const health = (await response.json()) as HealthResponse
           if ((health.status ?? '').toLowerCase() === 'ok') {
+            const nextAccessTokenRequired = Boolean(health.auth_required)
+            setAccessTokenRequired(nextAccessTokenRequired)
             setBackendReady(true)
             setBackendWarmupRequired(true)
-            return true
+            return {
+              ready: true,
+              authRequired: nextAccessTokenRequired,
+            }
           }
         }
       } catch {
@@ -392,7 +478,10 @@ function App() {
     }
 
     setBackendReady(false)
-    return false
+    return {
+      ready: false,
+      authRequired: false,
+    }
   }
   const [config, setConfig] = useState<AppConfig>(() => {
     const defaultConfig: AppConfig = {
@@ -433,7 +522,7 @@ function App() {
   })
 
   const persistConfigToBackend = async (nextConfig: AppConfig) => {
-    const response = await fetch(`${API_BASE_PATH}/api/config`, {
+    const response = await apiFetch('/api/config', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -448,6 +537,117 @@ function App() {
     const savedConfig = (await response.json()) as ConfigResponse
     setConfig(savedConfig)
     setBackendReady(true)
+  }
+
+  const lockAppForAccessToken = (message: string) => {
+    // 受保护接口返回 401 时，立即切回入口门禁，避免继续在未验证状态下操作。
+    setAccessTokenRequired(true)
+    setAccessTokenValidated(false)
+    setAccessGateFeedback(buildAccessGateFeedback(message))
+    setIsEntryReady(true)
+  }
+
+  const loadProtectedAppData = async (accessTokenOverride?: string) => {
+    const [knowledgeBaseResponse, configResponse, conversationsResponse] = await Promise.all([
+      apiFetch('/api/knowledge-bases', {}, accessTokenOverride),
+      apiFetch('/api/config', {}, accessTokenOverride),
+      apiFetch('/api/conversations', {}, accessTokenOverride),
+    ])
+
+    if (!knowledgeBaseResponse.ok) {
+      if (knowledgeBaseResponse.status === 401) {
+        throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+      }
+      throw new Error(await extractErrorMessage(knowledgeBaseResponse))
+    }
+
+    if (!configResponse.ok) {
+      if (configResponse.status === 401) {
+        throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+      }
+      throw new Error(await extractErrorMessage(configResponse))
+    }
+
+    if (!conversationsResponse.ok) {
+      if (conversationsResponse.status === 401) {
+        throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+      }
+      throw new Error(await extractErrorMessage(conversationsResponse))
+    }
+
+    const knowledgeBaseData =
+      (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
+    const configData = (await configResponse.json()) as ConfigResponse
+    const conversationsData =
+      (await conversationsResponse.json()) as ConversationListResponse
+    const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
+    setKnowledgeBases(nextKnowledgeBases)
+    setConfig(configData)
+    setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
+    setSelectedDocumentId(null)
+
+    const conversationItems = conversationsData.items ?? []
+    if (conversationItems.length > 0) {
+      const summarizedConversations = conversationItems.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+        messages: [],
+      }))
+      setConversations(summarizedConversations)
+      setActiveConversationId(conversationItems[0].id)
+    }
+  }
+
+  const appendBootstrapErrorNotice = (message: string) => {
+    setConversations((prev) =>
+      prev.map((conversation, index) =>
+        index === 0
+          ? {
+              ...conversation,
+              messages: [
+                ...conversation.messages,
+                {
+                  id: createId(),
+                  role: 'assistant',
+                  content: `知识库初始化失败：${message}`,
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            }
+          : conversation,
+      ),
+    )
+  }
+
+  const verifyAccessToken = async (accessTokenOverride: string) => {
+    const response = await apiFetch('/api/auth/verify', {}, accessTokenOverride)
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+      }
+      throw new Error(await extractErrorMessage(response))
+    }
+  }
+
+  const handleAccessGateSubmit = async (nextAccessToken: string) => {
+    setAccessGateFeedback(null)
+    setIsAccessGateSubmitting(true)
+    try {
+      await verifyAccessToken(nextAccessToken)
+      await loadProtectedAppData(nextAccessToken)
+      setAccessToken(nextAccessToken)
+      setAccessTokenValidated(true)
+      setIsSettingsOpen(false)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '访问令牌验证失败，请稍后重试。'
+      setAccessGateFeedback(buildAccessGateFeedback(message))
+    } finally {
+      setIsAccessGateSubmitting(false)
+      setIsEntryReady(true)
+    }
   }
 
   const activeConversation = useMemo(
@@ -482,85 +682,50 @@ function App() {
   useEffect(() => {
     const bootstrapApp = async () => {
       try {
-        const isReady = await waitForBackendReady()
-        if (!isReady) {
+        const readiness = await waitForBackendReady()
+        if (!readiness.ready) {
           throw new Error('后端服务尚未就绪，请稍后刷新页面重试。')
         }
 
-        const [knowledgeBaseResponse, configResponse, conversationsResponse] = await Promise.all([
-          fetch(`${API_BASE_PATH}/api/knowledge-bases`),
-          fetch(`${API_BASE_PATH}/api/config`),
-          fetch(`${API_BASE_PATH}/api/conversations`),
-        ])
-
-        if (!knowledgeBaseResponse.ok) {
-          throw new Error(await extractErrorMessage(knowledgeBaseResponse))
-        }
-
-        if (!configResponse.ok) {
-          throw new Error(await extractErrorMessage(configResponse))
-        }
-
-        if (!conversationsResponse.ok) {
-          throw new Error(await extractErrorMessage(conversationsResponse))
-        }
-
-        const knowledgeBaseData =
-          (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
-        const configData = (await configResponse.json()) as ConfigResponse
-        const conversationsData =
-          (await conversationsResponse.json()) as ConversationListResponse
-        const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
-        setKnowledgeBases(nextKnowledgeBases)
-        setConfig(configData)
-        setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
-        setSelectedDocumentId(null)
-
-        const conversationItems = conversationsData.items ?? []
-        if (conversationItems.length > 0) {
-          const firstConversationId = conversationItems[0].id
-          const firstConversationResponse = await fetch(
-            `${API_BASE_PATH}/api/conversations/${firstConversationId}`,
-          )
-          if (!firstConversationResponse.ok) {
-            throw new Error(await extractErrorMessage(firstConversationResponse))
+        if (readiness.authRequired) {
+          if (accessToken.trim()) {
+            setIsAccessGateSubmitting(true)
+            try {
+              await verifyAccessToken(accessToken.trim())
+              await loadProtectedAppData(accessToken.trim())
+              setAccessTokenValidated(true)
+              setAccessGateFeedback(null)
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : '本地访问令牌验证失败，请重新输入。'
+              setAccessTokenValidated(false)
+              setAccessGateFeedback(buildAccessGateFeedback(message))
+              setIsEntryReady(true)
+              return
+            } finally {
+              setIsAccessGateSubmitting(false)
+            }
+          } else {
+            setAccessTokenValidated(false)
+            setAccessGateFeedback(null)
+            setIsEntryReady(true)
+            return
           }
-          const firstConversation = normalizeConversation(
-            (await firstConversationResponse.json()) as BackendConversation,
-          )
-          const restConversations = conversationItems.slice(1).map((conversation) => ({
-            id: conversation.id,
-            title: conversation.title,
-            createdAt: conversation.createdAt,
-            updatedAt: conversation.updatedAt,
-            messages: [],
-          }))
-          setConversations([firstConversation, ...restConversations])
-          setActiveConversationId(firstConversation.id)
+        } else {
+          await loadProtectedAppData()
+          setAccessTokenValidated(true)
         }
+        setIsEntryReady(true)
       } catch (error) {
-        setBackendReady(false)
         const message =
           error instanceof Error ? error.message : '初始化知识库失败，请检查后端服务。'
-
-        setConversations((prev) =>
-          prev.map((conversation, index) =>
-            index === 0
-              ? {
-                  ...conversation,
-                  messages: [
-                    ...conversation.messages,
-                    {
-                      id: createId(),
-                      role: 'assistant',
-                      content: `知识库初始化失败：${message}`,
-                      timestamp: new Date().toISOString(),
-                    },
-                  ],
-                }
-              : conversation,
-          ),
-        )
+        if (isUnauthorizedErrorMessage(message)) {
+          lockAppForAccessToken('访问令牌验证失败，请重新输入正确的访问令牌。')
+          return
+        }
+        setBackendReady(false)
+        appendBootstrapErrorNotice(message)
+        setIsEntryReady(true)
       }
     }
 
@@ -574,6 +739,39 @@ function App() {
 
     window.localStorage.setItem(AI_CONFIG_STORAGE_KEY, JSON.stringify(config))
   }, [config])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(APP_ACCESS_TOKEN_STORAGE_KEY, accessToken)
+  }, [accessToken])
+
+  const appendAssistantNotice = (conversationId: string, content: string) => {
+    const now = new Date().toISOString()
+    setConversations((prev) =>
+      prev.map((conversation) => {
+        if (conversation.id !== conversationId) {
+          return conversation
+        }
+
+        return {
+          ...conversation,
+          messages: [
+            ...conversation.messages,
+            {
+              id: createId(),
+              role: 'assistant',
+              content,
+              timestamp: now,
+            },
+          ],
+          updatedAt: now,
+        }
+      }),
+    )
+  }
 
   const cancelActiveChatRequest = () => {
     chatAbortControllerRef.current?.abort()
@@ -651,7 +849,7 @@ function App() {
           ? targetConversation
           : await loadConversationDetail(conversationId)
 
-      const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`, {
+      const response = await apiFetch(`/api/conversations/${conversationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -702,7 +900,7 @@ function App() {
 
     try {
       if (!isLocalOnly) {
-        const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`, {
+        const response = await apiFetch(`/api/conversations/${conversationId}`, {
           method: 'DELETE',
         })
 
@@ -768,7 +966,7 @@ function App() {
 
   const handleCreateKnowledgeBase = async (name: string, description: string) => {
     try {
-      const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases`, {
+      const response = await apiFetch('/api/knowledge-bases', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -796,7 +994,7 @@ function App() {
 
   const handleDeleteKnowledgeBase = async (knowledgeBaseId: string) => {
     try {
-      const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}`, {
+      const response = await apiFetch(`/api/knowledge-bases/${knowledgeBaseId}`, {
         method: 'DELETE',
       })
 
@@ -840,7 +1038,7 @@ function App() {
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents`, {
+    const response = await apiFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, {
       method: 'POST',
       body: formData,
     })
@@ -1108,8 +1306,8 @@ function App() {
 
   const handleRemoveDocument = async (knowledgeBaseId: string, documentId: string) => {
     try {
-      const response = await fetch(
-        `${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`,
+      const response = await apiFetch(
+        `/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`,
         {
           method: 'DELETE',
         },
@@ -1146,53 +1344,23 @@ function App() {
     }
 
     if (isOllamaSingleFlightMode && streamingConversationId) {
-      setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== activeConversation.id) {
-            return conversation
-          }
-
-          const now = new Date().toISOString()
-          return {
-            ...conversation,
-            messages: [
-              ...conversation.messages,
-              {
-                id: createId(),
-                role: 'assistant',
-                content: `当前模型正在后台处理会话「${generatingConversationTitle}」，请等待其完成后再发起新问题。`,
-                timestamp: now,
-              },
-            ],
-            updatedAt: now,
-          }
-        }),
+      appendAssistantNotice(
+        activeConversation.id,
+        `当前模型正在后台处理会话「${generatingConversationTitle}」，请等待其完成后再发起新问题。`,
       )
       return
     }
 
-    if (!backendReady) {
-      setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== activeConversation.id) {
-            return conversation
-          }
+    // 仅在已经确认后端开启鉴权后，才在聊天发送前阻断空 token 请求。
+    if (accessTokenRequired && !accessToken.trim()) {
+      appendAssistantNotice(activeConversation.id, buildChatAccessTokenHint())
+      return
+    }
 
-          const now = new Date().toISOString()
-          return {
-            ...conversation,
-            messages: [
-              ...conversation.messages,
-              {
-                id: createId(),
-                role: 'assistant',
-                content: '后端服务正在启动或尚未就绪，请稍后再试。若刚刚重启服务，建议等待健康检查完成后再发送问题。',
-                timestamp: now,
-              },
-            ],
-            updatedAt: now,
-          }
-        }),
+    if (!backendReady) {
+      appendAssistantNotice(
+        activeConversation.id,
+        '后端服务正在启动或尚未就绪，请稍后再试。若刚刚重启服务，建议等待健康检查完成后再发送问题。',
       )
       return
     }
@@ -1266,12 +1434,30 @@ function App() {
     }
 
     const finalizeAssistantMessage = (contentOverride?: string, metadata?: ChatMessageMetadata) => {
+      const resolveAssistantContent = (content?: string, nextMetadata?: ChatMessageMetadata) => {
+        const normalizedContent = content?.trim() ?? ''
+        if (normalizedContent) {
+          return normalizedContent
+        }
+
+        const upstreamError = nextMetadata?.upstreamError?.trim()
+        if (upstreamError) {
+          return `聊天接口调用失败：${upstreamError}`
+        }
+
+        if (nextMetadata?.degraded) {
+          return '聊天接口调用失败：后端返回了降级结果，但没有可显示的回答内容。'
+        }
+
+        return '后端未返回有效回答。'
+      }
+
       updateAssistantMessage((current) => ({
         ...current,
         content:
           contentOverride !== undefined
-            ? contentOverride || '后端未返回有效回答。'
-            : current.content || '后端未返回有效回答。',
+            ? resolveAssistantContent(contentOverride, metadata ?? current.metadata)
+            : resolveAssistantContent(current.content, current.metadata),
         metadata: metadata ?? current.metadata,
       }))
     }
@@ -1294,6 +1480,9 @@ function App() {
         }
         if (message === 'stream-request-timeout') {
           return '流式连接等待超时，请稍后重试或切换更轻量模型。'
+        }
+        if (isUnauthorizedErrorMessage(message)) {
+          return buildChatAccessTokenHint()
         }
         if (message.includes('Failed to fetch')) {
           return '无法连接后端服务，请检查服务是否启动，以及 Docker / Ollama 网络是否可达。'
@@ -1322,7 +1511,7 @@ function App() {
 
     const requestFallbackCompletion = async (controller: AbortController) => {
       const fallbackResponse = await withTimeout(
-        fetch(`${API_BASE_PATH}/v1/chat/completions`, {
+        apiFetch('/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1335,6 +1524,10 @@ function App() {
       )
 
       if (!fallbackResponse.ok) {
+        if (fallbackResponse.status === 401) {
+          lockAppForAccessToken('访问令牌已失效，请重新输入并完成验证后继续使用。')
+          throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+        }
         throw new Error(await extractErrorMessage(fallbackResponse))
       }
 
@@ -1343,15 +1536,16 @@ function App() {
       }
 
       const data = (await fallbackResponse.json()) as ChatCompletionResponse
+      const responseMetadata = data.metadata
+        ? {
+            degraded: data.metadata.degraded,
+            fallbackStrategy: data.metadata.fallbackStrategy,
+            upstreamError: data.metadata.upstreamError,
+          }
+        : undefined
       finalizeAssistantMessage(
-        data.choices[0]?.message?.content || '后端未返回有效回答。',
-        data.metadata
-          ? {
-              degraded: data.metadata.degraded,
-              fallbackStrategy: data.metadata.fallbackStrategy,
-              upstreamError: data.metadata.upstreamError,
-            }
-          : undefined,
+        data.choices[0]?.message?.content,
+        responseMetadata,
       )
     }
 
@@ -1366,7 +1560,7 @@ function App() {
 
       let streamResponse: Response
       try {
-        streamResponse = await fetch(`${API_BASE_PATH}/v1/chat/completions/stream`, {
+        streamResponse = await apiFetch('/v1/chat/completions/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1383,6 +1577,10 @@ function App() {
       }
 
       if (!streamResponse.ok) {
+        if (streamResponse.status === 401) {
+          lockAppForAccessToken('访问令牌已失效，请重新输入并完成验证后继续使用。')
+          throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+        }
         const fallbackAbortController = new AbortController()
         chatAbortControllerRef.current = fallbackAbortController
         await requestFallbackCompletion(fallbackAbortController)
@@ -1548,40 +1746,22 @@ function App() {
     }
   }
 
-  const handleChatConfigChange = <K extends keyof ChatConfig>(
-    key: K,
-    value: ChatConfig[K],
-  ) => {
-    setConfig((prev) => {
-      const nextConfig = {
-        ...prev,
-        chat: {
-          ...prev.chat,
-          [key]:
-            key === 'contextMessageLimit'
-              ? Math.max(1, Math.min(100, Number(value) || 1))
-              : value,
-        },
-      }
-      void persistConfigToBackend(nextConfig)
-      return nextConfig
+  const handleSaveChatConfig = async (nextChatConfig: ChatConfig) => {
+    const normalizedChatConfig: ChatConfig = {
+      ...nextChatConfig,
+      contextMessageLimit: Math.max(1, Math.min(100, Number(nextChatConfig.contextMessageLimit) || 1)),
+    }
+
+    await persistConfigToBackend({
+      ...config,
+      chat: normalizedChatConfig,
     })
   }
 
-  const handleEmbeddingConfigChange = <K extends keyof EmbeddingConfig>(
-    key: K,
-    value: EmbeddingConfig[K],
-  ) => {
-    setConfig((prev) => {
-      const nextConfig = {
-        ...prev,
-        embedding: {
-          ...prev.embedding,
-          [key]: value,
-        },
-      }
-      void persistConfigToBackend(nextConfig)
-      return nextConfig
+  const handleSaveEmbeddingConfig = async (nextEmbeddingConfig: EmbeddingConfig) => {
+    await persistConfigToBackend({
+      ...config,
+      embedding: nextEmbeddingConfig,
     })
   }
 
@@ -1603,6 +1783,31 @@ function App() {
       }
       return next
     })
+  }
+
+  const shouldShowAccessGate = isEntryReady && accessTokenRequired && !accessTokenValidated
+
+  if (!isEntryReady) {
+    return (
+      <div className="access-gate-loading-shell">
+        <div className="access-gate-loading-card">
+          <div className="access-gate-badge">启动中</div>
+          <h1>正在连接 AI LocalBase</h1>
+          <p>正在检查后端状态与访问要求，请稍候。</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (shouldShowAccessGate) {
+    return (
+      <AccessTokenGate
+        initialValue={accessToken}
+        isSubmitting={isAccessGateSubmitting}
+        feedback={accessGateFeedback}
+        onSubmit={handleAccessGateSubmit}
+      />
+    )
   }
 
   return (
@@ -1634,8 +1839,8 @@ function App() {
         isKnowledgePanelOpen={isKnowledgePanelOpen}
         onToggleSettings={handleToggleSettings}
         onToggleKnowledgePanel={handleToggleKnowledgePanel}
-        onChatConfigChange={handleChatConfigChange}
-        onEmbeddingConfigChange={handleEmbeddingConfigChange}
+        onSaveChatConfig={handleSaveChatConfig}
+        onSaveEmbeddingConfig={handleSaveEmbeddingConfig}
       />
       <ChatArea
         sidebarOpen={sidebarOpen}

@@ -213,18 +213,15 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 		var llmResp openAIChatResponse
 		if err := json.Unmarshal(respBody, &llmResp); err != nil {
-			return fmt.Errorf("invalid model response format")
+			return formatUpstreamResponseError(respBody, "invalid model response format")
 		}
 
 		if resp.StatusCode >= http.StatusBadRequest {
-			if llmResp.Error != nil && strings.TrimSpace(llmResp.Error.Message) != "" {
-				return fmt.Errorf("model api error: %s", llmResp.Error.Message)
-			}
-			return fmt.Errorf("model api error: http %d", resp.StatusCode)
+			return formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
 		}
 
 		if len(llmResp.Choices) == 0 {
-			return fmt.Errorf("model api returned empty choices")
+			return formatStructuredUpstreamError(llmResp.Error, respBody, "model api returned empty choices")
 		}
 
 		result = model.ChatCompletionResponse{
@@ -278,15 +275,16 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 			}
 
 			var llmResp openAIChatResponse
-			if err := json.Unmarshal(respBody, &llmResp); err == nil && llmResp.Error != nil && strings.TrimSpace(llmResp.Error.Message) != "" {
-				return fmt.Errorf("model api error: %s", llmResp.Error.Message)
+			if err := json.Unmarshal(respBody, &llmResp); err == nil {
+				return formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
 			}
 
-			return fmt.Errorf("model api error: http %d", resp.StatusCode)
+			return formatUpstreamResponseError(respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		receivedContent := false
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -301,17 +299,18 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 			var chunk openAIChatStreamChunk
 			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-				continue
+				return formatUpstreamResponseError([]byte(payload), "invalid model response format")
 			}
 
 			if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
-				return fmt.Errorf("model api error: %s", chunk.Error.Message)
+				return formatStructuredUpstreamError(chunk.Error, []byte(payload), "model api stream returned error")
 			}
 
 			for _, choice := range chunk.Choices {
 				if strings.TrimSpace(choice.Delta.Content) == "" {
 					continue
 				}
+				receivedContent = true
 				if err := onChunk(choice.Delta.Content); err != nil {
 					return err
 				}
@@ -320,6 +319,10 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("failed to read model stream")
+		}
+
+		if !receivedContent {
+			return fmt.Errorf("model api returned empty stream")
 		}
 
 		return nil
@@ -574,6 +577,41 @@ func describeModelError(err error) string {
 		return "模型调用失败"
 	}
 	return message
+}
+
+func formatStructuredUpstreamError(payload *openAICompatibleErrorPayload, respBody []byte, fallback string) error {
+	if payload != nil {
+		if message := strings.TrimSpace(payload.Message); message != "" {
+			return fmt.Errorf("%s", message)
+		}
+	}
+	return formatUpstreamResponseError(respBody, fallback)
+}
+
+func formatUpstreamResponseError(respBody []byte, fallback string) error {
+	body := compactUpstreamResponse(respBody)
+	if body == "" {
+		return fmt.Errorf("%s", fallback)
+	}
+	return fmt.Errorf("%s", body)
+}
+
+func compactUpstreamResponse(respBody []byte) string {
+	body := strings.TrimSpace(string(respBody))
+	if body == "" {
+		return ""
+	}
+
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, []byte(body)); err == nil {
+		body = compacted.String()
+	}
+
+	const maxLen = 600
+	if len(body) <= maxLen {
+		return body
+	}
+	return body[:maxLen] + "..."
 }
 
 func normalizeChatConfig(req model.ChatCompletionRequest) (model.ChatModelConfig, error) {

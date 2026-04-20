@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,29 @@ var idCounter atomic.Uint64
 func NextID(prefix string) string {
 	id := idCounter.Add(1)
 	return fmt.Sprintf("%s-%d", prefix, id)
+}
+
+// ObserveID 用持久化状态中的现有 ID 推进计数器，避免服务重启后再次分配旧编号。
+func ObserveID(id string) {
+	parts := strings.Split(strings.TrimSpace(id), "-")
+	if len(parts) < 2 {
+		return
+	}
+
+	sequence, err := strconv.ParseUint(parts[len(parts)-1], 10, 64)
+	if err != nil {
+		return
+	}
+
+	for {
+		current := idCounter.Load()
+		if sequence <= current {
+			return
+		}
+		if idCounter.CompareAndSwap(current, sequence) {
+			return
+		}
+	}
 }
 
 func NowUnixNano() int64 {

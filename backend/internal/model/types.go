@@ -7,6 +7,7 @@ type ServerConfig struct {
 	UploadDir                string
 	StateFile                string
 	ChatHistoryFile          string
+	AccessToken              string
 	QdrantURL                string
 	QdrantAPIKey             string
 	QdrantCollectionPrefix   string
@@ -28,9 +29,10 @@ type AppState struct {
 }
 
 type HealthResponse struct {
-	Status string            `json:"status"`
-	Name   string            `json:"name"`
-	Config map[string]string `json:"config"`
+	Status       string            `json:"status"`
+	Name         string            `json:"name"`
+	AuthRequired bool              `json:"auth_required"`
+	Config       map[string]string `json:"config"`
 }
 
 type ChatConfig struct {

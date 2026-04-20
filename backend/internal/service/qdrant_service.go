@@ -64,6 +64,10 @@ type qdrantPointUpsertRequest struct {
 	Points []QdrantPoint `json:"points"`
 }
 
+type qdrantPointDeleteRequest struct {
+	Filter map[string]any `json:"filter"`
+}
+
 type qdrantSearchRequest struct {
 	Vector      []float64      `json:"vector"`
 	Limit       int            `json:"limit"`
@@ -175,6 +179,29 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 		}
 	}
 	return nil
+}
+
+// DeletePointsByDocumentID 按文档 ID 清理旧的向量点，避免文档重建索引后残留过期 chunk。
+func (s *QdrantService) DeletePointsByDocumentID(ctx context.Context, knowledgeBaseID, documentID string) error {
+	if !s.IsEnabled() || strings.TrimSpace(documentID) == "" {
+		return nil
+	}
+
+	filter := map[string]any{
+		"must": []map[string]any{{
+			"key": "document_id",
+			"match": map[string]any{
+				"value": documentID,
+			},
+		}},
+	}
+	_, err := s.doJSON(
+		ctx,
+		http.MethodPost,
+		"/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID))+"/points/delete",
+		qdrantPointDeleteRequest{Filter: filter},
+	)
+	return err
 }
 
 func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vector []float64, limit int, filter map[string]any) ([]QdrantSearchResult, error) {

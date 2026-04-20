@@ -133,7 +133,15 @@ npm install
 npm run dev
 ```
 
-前端默认地址：`http://localhost:5173`
+前端默认地址：`http://localhost:3000`
+
+#### 5. 一键启动前后端
+
+如果你希望在一个控制台里同时启动后端和前端，并通过 `Ctrl+C` 一次停止两个服务，可以在项目根目录执行：
+
+```bash
+./start-dev.sh
+```
 
 ---
 
@@ -277,6 +285,12 @@ npm install
 npm run dev
 ```
 
+### 一键启动前后端
+
+```bash
+./start-dev.sh
+```
+
 ### 前端构建
 
 ```bash
@@ -354,6 +368,37 @@ docker compose up --build
 
 - `POST /v1/chat/completions`
 - `POST /v1/chat/completions/stream`
+
+### MCP HTTP 接口
+
+- `POST /mcp`
+
+MCP 客户端接入示例：
+
+```toml
+[mcp_servers.ai_localbase]
+url = "http://127.0.0.1:8080/mcp"
+startup_timeout_sec = 120.0
+http_headers = { "Authorization" = "Bearer your-app-access-token" }
+```
+
+当前 `/mcp` 已支持：
+
+- `chat.ask`
+- `knowledge_base.search`
+- `knowledge_base.create`
+- `document.upload`
+- `document.append`
+- `document.update`
+- `document.delete`
+
+其中“上传目录”不是独立工具，推荐由客户端先遍历目录，再逐文件调用 `document.upload`。`document.upload` 当前按文本内容上传设计，最少只需要 `knowledgeBaseId + content`，`filename` 可选。
+
+`document.append` 会读取现有文档全文，在尾部追加新文本后整篇重建索引；`document.update` 会用传入的完整文本覆盖原文档并整篇重建索引，两者都会清理目标文档旧的向量片段，避免检索混入过期内容。
+
+`knowledge_base.create` 会先按名称检查是否已存在；若已存在则直接返回现有 `knowledgeBaseId`，若新建成功也会显式返回 `knowledgeBaseId` 供后续上传文档使用。
+
+完整 `initialize`、`tools/list`、`chat.ask`、`knowledge_base.search`、`knowledge_base.create`、`document.upload`、`document.append`、`document.update`、`document.delete` 调用样例见 [docs/mcp-http-server/access-examples.md](./docs/mcp-http-server/access-examples.md)。
 
 ## 检索流程说明
 

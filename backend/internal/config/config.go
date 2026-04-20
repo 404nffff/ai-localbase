@@ -14,6 +14,7 @@ func LoadServerConfig() model.ServerConfig {
 		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
 		StateFile:                getEnv("STATE_FILE", "data/app-state.json"),
 		ChatHistoryFile:          getEnv("CHAT_HISTORY_FILE", "data/chat-history.db"),
+		AccessToken:              getEnv("APP_AUTH_TOKEN", ""),
 		QdrantURL:                getEnv("QDRANT_URL", "http://localhost:6333"),
 		QdrantAPIKey:             getEnv("QDRANT_API_KEY", ""),
 		QdrantCollectionPrefix:   getEnv("QDRANT_COLLECTION_PREFIX", "kb_"),

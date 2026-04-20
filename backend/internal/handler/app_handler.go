@@ -40,14 +40,21 @@ func (h *AppHandler) Root(c *gin.Context) {
 
 func (h *AppHandler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, model.HealthResponse{
-		Status: "ok",
-		Name:   "ai-localbase-backend",
-		Config: h.appService.GetHealthConfigMap(h.serverConfig),
+		Status:       "ok",
+		Name:         "ai-localbase-backend",
+		AuthRequired: strings.TrimSpace(h.serverConfig.AccessToken) != "",
+		Config:       h.appService.GetHealthConfigMap(h.serverConfig),
 	})
 }
 
 func (h *AppHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, h.appService.GetConfig())
+}
+
+func (h *AppHandler) VerifyAccessToken(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+	})
 }
 
 func (h *AppHandler) ListConversations(c *gin.Context) {

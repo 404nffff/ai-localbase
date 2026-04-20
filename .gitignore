@@ -98,3 +98,8 @@ out/
 
 Session.vim
 .exrc
+
+
+logs/
+docs/
+.codex

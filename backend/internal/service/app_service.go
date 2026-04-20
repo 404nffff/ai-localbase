@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -352,6 +353,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if len(service.state.KnowledgeBases) == 0 {
 		service.state = defaultAppState(serverConfig)
 	}
+	syncIDCounterFromState(service.state)
 
 	for kbID := range service.state.KnowledgeBases {
 		if err := service.ensureKnowledgeBaseCollection(kbID); err != nil {
@@ -363,6 +365,21 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	}
 
 	return service
+}
+
+// syncIDCounterFromState 会读取当前持久化状态中的知识库和文档编号，保证后续 NextID 不会回退撞号。
+func syncIDCounterFromState(state *model.AppState) {
+	if state == nil {
+		return
+	}
+
+	for kbID, kb := range state.KnowledgeBases {
+		util.ObserveID(kbID)
+		util.ObserveID(kb.ID)
+		for _, document := range kb.Documents {
+			util.ObserveID(document.ID)
+		}
+	}
 }
 
 func (s *AppService) saveState() error {
@@ -657,6 +674,23 @@ func (s *AppService) GetKnowledgeBaseDocuments(id string) ([]model.Document, err
 	return kb.Documents, nil
 }
 
+// GetDocument 返回指定知识库中的单个文档元数据，供 MCP 文档编辑工具复用。
+func (s *AppService) GetDocument(knowledgeBaseID, documentID string) (model.Document, error) {
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		return model.Document{}, fmt.Errorf("knowledge base not found")
+	}
+	for _, document := range kb.Documents {
+		if document.ID == documentID {
+			return document, nil
+		}
+	}
+	return model.Document{}, fmt.Errorf("document not found")
+}
+
 func (s *AppService) ResolveKnowledgeBaseID(candidate string) (string, error) {
 	s.state.Mu.RLock()
 	defer s.state.Mu.RUnlock()
@@ -703,6 +737,26 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	return s.AddDocument(document.KnowledgeBaseID, document), nil
 }
 
+// RewriteDocumentContent 覆写现有文档文件并重建整篇索引，供 append/update 共用。
+func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content string) (model.Document, error) {
+	document, err := s.GetDocument(knowledgeBaseID, documentID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := os.WriteFile(document.Path, []byte(content), 0o644); err != nil {
+		return model.Document{}, fmt.Errorf("rewrite document file: %w", err)
+	}
+	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+		return model.Document{}, err
+	}
+
+	document.Size = int64(len([]byte(content)))
+	document.SizeLabel = util.FormatFileSize(document.Size)
+	document.Status = "processing"
+
+	return s.reindexExistingDocument(document, content)
+}
+
 func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) model.Document {
 	s.state.Mu.Lock()
 	kb := s.state.KnowledgeBases[knowledgeBaseID]
@@ -713,6 +767,42 @@ func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document
 		log.Printf("failed to persist document state: %v", err)
 	}
 	return document
+}
+
+// ReplaceDocument 用新的文档元数据覆盖 state 中的旧记录，避免重建索引时生成重复条目。
+func (s *AppService) ReplaceDocument(knowledgeBaseID string, document model.Document) (model.Document, error) {
+	s.state.Mu.Lock()
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		s.state.Mu.Unlock()
+		return model.Document{}, fmt.Errorf("knowledge base not found")
+	}
+
+	replaced := false
+	originalDocuments := append([]model.Document(nil), kb.Documents...)
+	for index := range kb.Documents {
+		if kb.Documents[index].ID == document.ID {
+			kb.Documents[index] = document
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.state.Mu.Unlock()
+		return model.Document{}, fmt.Errorf("document not found")
+	}
+
+	s.state.KnowledgeBases[knowledgeBaseID] = kb
+	s.state.Mu.Unlock()
+
+	if err := s.saveState(); err != nil {
+		s.state.Mu.Lock()
+		kb.Documents = originalDocuments
+		s.state.KnowledgeBases[knowledgeBaseID] = kb
+		s.state.Mu.Unlock()
+		return model.Document{}, err
+	}
+	return document, nil
 }
 
 func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.Document, error) {
@@ -739,7 +829,14 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 		s.state.Mu.Unlock()
 		return model.Document{}, fmt.Errorf("document not found")
 	}
+	s.state.Mu.Unlock()
 
+	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+		return model.Document{}, err
+	}
+
+	s.state.Mu.Lock()
+	kb = s.state.KnowledgeBases[knowledgeBaseID]
 	originalDocuments := kb.Documents
 	kb.Documents = filtered
 	s.state.KnowledgeBases[knowledgeBaseID] = kb
@@ -888,6 +985,41 @@ func (s *AppService) deleteKnowledgeBaseCollection(knowledgeBaseID string) error
 	}
 
 	return nil
+}
+
+func (s *AppService) deleteDocumentChunks(knowledgeBaseID, documentID string) error {
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.qdrant.DeletePointsByDocumentID(ctx, knowledgeBaseID, documentID); err != nil {
+		return fmt.Errorf("delete qdrant points for document %s: %w", documentID, err)
+	}
+	return nil
+}
+
+func (s *AppService) reindexExistingDocument(document model.Document, content string) (model.Document, error) {
+	chunks := s.rag.BuildDocumentChunks(document, content)
+	if len(chunks) == 0 {
+		document.ContentPreview = util.BuildContentPreviewFromText(content)
+		document.Status = "ready"
+		return s.ReplaceDocument(document.KnowledgeBaseID, document)
+	}
+
+	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+		return model.Document{}, err
+	}
+
+	document.Status = "indexed"
+	document.ContentPreview = previewFromChunks(chunks)
+	return s.ReplaceDocument(document.KnowledgeBaseID, document)
 }
 
 func (s *AppService) currentEmbeddingConfig() model.EmbeddingModelConfig {

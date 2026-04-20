@@ -1203,10 +1203,42 @@ interface MermaidDiagramProps {
   chart: string
 }
 
+function isMermaidErrorSvg(renderedSvg: string): boolean {
+  if (!renderedSvg || !renderedSvg.includes('<svg')) {
+    return true
+  }
+
+  const fallbackText = renderedSvg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  const fallbackPattern = /Syntax error in text|Syntax error in tex|Parse error|Lexical error|mermaid version/i
+
+  try {
+    // Mermaid 11 的错误图会把报错信息拆成多个 SVG 文本节点，必须解析 textContent 才能稳定识别。
+    const parsedSvg = new DOMParser().parseFromString(renderedSvg, 'image/svg+xml')
+    if (parsedSvg.querySelector('parsererror')) {
+      return true
+    }
+
+    const svgRoot = parsedSvg.documentElement
+    if (!svgRoot || svgRoot.tagName.toLowerCase() !== 'svg') {
+      return true
+    }
+
+    const textContent = svgRoot.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    if (fallbackPattern.test(textContent) || fallbackPattern.test(fallbackText)) {
+      return true
+    }
+
+    return false
+  } catch {
+    return fallbackPattern.test(fallbackText)
+  }
+}
+
 const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   const [svg, setSvg] = useState<string>('')
   const [error, setError] = useState<string>('')
   const [isLoading, setIsLoading] = useState(true)
+  const containerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1214,18 +1246,42 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     setError('')
     setIsLoading(true)
 
+    const cleanupMermaidErrorArtifacts = () => {
+      const leakedErrorNodes = Array.from(document.querySelectorAll('svg'))
+        .filter((node) => {
+          const text = node.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+          return /Syntax error in text|Syntax error in tex|mermaid version/i.test(text)
+        })
+
+      leakedErrorNodes.forEach((node) => {
+        const parent = node.parentElement
+        if (parent && parent.childElementCount === 1 && parent.textContent?.includes('Syntax error in text')) {
+          parent.remove()
+          return
+        }
+        node.remove()
+      })
+    }
+
     const renderChart = async () => {
       try {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'loose',
           theme: 'default',
-        })
+          suppressErrorRendering: true,
+        } as typeof mermaid extends { initialize: (config: infer T) => void } ? T : never)
+
+        const parseResult = await mermaid.parse(chart, { suppressErrors: true })
+        if (!parseResult) {
+          throw new Error('invalid mermaid syntax')
+        }
+
         const id = `mermaid-${Math.random().toString(36).slice(2, 10)}`
-        const { svg: renderedSvg } = await mermaid.render(id, chart)
+        const { svg: renderedSvg } = await mermaid.render(id, chart, containerRef.current ?? undefined)
 
         const hasSvgContent = Boolean(renderedSvg && renderedSvg.includes('<svg'))
-        const hasSyntaxError = /Syntax error in text|Parse error|Lexical error/i.test(renderedSvg)
+        const hasSyntaxError = isMermaidErrorSvg(renderedSvg)
         if (!hasSvgContent || hasSyntaxError) {
           throw new Error('invalid mermaid svg')
         }
@@ -1236,6 +1292,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
           setIsLoading(false)
         }
       } catch {
+        cleanupMermaidErrorArtifacts()
         if (!cancelled) {
           setSvg('')
           setError('流程图渲染失败，已降级显示源码')
@@ -1257,12 +1314,13 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     return () => {
       cancelled = true
       window.clearTimeout(timeout)
+      cleanupMermaidErrorArtifacts()
     }
   }, [chart])
 
   if (error) {
     return (
-      <div className="md-mermaid-fallback">
+      <div className="md-mermaid-fallback" ref={containerRef}>
         <div className="md-mermaid-error">{error}</div>
         <pre className="md-code-block">
           <code>{chart}</code>
@@ -1272,12 +1330,16 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   }
 
   if (isLoading) {
-    return <div className="md-mermaid-loading">流程图渲染中...</div>
+    return (
+      <div className="md-mermaid-loading" ref={containerRef}>
+        流程图渲染中...
+      </div>
+    )
   }
 
   if (!svg) {
     return (
-      <div className="md-mermaid-fallback">
+      <div className="md-mermaid-fallback" ref={containerRef}>
         <div className="md-mermaid-error">流程图无有效输出，已降级显示源码</div>
         <pre className="md-code-block">
           <code>{chart}</code>
@@ -1286,7 +1348,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
     )
   }
 
-  return <div className="md-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
+  return <div className="md-mermaid" ref={containerRef} dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
 interface ChatAreaProps {

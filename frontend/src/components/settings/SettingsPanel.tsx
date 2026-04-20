@@ -1,22 +1,77 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { AppConfig, ChatConfig, EmbeddingConfig } from '../../App'
 
 interface SettingsPanelProps {
   config: AppConfig
   onClose: () => void
-  onChatConfigChange: <K extends keyof ChatConfig>(key: K, value: ChatConfig[K]) => void
-  onEmbeddingConfigChange: <K extends keyof EmbeddingConfig>(
-    key: K,
-    value: EmbeddingConfig[K],
-  ) => void
+  onSaveChatConfig: (value: ChatConfig) => Promise<void>
+  onSaveEmbeddingConfig: (value: EmbeddingConfig) => Promise<void>
 }
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
   config,
   onClose,
-  onChatConfigChange,
-  onEmbeddingConfigChange,
+  onSaveChatConfig,
+  onSaveEmbeddingConfig,
 }) => {
+  const [draftChatConfig, setDraftChatConfig] = useState(config.chat)
+  const [draftEmbeddingConfig, setDraftEmbeddingConfig] = useState(config.embedding)
+  const [saveNotice, setSaveNotice] = useState<{
+    type: 'success' | 'error'
+    text: string
+  } | null>(null)
+  const saveNoticeTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setDraftChatConfig(config.chat)
+    setDraftEmbeddingConfig(config.embedding)
+  }, [config])
+
+  useEffect(() => {
+    return () => {
+      if (saveNoticeTimerRef.current) {
+        window.clearTimeout(saveNoticeTimerRef.current)
+      }
+    }
+  }, [])
+
+  const showSaveNotice = (type: 'success' | 'error', text: string) => {
+    setSaveNotice({ type, text })
+    if (saveNoticeTimerRef.current) {
+      window.clearTimeout(saveNoticeTimerRef.current)
+    }
+    saveNoticeTimerRef.current = window.setTimeout(() => {
+      setSaveNotice(null)
+      saveNoticeTimerRef.current = null
+    }, 2200)
+  }
+
+  const persistChatConfig = async () => {
+    if (JSON.stringify(draftChatConfig) === JSON.stringify(config.chat)) {
+      return
+    }
+    try {
+      await onSaveChatConfig(draftChatConfig)
+      showSaveNotice('success', '聊天模型设置已保存')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '聊天模型设置保存失败'
+      showSaveNotice('error', `保存失败：${message}`)
+    }
+  }
+
+  const persistEmbeddingConfig = async () => {
+    if (JSON.stringify(draftEmbeddingConfig) === JSON.stringify(config.embedding)) {
+      return
+    }
+    try {
+      await onSaveEmbeddingConfig(draftEmbeddingConfig)
+      showSaveNotice('success', 'Embedding 模型设置已保存')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Embedding 模型设置保存失败'
+      showSaveNotice('error', `保存失败：${message}`)
+    }
+  }
+
   return (
     <div className="settings-modal-backdrop" onClick={onClose}>
       <div className="settings-modal settings-modal-single" onClick={(event) => event.stopPropagation()}>
@@ -31,6 +86,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         </div>
 
         <div className="settings-modal-scroll">
+          {saveNotice && (
+            <div className={`settings-save-notice ${saveNotice.type}`}>
+              {saveNotice.text}
+            </div>
+          )}
+
           <section className="settings-panel-block ai-config-panel single-column">
             <div className="section-title-row knowledge-panel-header">
               <h3>聊天模型</h3>
@@ -40,10 +101,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Provider</span>
                 <select
-                  value={config.chat.provider}
+                  value={draftChatConfig.provider}
                   onChange={(event) =>
-                    onChatConfigChange('provider', event.target.value as ChatConfig['provider'])
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      provider: event.target.value as ChatConfig['provider'],
+                    }))
                   }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                 >
                   <option value="ollama">Ollama</option>
                   <option value="openai-compatible">OpenAI Compatible</option>
@@ -53,10 +120,18 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Base URL</span>
                 <input
-                  value={config.chat.baseUrl}
-                  onChange={(event) => onChatConfigChange('baseUrl', event.target.value)}
+                  value={draftChatConfig.baseUrl}
+                  onChange={(event) =>
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      baseUrl: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                   placeholder={
-                    config.chat.provider === 'ollama'
+                    draftChatConfig.provider === 'ollama'
                       ? 'http://localhost:11434'
                       : 'http://localhost:11434/v1'
                   }
@@ -66,8 +141,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Model</span>
                 <input
-                  value={config.chat.model}
-                  onChange={(event) => onChatConfigChange('model', event.target.value)}
+                  value={draftChatConfig.model}
+                  onChange={(event) =>
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      model: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                   placeholder="llama3.2"
                 />
               </label>
@@ -76,23 +159,37 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <span>API Key</span>
                 <input
                   type="password"
-                  value={config.chat.apiKey}
-                  onChange={(event) => onChatConfigChange('apiKey', event.target.value)}
+                  value={draftChatConfig.apiKey}
+                  onChange={(event) =>
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      apiKey: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                   placeholder="选填"
                 />
               </label>
 
               <label className="settings-field settings-field-full">
-                <span>Temperature: {config.chat.temperature.toFixed(1)}</span>
+                <span>Temperature: {draftChatConfig.temperature.toFixed(1)}</span>
                 <input
                   type="range"
                   min="0"
                   max="1"
                   step="0.1"
-                  value={config.chat.temperature}
+                  value={draftChatConfig.temperature}
                   onChange={(event) =>
-                    onChatConfigChange('temperature', Number(event.target.value))
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      temperature: Number(event.target.value),
+                    }))
                   }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                 />
               </label>
 
@@ -102,10 +199,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   type="number"
                   min="1"
                   max="100"
-                  value={config.chat.contextMessageLimit}
+                  value={draftChatConfig.contextMessageLimit}
                   onChange={(event) =>
-                    onChatConfigChange('contextMessageLimit', Number(event.target.value))
+                    setDraftChatConfig((prev) => ({
+                      ...prev,
+                      contextMessageLimit: Number(event.target.value),
+                    }))
                   }
+                  onBlur={() => {
+                    void persistChatConfig()
+                  }}
                   placeholder="12"
                 />
                 <small>限制每次发送给模型的最近消息条数，范围 1-100。</small>
@@ -122,13 +225,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Provider</span>
                 <select
-                  value={config.embedding.provider}
+                  value={draftEmbeddingConfig.provider}
                   onChange={(event) =>
-                    onEmbeddingConfigChange(
-                      'provider',
-                      event.target.value as EmbeddingConfig['provider'],
-                    )
+                    setDraftEmbeddingConfig((prev) => ({
+                      ...prev,
+                      provider: event.target.value as EmbeddingConfig['provider'],
+                    }))
                   }
+                  onBlur={() => {
+                    void persistEmbeddingConfig()
+                  }}
                 >
                   <option value="ollama">Ollama</option>
                   <option value="openai-compatible">OpenAI Compatible</option>
@@ -138,10 +244,18 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Base URL</span>
                 <input
-                  value={config.embedding.baseUrl}
-                  onChange={(event) => onEmbeddingConfigChange('baseUrl', event.target.value)}
+                  value={draftEmbeddingConfig.baseUrl}
+                  onChange={(event) =>
+                    setDraftEmbeddingConfig((prev) => ({
+                      ...prev,
+                      baseUrl: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistEmbeddingConfig()
+                  }}
                   placeholder={
-                    config.embedding.provider === 'ollama'
+                    draftEmbeddingConfig.provider === 'ollama'
                       ? 'http://localhost:11434'
                       : 'http://localhost:11434/v1'
                   }
@@ -151,8 +265,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <label className="settings-field">
                 <span>Model</span>
                 <input
-                  value={config.embedding.model}
-                  onChange={(event) => onEmbeddingConfigChange('model', event.target.value)}
+                  value={draftEmbeddingConfig.model}
+                  onChange={(event) =>
+                    setDraftEmbeddingConfig((prev) => ({
+                      ...prev,
+                      model: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistEmbeddingConfig()
+                  }}
                   placeholder="nomic-embed-text"
                 />
               </label>
@@ -161,8 +283,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <span>API Key</span>
                 <input
                   type="password"
-                  value={config.embedding.apiKey}
-                  onChange={(event) => onEmbeddingConfigChange('apiKey', event.target.value)}
+                  value={draftEmbeddingConfig.apiKey}
+                  onChange={(event) =>
+                    setDraftEmbeddingConfig((prev) => ({
+                      ...prev,
+                      apiKey: event.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    void persistEmbeddingConfig()
+                  }}
                   placeholder="选填"
                 />
               </label>

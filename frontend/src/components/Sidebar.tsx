@@ -1,10 +1,8 @@
 import React, { useMemo, useState } from 'react'
 import {
   AppConfig,
-  ChatConfig,
   Conversation,
   DirectoryUploadTask,
-  EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
 import KnowledgePanel from './knowledge/KnowledgePanel'
@@ -37,11 +35,8 @@ interface SidebarProps {
   isKnowledgePanelOpen: boolean
   onToggleSettings: () => void
   onToggleKnowledgePanel: () => void
-  onChatConfigChange: <K extends keyof ChatConfig>(key: K, value: ChatConfig[K]) => void
-  onEmbeddingConfigChange: <K extends keyof EmbeddingConfig>(
-    key: K,
-    value: EmbeddingConfig[K],
-  ) => void
+  onSaveChatConfig: (value: AppConfig['chat']) => Promise<void>
+  onSaveEmbeddingConfig: (value: AppConfig['embedding']) => Promise<void>
 }
 
 const formatDateTime = (value: string) =>
@@ -79,8 +74,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   isKnowledgePanelOpen,
   onToggleSettings,
   onToggleKnowledgePanel,
-  onChatConfigChange,
-  onEmbeddingConfigChange,
+  onSaveChatConfig,
+  onSaveEmbeddingConfig,
 }) => {
   const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<
     Record<string, boolean>
@@ -292,8 +287,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         <SettingsPanel
           config={config}
           onClose={onToggleSettings}
-          onChatConfigChange={onChatConfigChange}
-          onEmbeddingConfigChange={onEmbeddingConfigChange}
+          onSaveChatConfig={onSaveChatConfig}
+          onSaveEmbeddingConfig={onSaveEmbeddingConfig}
         />
       )}
 
