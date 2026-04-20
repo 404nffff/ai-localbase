@@ -5,8 +5,10 @@ services:
     image: qdrant/qdrant:v1.13.4
     container_name: ai-localbase-qdrant
     restart: unless-stopped
+    environment:
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - ./qdrant_storage:/qdrant/storage

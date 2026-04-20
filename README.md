@@ -149,6 +149,27 @@ npm run dev
 
 适合快速体验或自托管部署验证。
 
+如需自定义 Docker Compose 使用的环境变量，可先参考根目录的 `.env.example` 生成 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+其中可直接在 `.env` 中修改宿主机端口映射：
+
+- `BACKEND_PORT`
+- `FRONTEND_PORT`
+- `QDRANT_HTTP_PORT`
+- `QDRANT_GRPC_PORT`
+
+同时，`docker-compose` 当前也会直接读取这些关键后端配置：
+
+- `APP_AUTH_TOKEN`
+- `OLLAMA_BASE_URL`
+- `QDRANT_VECTOR_SIZE`
+- `QDRANT_TIMEOUT_SECONDS`
+- `QDRANT_API_KEY`
+
 在项目根目录执行：
 
 ```bash
@@ -164,18 +185,28 @@ docker compose up --build
 | Qdrant HTTP API | `http://localhost:6333` |
 | Qdrant gRPC | `localhost:6334` |
 
+如果你在 `.env` 中修改了 `BACKEND_PORT`、`FRONTEND_PORT`、`QDRANT_HTTP_PORT` 或 `QDRANT_GRPC_PORT`，上面的访问地址也会随之变化。
+
 ---
 
 ### 方式三：使用预构建镜像快速部署（推荐）
 
 如果你不想本地编译，可以直接使用自动构建的 Docker 镜像：
 
+同样建议先准备 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+如果需要避开本机已有端口占用，也可以直接修改 `.env` 中的 `BACKEND_PORT`、`FRONTEND_PORT`、`QDRANT_HTTP_PORT`。
+
 ```bash
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-前端地址：`http://localhost:4173`  
-后端地址：`http://localhost:8080`
+默认前端地址：`http://localhost:4173`  
+默认后端地址：`http://localhost:8080`
 
 > 📖 了解更多镜像构建、版本管理和部署细节，请查看 [Docker 镜像与部署指南](./DOCKER_DEPLOY.md)
 

@@ -52,8 +52,23 @@ docker compose -f docker-compose.prod.yml up -d
 创建 `.env` 文件配置：
 
 ```bash
+cp .env.example .env
+```
+
+然后按需修改：
+
+```bash
+# Docker 宿主机端口映射
+BACKEND_PORT=8080
+FRONTEND_PORT=4173
+QDRANT_HTTP_PORT=6333
+QDRANT_GRPC_PORT=6334
+
 # Ollama 地址 (macOS Docker Desktop 用户)
 OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+# 应用访问令牌
+APP_AUTH_TOKEN=change-me-app-token
 
 # Qdrant 向量维度 (根据嵌入模型调整)
 QDRANT_VECTOR_SIZE=768

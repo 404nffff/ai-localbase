@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 QDRANT_URL="http://127.0.0.1:6333/collections"
-APP_AUTH_TOKEN_VALUE="${APP_AUTH_TOKEN:-123}"
+APP_AUTH_TOKEN="${APP_AUTH_TOKEN:-123}"
 BACKEND_PORT="8080"
 FRONTEND_PORT="3000"
 
@@ -91,7 +91,7 @@ echo "前台启动 ai-localbase 开发环境..."
 echo "后端地址： http://127.0.0.1:${BACKEND_PORT}"
 echo "MCP 接口： http://127.0.0.1:${BACKEND_PORT}/mcp"
 echo "前端地址： http://127.0.0.1:${FRONTEND_PORT}"
-echo "应用访问令牌： ${APP_AUTH_TOKEN_VALUE}"
+echo "应用访问令牌： ${APP_AUTH_TOKEN}"
 echo "按 Ctrl+C 可同时停止后端和前端。"
 
 if ! curl -fsS "$QDRANT_URL" >/dev/null 2>&1; then
@@ -137,7 +137,7 @@ fi
 
 (
   cd "$BACKEND_DIR"
-  export APP_AUTH_TOKEN="$APP_AUTH_TOKEN_VALUE"
+  export APP_AUTH_TOKEN="$APP_AUTH_TOKEN"
   exec go run .
 ) &
 BACKEND_PID=$!
