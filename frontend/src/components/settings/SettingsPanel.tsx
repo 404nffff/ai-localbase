@@ -73,7 +73,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   }
 
   return (
-    <div className="settings-modal-backdrop" onClick={onClose}>
+    <div className="settings-modal-backdrop">
       <div className="settings-modal settings-modal-single" onClick={(event) => event.stopPropagation()}>
         <div className="settings-modal-header">
           <div>

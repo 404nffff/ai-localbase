@@ -423,6 +423,150 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }
 - `document.update`
 - `document.delete`
 
+### MCP 使用方式
+
+推荐把后端 MCP 地址和鉴权头先提成变量，后续所有 JSON-RPC 调用都复用这一组参数：
+
+```bash
+export MCP_URL="http://127.0.0.1:8080/mcp"
+export MCP_AUTH_HEADER="Authorization: Bearer your-app-access-token"
+```
+
+如果后端没有配置应用访问令牌，可以去掉 `-H "$MCP_AUTH_HEADER"` 这一行。
+
+#### 1. 初始化连接
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "demo-client",
+        "version": "1.0.0"
+      }
+    }
+  }'
+```
+
+#### 2. 查询当前可用工具
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/list",
+    "params": {}
+  }'
+```
+
+如果你想读取资源能力，也可以继续调用：
+
+- `resources/list`
+- `resources/templates/list`
+- `resources/read`
+
+#### 3. 调用工具
+
+MCP HTTP 接口走的是单端点 JSON-RPC，真正执行功能统一使用 `tools/call`，并通过 `params.name` 指定工具名。
+
+先创建知识库：
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "knowledge_base.create",
+      "arguments": {
+        "name": "MCP 示例知识库",
+        "description": "README 中的 MCP 调用示例"
+      }
+    }
+  }'
+```
+
+再把文本内容上传进知识库：
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "document.upload",
+      "arguments": {
+        "knowledgeBaseId": "kb-1",
+        "filename": "redis-notes.md",
+        "content": "# Redis\n\nRedis 是一个高性能内存数据库。"
+      }
+    }
+  }'
+```
+
+最后执行检索或问答：
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "knowledge_base.search",
+      "arguments": {
+        "knowledgeBaseId": "kb-1",
+        "query": "Redis",
+        "topK": 3
+      }
+    }
+  }'
+```
+
+```bash
+curl -s "$MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+      "name": "chat.ask",
+      "arguments": {
+        "knowledgeBaseId": "kb-1",
+        "message": "请概括 Redis 的核心特点"
+      }
+    }
+  }'
+```
+
+使用要点：
+
+- `/mcp` 的鉴权和 `/api`、`/v1` 一样，走后端 Bearer Token，不是模型配置里的 `apiKey`
+- `knowledge_base.create` 如果遇到同名知识库，会直接返回现有 `knowledgeBaseId`
+- `document.upload` 当前按文本内容上传设计；如果要上传整个目录，应由客户端先遍历目录，再逐文件调用
+- `document.append` 是在原文末尾追加新文本并重建索引，`document.update` 是用完整新文本覆盖原文并重建索引
+- `knowledge_base.search` 只返回检索片段，`chat.ask` 才会继续走问答链路
+
 其中“上传目录”不是独立工具，推荐由客户端先遍历目录，再逐文件调用 `document.upload`。`document.upload` 当前按文本内容上传设计，最少只需要 `knowledgeBaseId + content`，`filename` 可选。
 
 `document.append` 会读取现有文档全文，在尾部追加新文本后整篇重建索引；`document.update` 会用传入的完整文本覆盖原文档并整篇重建索引，两者都会清理目标文档旧的向量片段，避免检索混入过期内容。

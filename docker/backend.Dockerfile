@@ -10,7 +10,11 @@ RUN go build -o main .
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN printf '%s\n%s\n' \
+    'https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/main' \
+    'https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/community' \
+    > /etc/apk/repositories \
+ && apk --no-cache add ca-certificates
 WORKDIR /root/
 
 COPY --from=builder /app/main .
