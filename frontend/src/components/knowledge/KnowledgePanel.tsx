@@ -13,10 +13,12 @@ interface KnowledgePanelProps {
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
   onCreateKnowledgeBase: (name: string, description: string) => void
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
+  onExportKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
   directoryUploadTask: DirectoryUploadTask
   knowledgeBaseFileUploadStates: Record<string, KnowledgeBaseFileUploadState>
+  exportingKnowledgeBaseId: string | null
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
@@ -35,10 +37,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onSelectDocument,
   onCreateKnowledgeBase,
   onDeleteKnowledgeBase,
+  onExportKnowledgeBase,
   onUploadFiles,
   onUploadDirectory,
   directoryUploadTask,
   knowledgeBaseFileUploadStates,
+  exportingKnowledgeBaseId,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
@@ -356,6 +360,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             />
                           </label>
                           <button
+                            type="button"
+                            className="kb-export-btn"
+                            onClick={() => onExportKnowledgeBase(selectedKnowledgeBase.id)}
+                            disabled={exportingKnowledgeBaseId === selectedKnowledgeBase.id}
+                          >
+                            {exportingKnowledgeBaseId === selectedKnowledgeBase.id ? '导出中...' : '导出知识库'}
+                          </button>
+                          <button
                             className="kb-collapse-btn"
                             onClick={() => onToggleCollapse(selectedKnowledgeBase.id)}
                             title={collapsedKnowledgeBases[selectedKnowledgeBase.id] ? '展开文件列表' : '折叠文件列表'}
@@ -570,7 +582,6 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           </button>
                           <span className="kb-current-scope-chip">当前聊天范围：{activeScopeText}</span>
                         </div>
-
                         <label className="kb-search-field kb-search-field--compact">
                           <span>搜索文件</span>
                           <input

@@ -403,6 +403,29 @@ const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
   return parts.join(' · ')
 }
 
+const resolveExportFilename = (contentDisposition: string | null, fallbackName: string) => {
+  if (!contentDisposition) {
+    return fallbackName
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1])
+  }
+
+  const quotedMatch = contentDisposition.match(/filename="([^"]+)"/i)
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1]
+  }
+
+  const plainMatch = contentDisposition.match(/filename=([^;]+)/i)
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim()
+  }
+
+  return fallbackName
+}
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
@@ -424,6 +447,7 @@ function App() {
   const [knowledgeBaseFileUploadStates, setKnowledgeBaseFileUploadStates] = useState<
     Record<string, KnowledgeBaseFileUploadState>
   >({})
+  const [exportingKnowledgeBaseId, setExportingKnowledgeBaseId] = useState<string | null>(null)
   const [directoryUploadPendingFiles, setDirectoryUploadPendingFiles] = useState<UploadQueueItem[]>([])
   const directoryUploadCancelRef = useRef(false)
   const chatAbortControllerRef = useRef<AbortController | null>(null)
@@ -808,13 +832,6 @@ function App() {
     )
   }
 
-  const cancelActiveChatRequest = () => {
-    chatAbortControllerRef.current?.abort()
-    chatAbortControllerRef.current = null
-    activeChatRequestRef.current = null
-    setStreamingConversationId(null)
-  }
-
   const isOllamaSingleFlightMode =
     config.chat.provider === 'ollama' || config.embedding.provider === 'ollama'
 
@@ -1101,6 +1118,50 @@ function App() {
       const message =
         error instanceof Error ? error.message : '删除知识库失败，请稍后重试。'
       window.alert(`删除知识库失败：${message}`)
+    }
+  }
+
+  const handleExportKnowledgeBase = async (knowledgeBaseId: string) => {
+    if (exportingKnowledgeBaseId === knowledgeBaseId) {
+      return
+    }
+
+    const currentKnowledgeBase = knowledgeBases.find((knowledgeBase) => knowledgeBase.id === knowledgeBaseId)
+    const fallbackFilename = `${currentKnowledgeBase?.name?.trim() || knowledgeBaseId}-export.zip`
+
+    try {
+      setExportingKnowledgeBaseId(knowledgeBaseId)
+      const response = await apiFetch(`/api/knowledge-bases/${knowledgeBaseId}/export`)
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          lockAppForAccessToken('访问令牌已失效，请重新输入并完成验证后继续使用。')
+          throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
+        }
+        throw new Error(await extractErrorMessage(response))
+      }
+
+      const exportBlob = await response.blob()
+      const downloadUrl = window.URL.createObjectURL(exportBlob)
+      const downloadLink = document.createElement('a')
+      downloadLink.href = downloadUrl
+      downloadLink.download = resolveExportFilename(
+        response.headers.get('Content-Disposition'),
+        fallbackFilename,
+      )
+      document.body.appendChild(downloadLink)
+      downloadLink.click()
+      downloadLink.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (error) {
+      if (error instanceof Error && error.message === UNAUTHORIZED_ERROR_MESSAGE) {
+        return
+      }
+      const message =
+        error instanceof Error ? error.message : '导出知识库失败，请稍后重试。'
+      window.alert(`导出知识库失败：${message}`)
+    } finally {
+      setExportingKnowledgeBaseId((current) => (current === knowledgeBaseId ? null : current))
     }
   }
 
@@ -1959,10 +2020,12 @@ function App() {
         onSelectDocument={handleSelectDocument}
         onCreateKnowledgeBase={handleCreateKnowledgeBase}
         onDeleteKnowledgeBase={handleDeleteKnowledgeBase}
+        onExportKnowledgeBase={handleExportKnowledgeBase}
         onUploadFiles={handleUploadFiles}
         onUploadDirectory={handleUploadDirectory}
         directoryUploadTask={directoryUploadTask}
         knowledgeBaseFileUploadStates={knowledgeBaseFileUploadStates}
+        exportingKnowledgeBaseId={exportingKnowledgeBaseId}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}

@@ -1,8 +1,8 @@
 # 状态
 
 - 任务目录：`docs/mcp-http-server`
-- 当前状态：进行中
-- 当前阶段：知识库 Markdown 归档导出设计评审中
-- 最近更新：2026-04-21 Codex 已完成“知识库导出 zip”需求的范围澄清，确认仅做后端 API、同步下载、上传阶段生成 `upload/md/` Markdown 归档、导出仅打包归档文件且历史文档不补齐
-- 当前补充说明：本次新增设计稿 `2026-04-21-knowledge-base-export-design.md`，并补充 `knowledge-base-export-structured-request.json` 与 `knowledge-base-export-context-scan.json`；当前尚未进入编码实施阶段，等待用户评审设计稿后再写实现计划
-- 当前验证结果：本轮处于设计阶段，暂未执行代码级验证；上一轮 MCP 前端说明与知识库交互增强的前端 `npm run build` 已通过，`npm run lint` 仍因仓库缺少 ESLint 配置文件失败
+- 当前状态：已完成
+- 当前阶段：知识库导出实现与验证完成
+- 最近更新：2026-04-21 Codex 已完成知识库 Markdown 归档链路与 `GET /api/knowledge-bases/:id/export` 的实现、回归测试及 README / 施工文档回填
+- 当前补充说明：本轮采用当前会话内联执行，不启用子代理；导出包仅包含知识库元数据与 `UploadDir/md/<knowledgeBaseId>/<documentId>.md` 下的 Markdown 归档文件，历史文档不补齐
+- 当前验证结果：`go test ./internal/service ./internal/router` 与 `go test ./...` 已通过；导出 zip 已验证包含 `manifest.json`、`documents/*.md`，缺失归档时会在 `manifest.json` 中标记具体 reason

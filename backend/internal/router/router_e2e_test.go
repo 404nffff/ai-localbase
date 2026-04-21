@@ -279,6 +279,56 @@ func TestRouterKnowledgeBaseExportReturnsNotFoundWhenKnowledgeBaseMissing(t *tes
 	}
 }
 
+func TestRouterDeleteDocumentRemovesMarkdownArchive(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"delete-with-archive.md",
+		strings.Repeat("删除文档时应该连 markdown 归档一起删掉。", 20),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	var uploadResult model.UploadResponse
+	decodeJSONResponse(t, uploadResp.Body.Bytes(), &uploadResult)
+	if strings.TrimSpace(uploadResult.Uploaded.Path) == "" {
+		t.Fatal("expected uploaded document path")
+	}
+	if strings.TrimSpace(uploadResult.Uploaded.MarkdownPath) == "" {
+		t.Fatal("expected uploaded markdown archive path")
+	}
+	if _, err := os.Stat(uploadResult.Uploaded.MarkdownPath); err != nil {
+		t.Fatalf("expected markdown archive %q to exist before deletion: %v", uploadResult.Uploaded.MarkdownPath, err)
+	}
+
+	deleteResp := performRequest(
+		t,
+		engine,
+		http.MethodDelete,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents/%s", kbID, uploadResult.Uploaded.ID),
+		nil,
+		"",
+	)
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("expected delete status 200, got %d, body=%s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	if _, err := os.Stat(uploadResult.Uploaded.Path); !os.IsNotExist(err) {
+		t.Fatalf("expected uploaded source file %q to be removed, got err=%v", uploadResult.Uploaded.Path, err)
+	}
+	if _, err := os.Stat(uploadResult.Uploaded.MarkdownPath); !os.IsNotExist(err) {
+		t.Fatalf("expected markdown archive %q to be removed, got err=%v", uploadResult.Uploaded.MarkdownPath, err)
+	}
+}
+
 func TestRouterUploadRetrievalAndChatE2E(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouter(t)
 	defer cleanup()
@@ -1046,6 +1096,12 @@ func TestMCPToolsCallDocumentDeleteReturnsDeletedDocument(t *testing.T) {
 	if uploadRPCResp.Error != nil {
 		t.Fatalf("expected document.upload to return result, got error=%+v", *uploadRPCResp.Error)
 	}
+	if strings.TrimSpace(uploadRPCResp.Result.StructuredContent.Uploaded.MarkdownPath) == "" {
+		t.Fatal("expected uploaded markdown archive path")
+	}
+	if _, err := os.Stat(uploadRPCResp.Result.StructuredContent.Uploaded.MarkdownPath); err != nil {
+		t.Fatalf("expected markdown archive %q to exist before MCP deletion: %v", uploadRPCResp.Result.StructuredContent.Uploaded.MarkdownPath, err)
+	}
 
 	deleteResp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/mcp", map[string]any{
 		"jsonrpc": "2.0",
@@ -1092,6 +1148,9 @@ func TestMCPToolsCallDocumentDeleteReturnsDeletedDocument(t *testing.T) {
 	}
 	if rpcResp.Result.StructuredContent.Deleted.ID != uploadRPCResp.Result.StructuredContent.Uploaded.ID {
 		t.Fatalf("expected deleted document id %q, got %q", uploadRPCResp.Result.StructuredContent.Uploaded.ID, rpcResp.Result.StructuredContent.Deleted.ID)
+	}
+	if _, err := os.Stat(uploadRPCResp.Result.StructuredContent.Uploaded.MarkdownPath); !os.IsNotExist(err) {
+		t.Fatalf("expected markdown archive %q to be removed after MCP delete, got err=%v", uploadRPCResp.Result.StructuredContent.Uploaded.MarkdownPath, err)
 	}
 }
 

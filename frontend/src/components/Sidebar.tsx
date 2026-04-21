@@ -14,16 +14,19 @@ interface SidebarProps {
   onToggle: () => void
   knowledgeBases: KnowledgeBase[]
   selectedKnowledgeBaseId: string | null
+  selectedDocumentId: string | null
   activeKnowledgeBaseId: string | null
   activeDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
   onCreateKnowledgeBase: (name: string, description: string) => void
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
+  onExportKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
   directoryUploadTask: DirectoryUploadTask
   knowledgeBaseFileUploadStates: Record<string, KnowledgeBaseFileUploadState>
+  exportingKnowledgeBaseId: string | null
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
@@ -61,10 +64,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   onSelectDocument,
   onCreateKnowledgeBase,
   onDeleteKnowledgeBase,
+  onExportKnowledgeBase,
   onUploadFiles,
   onUploadDirectory,
   directoryUploadTask,
   knowledgeBaseFileUploadStates,
+  exportingKnowledgeBaseId,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
@@ -309,10 +314,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         onSelectDocument={onSelectDocument}
         onCreateKnowledgeBase={onCreateKnowledgeBase}
         onDeleteKnowledgeBase={onDeleteKnowledgeBase}
+        onExportKnowledgeBase={onExportKnowledgeBase}
         onUploadFiles={onUploadFiles}
         onUploadDirectory={onUploadDirectory}
         directoryUploadTask={directoryUploadTask}
         knowledgeBaseFileUploadStates={knowledgeBaseFileUploadStates}
+        exportingKnowledgeBaseId={exportingKnowledgeBaseId}
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}

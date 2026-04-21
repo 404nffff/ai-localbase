@@ -243,7 +243,10 @@ func (h *AppHandler) DeleteDocument(c *gin.Context) {
 		return
 	}
 
-	_ = os.Remove(removedDocument.Path)
+	if err := service.RemoveDocumentFiles(removedDocument); err != nil {
+		writeError(c, http.StatusInternalServerError, "failed to remove document files")
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":         "document deleted",

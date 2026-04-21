@@ -16,6 +16,8 @@
 
 - 知识库管理：创建、删除知识库，查看文档列表
 - 文档上传与索引：支持 TXT、Markdown、PDF、xlsx、csv文件上传与解析
+- Markdown 归档沉淀：新上传文档及文档覆写后会同步保存标准化 Markdown 归档，供导出与重建使用
+- 知识库导出：支持按知识库导出 `zip`，内含 `manifest.json` 与 Markdown 归档文件
 - 检索增强问答：基于 Qdrant 做向量检索并把命中内容注入对话上下文
 - 聊天记录持久化：会话消息保存到本地 SQLite 数据库，重启后仍可恢复
 - 配置持久化：模型配置与知识库状态保存到本地 JSON 文件
@@ -340,6 +342,19 @@ docker compose -f docker-compose.prod.yml exec ollama ollama list
 3. 选择 TXT、Markdown 或 PDF 文档上传
 4. 等待文档状态变为 `indexed`
 
+上传完成后，后端会额外在上传目录下生成一份标准化 Markdown 归档。默认本地开发目录为：
+
+- `backend/data/uploads/md/<knowledgeBaseId>/<documentId>.md`
+
+如果后续使用 `document.append` 或 `document.update` 更新文档内容，这份归档也会同步刷新。
+
+### 2.1 导出知识库
+
+- 接口：`GET /api/knowledge-bases/:id/export`
+- 返回：`application/zip`
+- 内容：`manifest.json` + `documents/*.md`
+- 说明：仅已生成 Markdown 归档的文档会带出文件内容；缺失归档的文档会保留在 `manifest.json` 中并标记原因
+
 ### 3. 发起问答
 
 1. 切换到聊天界面
@@ -361,6 +376,7 @@ docker compose -f docker-compose.prod.yml exec ollama ollama list
 - `backend/data/app-state.json`：应用配置与知识库状态
 - `backend/data/chat-history.db`：聊天记录
 - `backend/data/uploads/`：上传文件
+- `backend/data/uploads/md/`：按知识库分目录保存的 Markdown 归档
 
 ## 启动命令速查
 
@@ -454,6 +470,7 @@ docker compose up --build
 - `GET /api/knowledge-bases`
 - `POST /api/knowledge-bases`
 - `DELETE /api/knowledge-bases/:id`
+- `GET /api/knowledge-bases/:id/export`
 - `GET /api/knowledge-bases/:id/documents`
 - `POST /api/knowledge-bases/:id/documents`
 - `DELETE /api/knowledge-bases/:id/documents/:documentId`
@@ -680,6 +697,7 @@ npm run build
 - 向量维度需与嵌入模型严格匹配
 - 部分高级检索能力默认关闭，需通过环境变量手动启用
 - 语义缓存、查询改写、上下文压缩等能力仍以实验性增强为主
+- 历史文档不会自动补齐 Markdown 归档；导出旧知识库时，缺失归档的文档只会出现在 `manifest.json` 里
 
 ## 开源协作
 
@@ -695,7 +713,7 @@ npm run build
 - 嵌入维度自动适配
 - 批量嵌入并发优化
 - 更多文档类型支持
-- 知识库导入与导出
+- 知识库导入
 - 多用户隔离与权限能力
 
 **如果这个项目对你有帮助，请给个 ⭐ Star!**

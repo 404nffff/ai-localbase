@@ -994,6 +994,20 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 	return removedDocument, nil
 }
 
+// RemoveDocumentFiles 清理文档原文件与 Markdown 归档，避免删除后残留孤儿文件。
+func RemoveDocumentFiles(document model.Document) error {
+	paths := []string{document.Path, document.MarkdownPath}
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (string, []map[string]string, error) {
 	chunks, err := s.EvaluateRetrieve(req)
 	if err != nil {

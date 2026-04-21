@@ -649,8 +649,8 @@ func (s *MCPService) CallDocumentDelete(arguments map[string]any) (map[string]an
 	if err != nil {
 		return nil, err
 	}
-	if removeErr := os.Remove(removedDocument.Path); removeErr != nil && !os.IsNotExist(removeErr) {
-		return nil, removeErr
+	if err := RemoveDocumentFiles(removedDocument); err != nil {
+		return nil, err
 	}
 
 	return map[string]any{

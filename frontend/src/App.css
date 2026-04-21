@@ -899,8 +899,8 @@
 
 .kb-detail-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid #eef2ff;
@@ -915,7 +915,8 @@
 
 .kb-card-actions--detail {
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .kb-filter-notice {
@@ -937,6 +938,30 @@
 
 .kb-search-field--compact {
   width: min(320px, 100%);
+}
+
+.kb-export-btn {
+  padding: 10px 14px;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #eef2ff 100%);
+  color: #3730a3;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.kb-export-btn:hover {
+  border-color: #a5b4fc;
+  background: linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%);
+}
+
+.kb-export-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
 .kb-current-scope {
