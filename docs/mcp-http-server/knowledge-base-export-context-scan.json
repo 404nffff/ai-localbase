@@ -1,0 +1,38 @@
+{
+  "date": "2026-04-21",
+  "executor": "Codex",
+  "facts": [
+    {
+      "file": "backend/internal/handler/app_handler.go",
+      "finding": "`handleUpload` 当前会先把原始上传文件保存到 `serverConfig.UploadDir`，再构造 `Document` 并调用 `AppService.IndexDocument`。"
+    },
+    {
+      "file": "backend/internal/service/app_service.go",
+      "finding": "`IndexDocument` 当前会从 `document.Path` 提取文本、构建 chunks、写入向量库，并最终通过 `AddDocument` 将文档元数据写回应用状态。"
+    },
+    {
+      "file": "backend/internal/model/types.go",
+      "finding": "`Document` 现有字段只有原始文件路径 `Path`，没有 Markdown 归档路径，若要稳定导出必须补充新的元数据字段。"
+    },
+    {
+      "file": "backend/internal/util/document_text.go",
+      "finding": "`ExtractDocumentText` 已统一支持 `.txt/.md/.pdf/.csv/.xlsx` 的文本抽取，适合作为 Markdown 归档的标准内容来源。"
+    },
+    {
+      "file": "backend/internal/service/app_service.go",
+      "finding": "`RewriteDocumentContent` 已负责 MCP `document.append` / `document.update` 的文件覆写与重建索引；若 Markdown 归档不在这里同步，导出内容会落后于最新文档。"
+    },
+    {
+      "file": "backend/internal/router/router.go",
+      "finding": "知识库相关路由集中在 `/api/knowledge-bases` 分组下，新增 `GET /api/knowledge-bases/:id/export` 最符合现有 REST 结构。"
+    }
+  ],
+  "designDecision": {
+    "recommendedApproach": "在上传链路完成文本抽取后同步写入 Markdown 归档文件，并在导出接口中按文档元数据记录的归档路径流式打包 zip。",
+    "rejectedApproaches": [
+      "导出时再临时从原始文件转换 Markdown",
+      "把 zip 先落地成临时文件再返回下载链接",
+      "为历史文档一次性执行补齐迁移"
+    ]
+  }
+}
