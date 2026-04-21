@@ -171,6 +171,126 @@ func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
 	}
 }
 
+func TestAppServiceIndexDocumentCreatesMarkdownArchive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "indexed-source.md")
+	content := strings.Repeat("索引后应该产出 markdown 归档文件。", 80)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write indexed markdown file: %v", err)
+	}
+
+	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	knowledgeBases := service.ListKnowledgeBases()
+	if len(knowledgeBases) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	document := model.Document{
+		ID:              "doc-indexed-archive",
+		KnowledgeBaseID: knowledgeBases[0].ID,
+		Name:            "indexed-source.md",
+		Path:            path,
+		Status:          "processing",
+	}
+
+	indexed, err := service.IndexDocument(document)
+	if err != nil {
+		t.Fatalf("index document: %v", err)
+	}
+
+	markdownPath := mustReadMarkdownPathFromDocument(t, indexed)
+	if filepath.Ext(markdownPath) != ".md" {
+		t.Fatalf("expected markdown archive path to end with .md, got %q", markdownPath)
+	}
+
+	archivedContent, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("read markdown archive file %q: %v", markdownPath, err)
+	}
+	if !strings.Contains(string(archivedContent), "索引后应该产出 markdown 归档文件") {
+		t.Fatalf("expected markdown archive to contain indexed content, got %q", string(archivedContent))
+	}
+}
+
+func TestAppServiceRewriteDocumentContentRefreshesMarkdownArchive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rewrite-source.md")
+	originalContent := strings.Repeat("初始内容用于写入 markdown 归档。", 80)
+	if err := os.WriteFile(path, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("write source markdown file: %v", err)
+	}
+
+	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	knowledgeBases := service.ListKnowledgeBases()
+	if len(knowledgeBases) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	document := model.Document{
+		ID:              "doc-rewrite-archive",
+		KnowledgeBaseID: knowledgeBases[0].ID,
+		Name:            "rewrite-source.md",
+		Path:            path,
+		Status:          "processing",
+	}
+
+	indexed, err := service.IndexDocument(document)
+	if err != nil {
+		t.Fatalf("index document: %v", err)
+	}
+	originalMarkdownPath := mustReadMarkdownPathFromDocument(t, indexed)
+
+	rewrittenContent := strings.Repeat("重写后的内容需要同步刷新 markdown 归档。", 80)
+	updated, err := service.RewriteDocumentContent(knowledgeBases[0].ID, indexed.ID, rewrittenContent)
+	if err != nil {
+		t.Fatalf("rewrite document content: %v", err)
+	}
+	updatedMarkdownPath := mustReadMarkdownPathFromDocument(t, updated)
+	if updatedMarkdownPath != originalMarkdownPath {
+		t.Fatalf("expected rewrite to keep markdown archive path %q, got %q", originalMarkdownPath, updatedMarkdownPath)
+	}
+
+	archivedContent, err := os.ReadFile(updatedMarkdownPath)
+	if err != nil {
+		t.Fatalf("read updated markdown archive %q: %v", updatedMarkdownPath, err)
+	}
+	if !strings.Contains(string(archivedContent), "重写后的内容需要同步刷新 markdown 归档") {
+		t.Fatalf("expected markdown archive to contain rewritten content, got %q", string(archivedContent))
+	}
+	if strings.Contains(string(archivedContent), "初始内容用于写入 markdown 归档") {
+		t.Fatalf("expected markdown archive to drop stale content, got %q", string(archivedContent))
+	}
+}
+
+func mustReadMarkdownPathFromDocument(t *testing.T, document model.Document) string {
+	t.Helper()
+
+	payload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("marshal document for markdownPath assertion: %v", err)
+	}
+
+	var documentMap map[string]any
+	if err := json.Unmarshal(payload, &documentMap); err != nil {
+		t.Fatalf("decode document json payload: %v", err)
+	}
+
+	rawPath, ok := documentMap["markdownPath"]
+	if !ok {
+		t.Fatalf("expected indexed document to expose markdownPath for export archive contract, got %#v", documentMap)
+	}
+
+	markdownPath, ok := rawPath.(string)
+	if !ok {
+		t.Fatalf("expected markdownPath to be string, got %#v", rawPath)
+	}
+	markdownPath = strings.TrimSpace(markdownPath)
+	if markdownPath == "" {
+		t.Fatalf("expected markdownPath to be non-empty, got %#v", documentMap)
+	}
+	return markdownPath
+}
+
 func TestBuildSparseVector(t *testing.T) {
 	vector := BuildSparseVector("混合 Hybrid Search 支持 iPhone14 Pro Max")
 	if len(vector.Indices) == 0 {

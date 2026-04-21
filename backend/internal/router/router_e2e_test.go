@@ -1,6 +1,7 @@
 package router
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -147,6 +148,124 @@ func TestRouterRejectSensitiveStructuredUploadWithoutLocalOllama(t *testing.T) {
 	}
 	if !strings.Contains(uploadResp.Body.String(), "requires local ollama") {
 		t.Fatalf("expected local ollama policy error, got %s", uploadResp.Body.String())
+	}
+}
+
+func TestRouterKnowledgeBaseExportReturnsZip(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"export-notes.md",
+		strings.Repeat("用于导出 ZIP 的 markdown 文档内容。", 20),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	exportResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/knowledge-bases/%s/export", kbID), nil, "")
+	if exportResp.Code != http.StatusOK {
+		t.Fatalf("expected export status 200, got %d, body=%s", exportResp.Code, exportResp.Body.String())
+	}
+
+	contentType := exportResp.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "application/zip") {
+		t.Fatalf("expected export content type to contain application/zip, got %q", contentType)
+	}
+
+	contentDisposition := exportResp.Header().Get("Content-Disposition")
+	if !strings.Contains(contentDisposition, "attachment;") || !strings.Contains(contentDisposition, ".zip") {
+		t.Fatalf("expected export content disposition to contain attachment zip filename, got %q", contentDisposition)
+	}
+
+	entries := readZipEntries(t, exportResp.Body.Bytes())
+	if _, ok := entries["manifest.json"]; !ok {
+		t.Fatalf("expected export zip to include manifest.json, got entries=%v", mapKeys(entries))
+	}
+
+	hasDocumentMarkdown := false
+	for entryPath := range entries {
+		if strings.HasPrefix(entryPath, "documents/") && strings.HasSuffix(entryPath, ".md") {
+			hasDocumentMarkdown = true
+			break
+		}
+	}
+	if !hasDocumentMarkdown {
+		t.Fatalf("expected export zip to include documents/*.md, got entries=%v", mapKeys(entries))
+	}
+}
+
+func TestRouterKnowledgeBaseExportSkipsMissingMarkdownArchive(t *testing.T) {
+	engine, appService, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	defer cleanup()
+
+	knowledgeBases := appService.ListKnowledgeBases()
+	if len(knowledgeBases) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	kbID := knowledgeBases[0].ID
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy-source.md")
+	if err := os.WriteFile(legacyPath, []byte("遗留文档正文"), 0o644); err != nil {
+		t.Fatalf("write legacy document source: %v", err)
+	}
+	legacyDocument := appService.AddDocument(kbID, model.Document{
+		ID:              "doc-legacy-no-markdown-archive",
+		KnowledgeBaseID: kbID,
+		Name:            "legacy-source.md",
+		Path:            legacyPath,
+		Status:          "indexed",
+	})
+
+	forcedMarkdownPath := filepath.Join(t.TempDir(), "missing-markdown-archive.md")
+	if setDocumentMarkdownPathIfExists(&legacyDocument, forcedMarkdownPath) {
+		if _, err := appService.ReplaceDocument(kbID, legacyDocument); err != nil {
+			t.Fatalf("replace legacy document with forced markdownPath: %v", err)
+		}
+	}
+
+	exportResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/knowledge-bases/%s/export", kbID), nil, "")
+	if exportResp.Code != http.StatusOK {
+		t.Fatalf("expected export status 200, got %d, body=%s", exportResp.Code, exportResp.Body.String())
+	}
+
+	entries := readZipEntries(t, exportResp.Body.Bytes())
+	manifestBytes, ok := entries["manifest.json"]
+	if !ok {
+		t.Fatalf("expected export zip to include manifest.json, got entries=%v", mapKeys(entries))
+	}
+
+	manifestDocuments := readManifestDocuments(t, manifestBytes)
+	if len(manifestDocuments) == 0 {
+		t.Fatalf("expected manifest documents to be non-empty, got %#v", manifestDocuments)
+	}
+
+	hasReason := false
+	for _, item := range manifestDocuments {
+		reason, _ := item["reason"].(string)
+		if strings.TrimSpace(reason) != "" {
+			hasReason = true
+			break
+		}
+	}
+	if !hasReason {
+		t.Fatalf("expected manifest to include reason for missing markdown archive, got %#v", manifestDocuments)
+	}
+}
+
+func TestRouterKnowledgeBaseExportReturnsNotFoundWhenKnowledgeBaseMissing(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	resp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases/kb-not-found/export", nil, "")
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 for missing knowledge base export, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 }
 
@@ -1358,10 +1477,16 @@ func TestRouterProtectedRoutesAcceptValidBearerToken(t *testing.T) {
 }
 
 func newTestRouter(t *testing.T) (*http.ServeMux, string, func()) {
-	return newTestRouterWithAccessToken(t, "")
+	engine, _, modelBaseURL, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	return engine, modelBaseURL, cleanup
 }
 
 func newTestRouterWithAccessToken(t *testing.T, accessToken string) (*http.ServeMux, string, func()) {
+	engine, _, modelBaseURL, cleanup := newTestRouterWithAccessTokenAndService(t, accessToken)
+	return engine, modelBaseURL, cleanup
+}
+
+func newTestRouterWithAccessTokenAndService(t *testing.T, accessToken string) (*http.ServeMux, *service.AppService, string, func()) {
 	t.Helper()
 
 	uploadDir := t.TempDir()
@@ -1420,7 +1545,7 @@ func newTestRouterWithAccessToken(t *testing.T, accessToken string) (*http.Serve
 		qdrantHTTP.Close()
 		_ = os.RemoveAll(uploadDir)
 	}
-	return mux, modelHTTP.URL, cleanup
+	return mux, appService, modelHTTP.URL, cleanup
 }
 
 func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -1720,4 +1845,115 @@ func decodeJSONResponse(t *testing.T, body []byte, target any) {
 	if err := json.Unmarshal(body, target); err != nil {
 		t.Fatalf("decode json response: %v, body=%s", err, string(body))
 	}
+}
+
+func mustListFirstKnowledgeBaseID(t *testing.T, engine http.Handler) string {
+	t.Helper()
+
+	listResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected list knowledge bases status 200, got %d, body=%s", listResp.Code, listResp.Body.String())
+	}
+
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, listResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	return kbList.Items[0].ID
+}
+
+func readZipEntries(t *testing.T, zipBytes []byte) map[string][]byte {
+	t.Helper()
+
+	reader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		t.Fatalf("open export zip: %v", err)
+	}
+
+	entries := make(map[string][]byte, len(reader.File))
+	for _, file := range reader.File {
+		fileReader, err := file.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %q: %v", file.Name, err)
+		}
+
+		content, readErr := io.ReadAll(fileReader)
+		closeErr := fileReader.Close()
+		if readErr != nil {
+			t.Fatalf("read zip entry %q: %v", file.Name, readErr)
+		}
+		if closeErr != nil {
+			t.Fatalf("close zip entry %q: %v", file.Name, closeErr)
+		}
+		entries[file.Name] = content
+	}
+
+	return entries
+}
+
+func readManifestDocuments(t *testing.T, manifestBytes []byte) []map[string]any {
+	t.Helper()
+
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatalf("decode manifest json: %v, manifest=%s", err, string(manifestBytes))
+	}
+
+	rawDocuments, ok := manifest["documents"]
+	if !ok {
+		t.Fatalf("expected manifest to include documents, got %#v", manifest)
+	}
+
+	documentList, ok := rawDocuments.([]any)
+	if !ok {
+		t.Fatalf("expected manifest.documents to be array, got %#v", rawDocuments)
+	}
+
+	manifestDocuments := make([]map[string]any, 0, len(documentList))
+	for _, item := range documentList {
+		document, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("expected manifest document item to be object, got %#v", item)
+		}
+		manifestDocuments = append(manifestDocuments, document)
+	}
+	return manifestDocuments
+}
+
+func mapKeys(data map[string][]byte) []string {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func setDocumentMarkdownPathIfExists(document *model.Document, markdownPath string) bool {
+	payload, err := json.Marshal(document)
+	if err != nil {
+		return false
+	}
+
+	var documentMap map[string]any
+	if err := json.Unmarshal(payload, &documentMap); err != nil {
+		return false
+	}
+
+	if _, ok := documentMap["markdownPath"]; !ok {
+		return false
+	}
+	documentMap["markdownPath"] = markdownPath
+
+	encoded, err := json.Marshal(documentMap)
+	if err != nil {
+		return false
+	}
+
+	if err := json.Unmarshal(encoded, document); err != nil {
+		return false
+	}
+	return true
 }
