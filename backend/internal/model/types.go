@@ -78,6 +78,7 @@ type Document struct {
 	UploadedAt      string `json:"uploadedAt"`
 	Status          string `json:"status"`
 	Path            string `json:"path"`
+	MarkdownPath    string `json:"markdownPath"`
 	ContentPreview  string `json:"contentPreview"`
 }
 

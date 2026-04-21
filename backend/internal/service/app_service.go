@@ -716,6 +716,12 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
 	}
 
+	markdownPath, err := s.writeMarkdownArchive(document, content)
+	if err != nil {
+		return model.Document{}, err
+	}
+	document.MarkdownPath = markdownPath
+
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
@@ -737,6 +743,36 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	return s.AddDocument(document.KnowledgeBaseID, document), nil
 }
 
+// markdownArchiveRoot 返回 Markdown 归档的根目录；测试未注入 UploadDir 时回退到源文件目录。
+func (s *AppService) markdownArchiveRoot(document model.Document) string {
+	baseDir := strings.TrimSpace(s.serverConfig.UploadDir)
+	if baseDir == "" {
+		baseDir = filepath.Dir(document.Path)
+	}
+	return filepath.Join(baseDir, "md", document.KnowledgeBaseID)
+}
+
+// writeMarkdownArchive 将抽取后的正文同步写入 Markdown 归档，供导出与后续重建复用。
+func (s *AppService) writeMarkdownArchive(document model.Document, content string) (string, error) {
+	archiveDir := s.markdownArchiveRoot(document)
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return "", fmt.Errorf("create markdown archive dir: %w", err)
+	}
+
+	archivePath := filepath.Join(archiveDir, document.ID+".md")
+	archiveContent := strings.TrimSpace(fmt.Sprintf(
+		"# %s\n\n- Knowledge Base ID: %s\n- Uploaded At: %s\n\n%s\n",
+		document.Name,
+		document.KnowledgeBaseID,
+		document.UploadedAt,
+		strings.TrimSpace(content),
+	))
+	if err := os.WriteFile(archivePath, []byte(archiveContent), 0o644); err != nil {
+		return "", fmt.Errorf("write markdown archive: %w", err)
+	}
+	return archivePath, nil
+}
+
 // RewriteDocumentContent 覆写现有文档文件并重建整篇索引，供 append/update 共用。
 func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content string) (model.Document, error) {
 	document, err := s.GetDocument(knowledgeBaseID, documentID)
@@ -746,6 +782,13 @@ func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content
 	if err := os.WriteFile(document.Path, []byte(content), 0o644); err != nil {
 		return model.Document{}, fmt.Errorf("rewrite document file: %w", err)
 	}
+
+	markdownPath, err := s.writeMarkdownArchive(document, content)
+	if err != nil {
+		return model.Document{}, err
+	}
+	document.MarkdownPath = markdownPath
+
 	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
 		return model.Document{}, err
 	}
