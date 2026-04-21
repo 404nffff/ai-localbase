@@ -47,6 +47,40 @@ type AppService struct {
 	contextCompressor ContextCompressor
 }
 
+// KnowledgeBaseExportKnowledgeBase 描述导出包中的知识库元数据，避免暴露内部文档路径。
+type KnowledgeBaseExportKnowledgeBase struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+// KnowledgeBaseExportDocument 描述单个文档在导出包中的状态。
+type KnowledgeBaseExportDocument struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	UploadedAt string `json:"uploadedAt"`
+	Status     string `json:"status"`
+	Size       int64  `json:"size"`
+	SizeLabel  string `json:"sizeLabel"`
+	ArchivePath string `json:"archivePath"`
+	Exported   bool   `json:"exported"`
+	Reason     string `json:"reason"`
+}
+
+// KnowledgeBaseExportManifest 描述 zip 中 manifest.json 的结构。
+type KnowledgeBaseExportManifest struct {
+	KnowledgeBase KnowledgeBaseExportKnowledgeBase `json:"knowledgeBase"`
+	ExportedAt    string                           `json:"exportedAt"`
+	Documents     []KnowledgeBaseExportDocument    `json:"documents"`
+}
+
+// KnowledgeBaseExportFile 记录 zip 内相对路径与宿主机归档文件路径的映射。
+type KnowledgeBaseExportFile struct {
+	ArchivePath string
+	SourcePath  string
+}
+
 // SemanticReranker 语义重排器接口
 // Rerank 对候选 chunks 按与 query 的语义相关度重新排序
 // 返回排序后的 chunks（score 已更新）
@@ -674,6 +708,60 @@ func (s *AppService) GetKnowledgeBaseDocuments(id string) ([]model.Document, err
 	return kb.Documents, nil
 }
 
+// BuildKnowledgeBaseExport 组装知识库导出所需的 manifest 与归档文件清单。
+func (s *AppService) BuildKnowledgeBaseExport(id string) (KnowledgeBaseExportManifest, []KnowledgeBaseExportFile, string, error) {
+	s.state.Mu.RLock()
+	kb, ok := s.state.KnowledgeBases[id]
+	s.state.Mu.RUnlock()
+	if !ok {
+		return KnowledgeBaseExportManifest{}, nil, "", fmt.Errorf("knowledge base not found")
+	}
+
+	manifest := KnowledgeBaseExportManifest{
+		KnowledgeBase: KnowledgeBaseExportKnowledgeBase{
+			ID:          kb.ID,
+			Name:        kb.Name,
+			Description: kb.Description,
+			CreatedAt:   kb.CreatedAt,
+		},
+		ExportedAt: util.NowRFC3339(),
+		Documents:  make([]KnowledgeBaseExportDocument, 0, len(kb.Documents)),
+	}
+	files := make([]KnowledgeBaseExportFile, 0, len(kb.Documents))
+	for _, document := range kb.Documents {
+		entry := KnowledgeBaseExportDocument{
+			ID:         document.ID,
+			Name:       document.Name,
+			UploadedAt: document.UploadedAt,
+			Status:     document.Status,
+			Size:       document.Size,
+			SizeLabel:  document.SizeLabel,
+		}
+
+		switch {
+		case strings.TrimSpace(document.MarkdownPath) == "":
+			entry.Reason = "markdown archive not generated"
+		case !markdownArchiveExists(document.MarkdownPath):
+			entry.Reason = "markdown archive missing on disk"
+		default:
+			entry.ArchivePath = filepath.ToSlash(filepath.Join("documents", document.ID+".md"))
+			entry.Exported = true
+			files = append(files, KnowledgeBaseExportFile{
+				ArchivePath: entry.ArchivePath,
+				SourcePath:  document.MarkdownPath,
+			})
+		}
+
+		manifest.Documents = append(manifest.Documents, entry)
+	}
+
+	exportName := util.SanitizeFilename(strings.TrimSpace(kb.Name))
+	if exportName == "" {
+		exportName = kb.ID
+	}
+	return manifest, files, exportName + "-export.zip", nil
+}
+
 // GetDocument 返回指定知识库中的单个文档元数据，供 MCP 文档编辑工具复用。
 func (s *AppService) GetDocument(knowledgeBaseID, documentID string) (model.Document, error) {
 	s.state.Mu.RLock()
@@ -771,6 +859,17 @@ func (s *AppService) writeMarkdownArchive(document model.Document, content strin
 		return "", fmt.Errorf("write markdown archive: %w", err)
 	}
 	return archivePath, nil
+}
+
+func markdownArchiveExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // RewriteDocumentContent 覆写现有文档文件并重建整篇索引，供 append/update 共用。

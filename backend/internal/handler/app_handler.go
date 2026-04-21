@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"archive/zip"
+	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -164,6 +167,65 @@ func (h *AppHandler) ListDocuments(c *gin.Context) {
 		"knowledgeBaseId": c.Param("id"),
 		"items":           items,
 	})
+}
+
+// ExportKnowledgeBase 将知识库的 Markdown 归档与 manifest 打包成 zip 返回。
+func (h *AppHandler) ExportKnowledgeBase(c *gin.Context) {
+	manifest, files, filename, err := h.appService.BuildKnowledgeBaseExport(c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.Status(http.StatusOK)
+
+	zipWriter := zip.NewWriter(c.Writer)
+
+	manifestEntry, err := zipWriter.Create("manifest.json")
+	if err != nil {
+		_ = zipWriter.Close()
+		writeError(c, http.StatusInternalServerError, "create manifest zip entry failed")
+		return
+	}
+	if err := json.NewEncoder(manifestEntry).Encode(manifest); err != nil {
+		_ = zipWriter.Close()
+		writeError(c, http.StatusInternalServerError, "write manifest json failed")
+		return
+	}
+
+	for _, file := range files {
+		sourceFile, err := os.Open(file.SourcePath)
+		if err != nil {
+			_ = zipWriter.Close()
+			writeError(c, http.StatusInternalServerError, "open markdown archive failed")
+			return
+		}
+
+		zipEntry, err := zipWriter.Create(file.ArchivePath)
+		if err != nil {
+			_ = sourceFile.Close()
+			_ = zipWriter.Close()
+			writeError(c, http.StatusInternalServerError, "create document zip entry failed")
+			return
+		}
+		if _, err := io.Copy(zipEntry, sourceFile); err != nil {
+			_ = sourceFile.Close()
+			_ = zipWriter.Close()
+			writeError(c, http.StatusInternalServerError, "write document zip entry failed")
+			return
+		}
+		if err := sourceFile.Close(); err != nil {
+			_ = zipWriter.Close()
+			writeError(c, http.StatusInternalServerError, "close markdown archive failed")
+			return
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		writeError(c, http.StatusInternalServerError, "finalize export zip failed")
+	}
 }
 
 func (h *AppHandler) UploadToKnowledgeBase(c *gin.Context) {
