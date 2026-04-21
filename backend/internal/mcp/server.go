@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -151,6 +153,7 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 		if !s.authorizeDangerousTool(c, toolName) {
 			return
 		}
+		log.Printf("mcp tool call start tool=%s permission=%s remote=%s args=%s", toolName, permissionLevel, c.ClientIP(), summarizeToolArguments(arguments))
 		result, err := s.registry.Call(ctx, toolName, arguments)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -216,6 +219,80 @@ func callTool(ctx context.Context, registry *ToolRegistry, name string, args map
 		return ToolCallResult{}, fmt.Errorf("tool registry is nil")
 	}
 	return registry.Call(ctx, name, args)
+}
+
+func summarizeToolArguments(args map[string]any) string {
+	if len(args) == 0 {
+		return "{}"
+	}
+
+	summary := make(map[string]any, len(args))
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		summary[key] = summarizeToolArgumentValue(key, args[key])
+	}
+
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		return fmt.Sprintf("<marshal_error:%v>", err)
+	}
+	return string(encoded)
+}
+
+func summarizeToolArgumentValue(key string, value any) any {
+	trimmedKey := strings.TrimSpace(key)
+	lowerKey := strings.ToLower(trimmedKey)
+
+	switch typed := value.(type) {
+	case string:
+		length := len(typed)
+		switch lowerKey {
+		case "contentbase64":
+			return map[string]any{"type": "string", "chars": length, "preview": "<base64 omitted>"}
+		case "content":
+			return map[string]any{"type": "string", "chars": length, "preview": previewLogString(typed, 120)}
+		default:
+			return map[string]any{"type": "string", "chars": length, "preview": previewLogString(typed, 80)}
+		}
+	case []any:
+		return map[string]any{"type": "array", "len": len(typed)}
+	case map[string]any:
+		return map[string]any{"type": "object", "keys": sortedMapKeys(typed)}
+	default:
+		return value
+	}
+}
+
+func previewLogString(value string, limit int) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if limit <= 0 {
+		limit = 80
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return trimmed
+	}
+	return string(runes[:limit]) + "…"
+}
+
+func sortedMapKeys(items map[string]any) []string {
+	if len(items) == 0 {
+		return []string{}
+	}
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s *Server) authorize(c *gin.Context) bool {

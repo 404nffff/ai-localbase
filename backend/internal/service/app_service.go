@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"log"
 	"math"
+	"mime/multipart"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -42,6 +43,7 @@ type AppService struct {
 	qdrant            *QdrantService
 	rag               *RagService
 	serverConfig      model.ServerConfig
+	staging           *UploadStagingService
 	reranker          SemanticReranker
 	queryRewriter     QueryRewriter
 	semanticCache     *SemanticCache
@@ -312,6 +314,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		qdrant:       qdrant,
 		rag:          NewRagService(),
 		serverConfig: serverConfig,
+		staging:      NewUploadStagingService(filepath.Join("data", "staging"), 30*time.Minute),
 	}
 	service.rag.SetQdrantService(qdrant)
 
@@ -479,6 +482,57 @@ func (s *AppService) GetConfig() model.AppConfig {
 		cfg.MCP.Token = generateMCPToken()
 	}
 	return cfg
+}
+
+func (s *AppService) StageUpload(file *multipart.FileHeader, source string) (model.StagedUpload, error) {
+	if s == nil || s.staging == nil {
+		return model.StagedUpload{}, fmt.Errorf("upload staging service is not configured")
+	}
+	return s.staging.StageMultipartFile(file, source)
+}
+
+func (s *AppService) StageInlineUpload(fileName string, content []byte, source string) (model.StagedUpload, error) {
+	if s == nil || s.staging == nil {
+		return model.StagedUpload{}, fmt.Errorf("upload staging service is not configured")
+	}
+	return s.staging.StageBytes(fileName, content, source)
+}
+
+func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error) {
+	if s == nil || s.staging == nil {
+		return model.Document{}, fmt.Errorf("upload staging service is not configured")
+	}
+	staged, err := s.staging.Get(uploadID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	resolvedKnowledgeBaseID, err := s.ResolveKnowledgeBaseID(knowledgeBaseID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	documentName := strings.TrimSpace(fileName)
+	if documentName == "" {
+		documentName = staged.FileName
+	}
+	document := model.Document{
+		ID:              util.NextID("doc"),
+		KnowledgeBaseID: resolvedKnowledgeBaseID,
+		Name:            documentName,
+		Size:            staged.Size,
+		SizeLabel:       staged.SizeLabel,
+		UploadedAt:      util.NowRFC3339(),
+		Status:          "processing",
+		Path:            staged.Path,
+		ContentPreview:  util.ExtractContentPreview(staged.Path),
+	}
+	uploaded, err := s.IndexDocument(document)
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := s.staging.MarkConsumed(uploadID); err != nil {
+		log.Printf("failed to mark staged upload consumed: %v", err)
+	}
+	return uploaded, nil
 }
 
 func defaultMCPBasePath(basePath string) string {

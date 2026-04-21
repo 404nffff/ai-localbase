@@ -27,6 +27,8 @@ type AppServiceReader interface {
 	DeleteConversation(id string) error
 	ResolveKnowledgeBaseID(candidate string) (string, error)
 	IndexDocument(document model.Document) (model.Document, error)
+	StageInlineUpload(fileName string, content []byte, source string) (model.StagedUpload, error)
+	RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error)
 }
 
 func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
@@ -424,7 +426,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "upload_document",
-			Description: "向指定知识库上传文档。参数 knowledgeBaseId、fileName、contentBase64 为必填。",
+			Description: "向指定知识库上传文档。参数 knowledgeBaseId、fileName、contentBase64 为必填。仅适用于小文件，大文件请先走 HTTP /api/uploads 暂存再调用 register_staged_upload。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID"},
@@ -449,8 +451,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				resolvedKnowledgeBaseID, err := appService.ResolveKnowledgeBaseID(knowledgeBaseID)
-				if err != nil {
+				if err := validateUploadFileName(fileName, appService.GetConfig()); err != nil {
 					return ToolCallResult{}, err
 				}
 				decoded, err := base64.StdEncoding.DecodeString(contentBase64)
@@ -460,36 +461,54 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if len(decoded) == 0 {
 					return ToolCallResult{}, fmt.Errorf("decoded file content is empty")
 				}
-				if err := validateUploadFileName(fileName, appService.GetConfig()); err != nil {
+				if int64(len(decoded)) > maxInlineUploadBytes {
+					return ToolCallResult{}, fmt.Errorf("inline upload too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len(decoded))), util.FormatFileSize(maxInlineUploadBytes))
+				}
+				staged, err := appService.StageInlineUpload(fileName, decoded, "mcp-inline")
+				if err != nil {
 					return ToolCallResult{}, err
 				}
-				storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(fileName))
-				destination := filepath.Join("data/uploads", storedName)
-				if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-					return ToolCallResult{}, fmt.Errorf("create upload directory: %w", err)
-				}
-				if err := os.WriteFile(destination, decoded, 0o644); err != nil {
-					return ToolCallResult{}, fmt.Errorf("write uploaded file: %w", err)
-				}
-				document := model.Document{
-					ID:              util.NextID("doc"),
-					KnowledgeBaseID: resolvedKnowledgeBaseID,
-					Name:            fileName,
-					Size:            int64(len(decoded)),
-					SizeLabel:       util.FormatFileSize(int64(len(decoded))),
-					UploadedAt:      util.NowRFC3339(),
-					Status:          "processing",
-					Path:            destination,
-					ContentPreview:  util.ExtractContentPreview(destination),
-				}
-				uploaded, err := appService.IndexDocument(document)
+				uploaded, err := appService.RegisterStagedUpload(staged.ID, knowledgeBaseID, fileName)
 				if err != nil {
-					_ = os.Remove(destination)
 					return ToolCallResult{}, wrapBinaryUploadParseError(fileName, err)
 				}
 				return NewTextResult(
 					fmt.Sprintf("文档《%s》上传成功。", uploaded.Name),
-					map[string]any{"uploaded": uploaded, "knowledgeBaseId": resolvedKnowledgeBaseID},
+					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
+				), nil
+			},
+		},
+		{
+			Name:        "register_staged_upload",
+			Description: "基于已暂存的 uploadId 将文件注册到指定知识库。适合大文件上传场景。参数 uploadId、knowledgeBaseId 为必填，fileName 为选填。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"uploadId":        map[string]any{"type": "string", "description": "通过 HTTP /api/uploads 返回的上传 ID"},
+					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID"},
+					"fileName":        map[string]any{"type": "string", "description": "可选，注册后的文件名"},
+				},
+				[]string{"uploadId", "knowledgeBaseId"},
+			),
+			ReadOnly:        false,
+			PermissionLevel: ToolPermissionWrite,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				uploadID, err := requiredStringArg(args, "uploadId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				fileName := optionalStringArg(args, "fileName")
+				uploaded, err := appService.RegisterStagedUpload(uploadID, knowledgeBaseID, fileName)
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				return NewTextResult(
+					fmt.Sprintf("暂存文件《%s》已注册到知识库。", uploaded.Name),
+					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "uploadId": uploadID},
 				), nil
 			},
 		},
@@ -541,6 +560,8 @@ func embeddingModelConfigFromAppConfig(cfg model.AppConfig) model.EmbeddingModel
 		APIKey:   cfg.Embedding.APIKey,
 	}
 }
+
+const maxInlineUploadBytes int64 = 256 * 1024
 
 func modelNowRFC3339() string {
 	return util.NowRFC3339()

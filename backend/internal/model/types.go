@@ -96,6 +96,26 @@ type UploadResponse struct {
 	Uploaded      Document `json:"uploaded"`
 }
 
+type StagedUpload struct {
+	ID         string `json:"id"`
+	FileName   string `json:"fileName"`
+	Path       string `json:"path"`
+	Size       int64  `json:"size"`
+	SizeLabel  string `json:"sizeLabel"`
+	SHA256     string `json:"sha256"`
+	CreatedAt  string `json:"createdAt"`
+	ExpiresAt  string `json:"expiresAt"`
+	Status     string `json:"status"`
+	Source     string `json:"source,omitempty"`
+	ConsumedAt string `json:"consumedAt,omitempty"`
+}
+
+type StageUploadResponse struct {
+	Message  string       `json:"message"`
+	Staged   StagedUpload `json:"staged"`
+	UploadID string       `json:"uploadId"`
+}
+
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`

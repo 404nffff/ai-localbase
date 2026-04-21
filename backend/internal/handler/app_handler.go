@@ -181,6 +181,28 @@ func (h *AppHandler) Upload(c *gin.Context) {
 	h.handleUpload(c, c.PostForm("knowledgeBaseId"))
 }
 
+func (h *AppHandler) StageUpload(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "missing file field 'file'")
+		return
+	}
+	if err := validateUploadFile(file, h.appService.GetConfig()); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	staged, err := h.appService.StageUpload(file, "http")
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.StageUploadResponse{
+		Message:  "file staged successfully",
+		Staged:   staged,
+		UploadID: staged.ID,
+	})
+}
+
 func (h *AppHandler) DeleteDocument(c *gin.Context) {
 	removedDocument, err := h.appService.DeleteDocument(c.Param("id"), c.Param("documentId"))
 	if err != nil {

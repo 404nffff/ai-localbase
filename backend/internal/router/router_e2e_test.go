@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,6 +169,9 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if !containsString(toolNames, "upload_text_document") {
 		t.Fatalf("expected upload_text_document in tools list, got %v", toolNames)
 	}
+	if !containsString(toolNames, "register_staged_upload") {
+		t.Fatalf("expected register_staged_upload in tools list, got %v", toolNames)
+	}
 
 	callResp := performRequestWithHeaders(
 		t,
@@ -278,6 +282,138 @@ func TestMCPUploadTextDocument(t *testing.T) {
 	decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
 	if rpcResp.Result.Data.Uploaded.Name != "whu-intro.txt" {
 		t.Fatalf("expected uploaded text document, got %+v", rpcResp.Result.Data.Uploaded)
+	}
+}
+
+func TestHTTPStageUploadAndMCPRegisterStagedUpload(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	configResp := performRequest(t, engine, http.MethodGet, "/api/config", nil, "")
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", configResp.Code, configResp.Body.String())
+	}
+	var cfg model.AppConfig
+	decodeJSONResponse(t, configResp.Body.Bytes(), &cfg)
+	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+
+	kbListResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	knowledgeBaseID := kbList.Items[0].ID
+
+	stageResp := performMultipartUpload(t, engine, http.MethodPost, "/api/uploads", "staged-guide.md", "# Staged Upload\n\n这是通过 staging + MCP register 导入的文档。")
+	if stageResp.Code != http.StatusOK {
+		t.Fatalf("expected stage upload status 200, got %d, body=%s", stageResp.Code, stageResp.Body.String())
+	}
+	var stagedResult model.StageUploadResponse
+	decodeJSONResponse(t, stageResp.Body.Bytes(), &stagedResult)
+	if strings.TrimSpace(stagedResult.UploadID) == "" {
+		t.Fatalf("expected uploadId, got %+v", stagedResult)
+	}
+
+	registerResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      12,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "register_staged_upload",
+				"arguments": map[string]any{
+					"uploadId":        stagedResult.UploadID,
+					"knowledgeBaseId": knowledgeBaseID,
+					"fileName":        "registered-guide.md",
+				},
+			},
+		})),
+		"application/json",
+		headers,
+	)
+	if registerResp.Code != http.StatusOK {
+		t.Fatalf("expected register status 200, got %d, body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	var rpcResp struct {
+		Result struct {
+			Data struct {
+				Uploaded model.Document `json:"uploaded"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	decodeJSONResponse(t, registerResp.Body.Bytes(), &rpcResp)
+	if rpcResp.Result.Data.Uploaded.Name != "registered-guide.md" {
+		t.Fatalf("expected registered staged upload name, got %+v", rpcResp.Result.Data.Uploaded)
+	}
+	if rpcResp.Result.Data.Uploaded.Status != "indexed" {
+		t.Fatalf("expected indexed staged upload, got %+v", rpcResp.Result.Data.Uploaded)
+	}
+}
+
+func TestMCPInlineUploadTooLargeReturnsGuidance(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	configResp := performRequest(t, engine, http.MethodGet, "/api/config", nil, "")
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", configResp.Code, configResp.Body.String())
+	}
+	var cfg model.AppConfig
+	decodeJSONResponse(t, configResp.Body.Bytes(), &cfg)
+	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+
+	kbListResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	largeBase64 := make([]byte, 256*1024+1)
+	for i := range largeBase64 {
+		largeBase64[i] = 'a'
+	}
+	resp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      13,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "upload_document",
+				"arguments": map[string]any{
+					"knowledgeBaseId": kbList.Items[0].ID,
+					"fileName":        "large.pdf",
+					"contentBase64":   base64.StdEncoding.EncodeToString(largeBase64),
+				},
+			},
+		})),
+		"application/json",
+		headers,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "register_staged_upload") || !strings.Contains(resp.Body.String(), "/api/uploads") {
+		t.Fatalf("expected staged upload guidance, got %s", resp.Body.String())
 	}
 }
 

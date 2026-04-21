@@ -247,6 +247,7 @@ MCP_REQUESTS_PER_MINUTE=120
 - 支持 `.txt` / `.md` / `.csv`
 - 不支持 `.pdf` / `.xlsx`
 - 适合作为 MCP 主上传通道
+- 适合直接粘贴的小文本内容，不适合大体积二进制文件
 
 返回内容：
 
@@ -266,15 +267,40 @@ MCP_REQUESTS_PER_MINUTE=120
 说明：
 
 - 使用 Base64 传输文件内容
-- 适合真实文件二进制上传
+- **仅适用于小文件兼容场景**
 - 当前代码层面默认支持 `.txt` / `.md` / `.pdf`
 - 若服务配置满足条件，结构化敏感文件类型会额外放行
 - 如果把普通文本伪装成二进制文件，解析阶段会失败
+- 当前内联上传大小限制为约 `256KB`
+- 超限时会提示先走 HTTP [`/api/uploads`](docs/mcp.md) 暂存，再调用 `register_staged_upload`
 
 返回内容：
 
 - 已上传并完成索引的文档对象
 - 知识库 ID
+- 临时上传 ID（小文件路径下也会经过 staging 注册）
+
+#### `register_staged_upload`
+
+权限级别：`write`
+
+输入参数：
+
+- `uploadId`（必填）
+- `knowledgeBaseId`（必填）
+- `fileName`（选填）
+
+说明：
+
+- 用于把已通过 HTTP [`/api/uploads`](docs/mcp.md) 暂存的文件注册到知识库
+- **这是大文件推荐上传通道**
+- 服务端会基于 `uploadId` 读取暂存文件并执行索引
+
+返回内容：
+
+- 已注册并完成索引的文档对象
+- 知识库 ID
+- 对应的 `uploadId`
 
 ### 危险工具
 
@@ -422,7 +448,37 @@ curl -X POST http://localhost:8080/mcp \
   }'
 ```
 
-### 4. 上传真实文件二进制
+### 4. 大文件推荐：HTTP 暂存 + MCP 注册
+
+先通过 HTTP 接口上传文件流：
+
+```bash
+curl -X POST http://localhost:8080/api/uploads \
+  -F "file=@./example.pdf"
+```
+
+返回中会包含 `uploadId`。然后再调用 MCP 注册：
+
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <MCP_TOKEN>" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "register_staged_upload",
+      "arguments": {
+        "uploadId": "upl_xxx",
+        "knowledgeBaseId": "kb-1",
+        "fileName": "example.pdf"
+      }
+    }
+  }'
+```
+
+### 5. 小文件兼容：Base64 内联上传
 
 先把文件转成 Base64：
 
@@ -438,7 +494,7 @@ curl -X POST http://localhost:8080/mcp \
   -H "Authorization: Bearer <MCP_TOKEN>" \
   -d '{
     "jsonrpc": "2.0",
-    "id": 3,
+    "id": 4,
     "method": "tools/call",
     "params": {
       "name": "upload_document",
@@ -451,7 +507,9 @@ curl -X POST http://localhost:8080/mcp \
   }'
 ```
 
-### 5. 检索知识库
+> 当文件较大时，`upload_document` 会直接拒绝，并提示改走 [`/api/uploads`](docs/mcp.md) + `register_staged_upload`。
+
+### 6. 检索知识库
 
 ```bash
 curl -X POST http://localhost:8080/mcp \

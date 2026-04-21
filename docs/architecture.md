@@ -36,12 +36,14 @@ ai-localbase/
 │   │   │   ├── qdrant_service.go        # Qdrant HTTP 客户端
 │   │   │   ├── rag_service.go           # 切分/嵌入/检索（OpenAI兼容 + Ollama原生）
 │   │   │   ├── rag_service_test.go
-│   │   │   └── resilience.go            # 指数退避重试
+│   │   │   ├── resilience.go            # 指数退避重试
+│   │   │   └── upload_staging_service.go # 暂存上传服务（HTTP staging + MCP register）
 │   │   └── util/
 │   │       ├── document_text.go         # 文本提取（TXT/MD/PDF）
 │   │       └── helpers.go
 │   └── data/
-│       ├── uploads/                     # 上传文件
+│       ├── uploads/                     # 正式上传文件
+│       ├── staging/                     # 临时上传暂存区
 │       └── app-state.json               # 持久化状态（自动生成）
 ├── frontend/
 │   ├── index.html
@@ -82,8 +84,9 @@ ai-localbase/
 | GET | `/api/knowledge-bases` | 列出所有知识库 |
 | POST | `/api/knowledge-bases` | 创建知识库 |
 | DELETE | `/api/knowledge-bases/:id` | 删除知识库（含 Qdrant 集合）|
+| POST | `/api/uploads` | 以 multipart 形式暂存文件，返回 `uploadId` |
 | GET | `/api/knowledge-bases/:id/documents` | 列出知识库文档 |
-| POST | `/api/knowledge-bases/:id/documents` | 上传文档并索引 |
+| POST | `/api/knowledge-bases/:id/documents` | 直接上传文档并索引 |
 | DELETE | `/api/knowledge-bases/:id/documents/:docId` | 删除文档（含向量点）|
 | POST | `/v1/chat/completions` | OpenAI 兼容聊天（含 RAG，非流式）|
 | POST | `/v1/chat/completions/stream` | OpenAI 兼容聊天（含 RAG，SSE 流式）|
@@ -115,7 +118,10 @@ ai-localbase/
 ## 核心服务说明
 
 ### AppService
-业务逻辑核心，协调 Qdrant、RAG、LLM 三个下游服务。负责知识库/文档 CRUD、文档索引流水线（提取→切分→嵌入→写入Qdrant）、检索管道（动态TopK→rerank→MMR→低置信度兜底）、状态持久化。
+业务逻辑核心，协调 Qdrant、RAG、LLM 三个下游服务。负责知识库/文档 CRUD、文档索引流水线（提取→切分→嵌入→写入Qdrant）、检索管道（动态TopK→rerank→MMR→低置信度兜底）、状态持久化，并负责把 HTTP staging 上传注册为正式知识库文档。
+
+### UploadStagingService
+上传暂存服务。负责把大文件先写入 [`data/staging/`](docs/architecture.md)，生成 `uploadId`、计算摘要、设置过期时间，并为 MCP 的 `register_staged_upload` 提供文件引用能力，从而避免将大文件内容直接塞进 MCP 会话。
 
 ### RagService  
 纯函数式文本处理层。负责文本切分（800字符窗口/120字符重叠）、嵌入调用（OpenAI兼容 + Ollama原生，含LRU缓存 + 分批 + 失败回退）、Prompt 上下文构建。
