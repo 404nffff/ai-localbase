@@ -5,7 +5,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: qdrant
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_HTTP_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${QDRANT_HTTP_PORT:-6333}:6333"
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
@@ -16,20 +16,38 @@ services:
       timeout: 3s
       retries: 5
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-localbase-ollama
+    ports:
+      - "${OLLAMA_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_storage:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   backend:
     image: ghcr.io/veyliss/ai-localbase-backend:latest
     container_name: ai-localbase-backend
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - "${BACKEND_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${BACKEND_PORT:-8080}:8080"
     depends_on:
       qdrant:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     environment:
+      - UPLOAD_DIR=/app/data/uploads
+      - STATE_FILE=/app/data/app-state.json
+      - CHAT_HISTORY_FILE=/app/data/chat-history.db
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-768}
       - QDRANT_TIMEOUT_SECONDS=${QDRANT_TIMEOUT_SECONDS:-5}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       - APP_AUTH_TOKEN=${APP_AUTH_TOKEN:-change-me-app-token}
       - SERVER_PORT=8080
     extra_hosts:
@@ -46,7 +64,7 @@ services:
     image: ghcr.io/veyliss/ai-localbase-frontend:latest
     container_name: ai-localbase-frontend
     ports:
-      - "${FRONTEND_PORT:-4173}:4173"
+      - "${FRONTEND_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${FRONTEND_PORT:-4173}:4173"
     depends_on:
       backend:
         condition: service_healthy
@@ -57,3 +75,4 @@ services:
 
 volumes:
   qdrant_storage:
+  ollama_storage:

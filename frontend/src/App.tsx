@@ -22,6 +22,8 @@ export interface ChatMessage {
 export interface Conversation {
   id: string
   title: string
+  knowledgeBaseId: string | null
+  documentId: string | null
   messages: ChatMessage[]
   createdAt: string
   updatedAt: string
@@ -227,6 +229,12 @@ export interface DirectoryUploadTask {
   summaryMessage: string
 }
 
+export interface KnowledgeBaseFileUploadState {
+  totalFiles: number
+  completedFiles: number
+  currentFileName: string
+}
+
 const DIRECTORY_UPLOAD_ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.pdf', '.csv', '.xlsx'])
 
 const createEmptyDirectoryUploadTask = (): DirectoryUploadTask => ({
@@ -285,6 +293,8 @@ const isDegradedFallbackContent = (content: string): boolean => {
 const normalizeConversation = (conversation: BackendConversation): Conversation => ({
   id: conversation.id,
   title: conversation.title,
+  knowledgeBaseId: conversation.knowledgeBaseId || null,
+  documentId: conversation.documentId || null,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
   messages: (conversation.messages ?? []).map((message) => ({
@@ -296,12 +306,17 @@ const normalizeConversation = (conversation: BackendConversation): Conversation 
   })),
 })
 
-const createWelcomeConversation = (): Conversation => {
+const createWelcomeConversation = (scope?: {
+  knowledgeBaseId?: string | null
+  documentId?: string | null
+}): Conversation => {
   const now = new Date().toISOString()
 
   return {
     id: createId(),
     title: '新的对话',
+    knowledgeBaseId: scope?.knowledgeBaseId ?? null,
+    documentId: scope?.documentId ?? null,
     createdAt: now,
     updatedAt: now,
     messages: [
@@ -399,13 +414,16 @@ function App() {
     return [initialConversation]
   })
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<string | null>(null)
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
+  const [panelSelectedKnowledgeBaseId, setPanelSelectedKnowledgeBaseId] = useState<string | null>(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isKnowledgePanelOpen, setIsKnowledgePanelOpen] = useState(false)
   const [directoryUploadTask, setDirectoryUploadTask] = useState<DirectoryUploadTask>(
     createEmptyDirectoryUploadTask,
   )
+  // 按知识库记录普通文件上传进度，用于按钮级 loading 反馈。
+  const [knowledgeBaseFileUploadStates, setKnowledgeBaseFileUploadStates] = useState<
+    Record<string, KnowledgeBaseFileUploadState>
+  >({})
   const [directoryUploadPendingFiles, setDirectoryUploadPendingFiles] = useState<UploadQueueItem[]>([])
   const directoryUploadCancelRef = useRef(false)
   const chatAbortControllerRef = useRef<AbortController | null>(null)
@@ -583,20 +601,33 @@ function App() {
     const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
     setKnowledgeBases(nextKnowledgeBases)
     setConfig(configData)
-    setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
-    setSelectedDocumentId(null)
+    setPanelSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
 
     const conversationItems = conversationsData.items ?? []
     if (conversationItems.length > 0) {
       const summarizedConversations = conversationItems.map((conversation) => ({
         id: conversation.id,
         title: conversation.title,
+        knowledgeBaseId: conversation.knowledgeBaseId || nextKnowledgeBases[0]?.id || null,
+        documentId: conversation.documentId || null,
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
         messages: [],
       }))
       setConversations(summarizedConversations)
       setActiveConversationId(conversationItems[0].id)
+    } else {
+      setConversations((prev) =>
+        prev.map((conversation, index) =>
+          index === 0 && !conversation.knowledgeBaseId
+            ? {
+                ...conversation,
+                knowledgeBaseId: nextKnowledgeBases[0]?.id ?? null,
+                documentId: null,
+              }
+            : conversation,
+        ),
+      )
     }
   }
 
@@ -657,27 +688,31 @@ function App() {
     [activeConversationId, conversations],
   )
 
+  const activeConversationKnowledgeBaseId =
+    activeConversation?.knowledgeBaseId ?? knowledgeBases[0]?.id ?? null
+  const activeConversationDocumentId = activeConversation?.documentId ?? null
+
   const selectedKnowledgeBase = useMemo(() => {
     const fallbackKnowledgeBase = knowledgeBases[0] ?? null
 
     return (
       knowledgeBases.find(
-        (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId,
+        (knowledgeBase) => knowledgeBase.id === activeConversationKnowledgeBaseId,
       ) ?? fallbackKnowledgeBase
     )
-  }, [knowledgeBases, selectedKnowledgeBaseId])
+  }, [activeConversationKnowledgeBaseId, knowledgeBases])
 
   const selectedDocument = useMemo(() => {
-    if (!selectedKnowledgeBase || !selectedDocumentId) {
+    if (!selectedKnowledgeBase || !activeConversationDocumentId) {
       return null
     }
 
     return (
       selectedKnowledgeBase.documents.find(
-        (document) => document.id === selectedDocumentId,
+        (document) => document.id === activeConversationDocumentId,
       ) ?? null
     )
-  }, [selectedDocumentId, selectedKnowledgeBase])
+  }, [activeConversationDocumentId, selectedKnowledgeBase])
 
   useEffect(() => {
     const bootstrapApp = async () => {
@@ -787,10 +822,32 @@ function App() {
     conversations.find((conversation) => conversation.id === streamingConversationId)?.title ?? '当前会话'
 
   const handleCreateConversation = () => {
-    const conversation = createWelcomeConversation()
+    const conversation = createWelcomeConversation({
+      knowledgeBaseId: selectedKnowledgeBase?.id ?? knowledgeBases[0]?.id ?? null,
+      documentId: null,
+    })
 
     setConversations((prev) => [conversation, ...prev])
     setActiveConversationId(conversation.id)
+  }
+
+  const updateConversationScope = (
+    conversationId: string,
+    knowledgeBaseId: string | null,
+    documentId: string | null,
+  ) => {
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === conversationId
+          ? {
+              ...conversation,
+              knowledgeBaseId,
+              documentId,
+              updatedAt: new Date().toISOString(),
+            }
+          : conversation,
+      ),
+    )
   }
 
   const handleSelectConversation = async (conversationId: string) => {
@@ -857,8 +914,8 @@ function App() {
         body: JSON.stringify({
           id: fullConversation.id,
           title: nextTitle,
-          knowledgeBaseId: '',
-          documentId: '',
+          knowledgeBaseId: fullConversation.knowledgeBaseId ?? '',
+          documentId: fullConversation.documentId ?? '',
           messages: fullConversation.messages.map((message) => ({
             id: message.id,
             role: message.role,
@@ -915,7 +972,10 @@ function App() {
       const fallbackConversation =
         remainingConversations[0] ??
         (() => {
-          const conversation = createWelcomeConversation()
+          const conversation = createWelcomeConversation({
+            knowledgeBaseId: knowledgeBases[0]?.id ?? null,
+            documentId: null,
+          })
           return conversation
         })()
 
@@ -983,8 +1043,18 @@ function App() {
       )
 
       setKnowledgeBases((prev) => [createdKnowledgeBase, ...prev])
-      setSelectedKnowledgeBaseId(createdKnowledgeBase.id)
-      setSelectedDocumentId(null)
+      setPanelSelectedKnowledgeBaseId(createdKnowledgeBase.id)
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.knowledgeBaseId
+            ? conversation
+            : {
+                ...conversation,
+                knowledgeBaseId: createdKnowledgeBase.id,
+                documentId: null,
+              },
+        ),
+      )
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '创建知识库失败，请稍后重试。'
@@ -1007,10 +1077,23 @@ function App() {
           (knowledgeBase) => knowledgeBase.id !== knowledgeBaseId,
         )
 
-        if (selectedKnowledgeBaseId === knowledgeBaseId) {
-          setSelectedKnowledgeBaseId(nextKnowledgeBases[0]?.id ?? null)
-          setSelectedDocumentId(null)
+        if (panelSelectedKnowledgeBaseId === knowledgeBaseId) {
+          const fallbackPanelKnowledgeBaseId = nextKnowledgeBases[0]?.id ?? null
+          setPanelSelectedKnowledgeBaseId(fallbackPanelKnowledgeBaseId)
         }
+
+        setConversations((prevConversations) =>
+          prevConversations.map((conversation) =>
+            conversation.knowledgeBaseId === knowledgeBaseId
+              ? {
+                  ...conversation,
+                  knowledgeBaseId: nextKnowledgeBases[0]?.id ?? null,
+                  documentId: null,
+                  updatedAt: new Date().toISOString(),
+                }
+              : conversation,
+          ),
+        )
 
         return nextKnowledgeBases
       })
@@ -1022,16 +1105,26 @@ function App() {
   }
 
   const handleSelectKnowledgeBase = (knowledgeBaseId: string) => {
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
-    setSelectedDocumentId(null)
+    setPanelSelectedKnowledgeBaseId(knowledgeBaseId)
   }
 
   const handleSelectDocument = (
     knowledgeBaseId: string,
     documentId: string | null,
   ) => {
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
-    setSelectedDocumentId(documentId)
+    setPanelSelectedKnowledgeBaseId(knowledgeBaseId)
+    if (!activeConversation) {
+      return
+    }
+    updateConversationScope(activeConversation.id, knowledgeBaseId, documentId)
+  }
+
+  const handleSelectChatKnowledgeBase = (knowledgeBaseId: string) => {
+    // 顶部切换只影响当前会话的问答范围，不联动知识库管理面板的浏览状态。
+    if (!activeConversation) {
+      return
+    }
+    updateConversationScope(activeConversation.id, knowledgeBaseId, null)
   }
 
   const uploadSingleKnowledgeBaseFile = async (knowledgeBaseId: string, file: File) => {
@@ -1088,7 +1181,7 @@ function App() {
     }
 
     directoryUploadCancelRef.current = false
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
+    setPanelSelectedKnowledgeBaseId(knowledgeBaseId)
 
     setDirectoryUploadTask((prev) => ({
       ...prev,
@@ -1101,8 +1194,6 @@ function App() {
     }))
 
     const nextPendingQueue: UploadQueueItem[] = []
-    let firstUploadedDocumentId: string | null = null
-
     for (let index = 0; index < queue.length; index += 1) {
       if (directoryUploadCancelRef.current) {
         nextPendingQueue.push(...queue.slice(index))
@@ -1122,7 +1213,6 @@ function App() {
       try {
         const uploaded = await uploadSingleKnowledgeBaseFile(knowledgeBaseId, item.file)
         appendUploadedDocument(knowledgeBaseId, uploaded)
-        firstUploadedDocumentId = firstUploadedDocumentId ?? uploaded.id
 
         setDirectoryUploadTask((prev) => ({
           ...prev,
@@ -1143,9 +1233,6 @@ function App() {
     }
 
     setDirectoryUploadPendingFiles(nextPendingQueue)
-    if (firstUploadedDocumentId) {
-      setSelectedDocumentId((current) => current ?? firstUploadedDocumentId)
-    }
 
     setDirectoryUploadTask((prev) => {
       let status: DirectoryUploadStatus = 'done'
@@ -1178,12 +1265,45 @@ function App() {
       return
     }
 
+    // 同一个知识库上传未结束前禁止重复发起，避免按钮状态与结果列表错乱。
+    if (knowledgeBaseFileUploadStates[knowledgeBaseId]) {
+      return
+    }
+
+    const uploadQueue = Array.from(files)
+    setKnowledgeBaseFileUploadStates((prev) => ({
+      ...prev,
+      [knowledgeBaseId]: {
+        totalFiles: uploadQueue.length,
+        completedFiles: 0,
+        currentFileName: uploadQueue[0]?.name ?? '',
+      },
+    }))
+
     try {
       const uploadedDocuments: DocumentItem[] = []
 
-      for (const file of Array.from(files)) {
+      for (const [index, file] of uploadQueue.entries()) {
+        setKnowledgeBaseFileUploadStates((prev) => ({
+          ...prev,
+          [knowledgeBaseId]: {
+            totalFiles: uploadQueue.length,
+            completedFiles: index,
+            currentFileName: file.name,
+          },
+        }))
+
         const uploaded = await uploadSingleKnowledgeBaseFile(knowledgeBaseId, file)
         uploadedDocuments.push(uploaded)
+
+        setKnowledgeBaseFileUploadStates((prev) => ({
+          ...prev,
+          [knowledgeBaseId]: {
+            totalFiles: uploadQueue.length,
+            completedFiles: index + 1,
+            currentFileName: file.name,
+          },
+        }))
       }
 
       setKnowledgeBases((prev) =>
@@ -1197,12 +1317,17 @@ function App() {
         ),
       )
 
-      setSelectedKnowledgeBaseId(knowledgeBaseId)
-      setSelectedDocumentId(uploadedDocuments[0]?.id ?? null)
+      setPanelSelectedKnowledgeBaseId(knowledgeBaseId)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '上传文档失败，请稍后重试。'
       window.alert(`上传文档失败：${message}`)
+    } finally {
+      setKnowledgeBaseFileUploadStates((prev) => {
+        const nextState = { ...prev }
+        delete nextState[knowledgeBaseId]
+        return nextState
+      })
     }
   }
 
@@ -1330,7 +1455,17 @@ function App() {
         ),
       )
 
-      setSelectedDocumentId((current) => (current === documentId ? null : current))
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.documentId === documentId
+            ? {
+                ...conversation,
+                documentId: null,
+                updatedAt: new Date().toISOString(),
+              }
+            : conversation,
+        ),
+      )
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '删除文档失败，请稍后重试。'
@@ -1391,8 +1526,8 @@ function App() {
     const requestBody: ChatRequestBody = {
       conversationId,
       model: config.chat.model,
-      knowledgeBaseId: selectedKnowledgeBaseId ?? '',
-      documentId: selectedDocumentId ?? '',
+      knowledgeBaseId: selectedKnowledgeBase?.id ?? '',
+      documentId: selectedDocument?.id ?? '',
       config: config.chat,
       embedding: config.embedding,
       messages: nextMessages.map((message) => ({
@@ -1816,8 +1951,10 @@ function App() {
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
         knowledgeBases={knowledgeBases}
-        selectedKnowledgeBaseId={selectedKnowledgeBase?.id ?? null}
-        selectedDocumentId={selectedDocumentId}
+        selectedKnowledgeBaseId={panelSelectedKnowledgeBaseId}
+        selectedDocumentId={activeConversationDocumentId}
+        activeKnowledgeBaseId={selectedKnowledgeBase?.id ?? null}
+        activeDocumentId={selectedDocument?.id ?? null}
         onSelectKnowledgeBase={handleSelectKnowledgeBase}
         onSelectDocument={handleSelectDocument}
         onCreateKnowledgeBase={handleCreateKnowledgeBase}
@@ -1825,6 +1962,7 @@ function App() {
         onUploadFiles={handleUploadFiles}
         onUploadDirectory={handleUploadDirectory}
         directoryUploadTask={directoryUploadTask}
+        knowledgeBaseFileUploadStates={knowledgeBaseFileUploadStates}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
@@ -1845,6 +1983,7 @@ function App() {
       <ChatArea
         sidebarOpen={sidebarOpen}
         activeConversation={activeConversation}
+        knowledgeBases={knowledgeBases}
         selectedKnowledgeBase={selectedKnowledgeBase}
         selectedDocument={selectedDocument}
         config={config}
@@ -1852,6 +1991,7 @@ function App() {
         isGlobalGenerating={Boolean(streamingConversationId)}
         generatingConversationTitle={generatingConversationTitle}
         enforceSingleFlight={isOllamaSingleFlightMode}
+        onSelectKnowledgeBase={handleSelectChatKnowledgeBase}
         onSendMessage={handleSendMessage}
         onClearConversation={handleClearConversation}
       />

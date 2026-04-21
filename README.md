@@ -157,10 +157,34 @@ cp .env.example .env
 
 其中可直接在 `.env` 中修改宿主机端口映射：
 
+- `PORT_BIND_HOST`
 - `BACKEND_PORT`
 - `FRONTEND_PORT`
+- `OLLAMA_PORT`
 - `QDRANT_HTTP_PORT`
 - `QDRANT_GRPC_PORT`
+- `BACKEND_BIND_HOST`
+- `FRONTEND_BIND_HOST`
+- `OLLAMA_BIND_HOST`
+- `QDRANT_HTTP_BIND_HOST`
+- `QDRANT_GRPC_BIND_HOST`
+
+端口绑定规则如下：
+
+- `PORT_BIND_HOST`：全局默认绑定地址，默认建议为 `127.0.0.1`
+- 单项 `*_BIND_HOST` 留空时，会继承 `PORT_BIND_HOST`
+- 想只允许本机访问时，设置为 `127.0.0.1`
+- 想对局域网或公网开放时，设置为 `0.0.0.0`
+
+例如：
+
+```bash
+PORT_BIND_HOST=127.0.0.1
+BACKEND_BIND_HOST=0.0.0.0
+OLLAMA_BIND_HOST=0.0.0.0
+```
+
+这表示前端与 Qdrant 默认只监听本机，而后端和 Ollama 对外开放。
 
 同时，`docker-compose` 当前也会直接读取这些关键后端配置：
 
@@ -176,16 +200,19 @@ cp .env.example .env
 docker compose up --build
 ```
 
+编排会额外启动内置 `ollama` 服务，模型文件会持久化到本地 `ollama_storage/`。
+
 默认启动以下服务：
 
 | 服务 | 地址 |
 |------|------|
 | 前端 | `http://localhost:4173` |
 | 后端 | `http://localhost:8080` |
+| Ollama API | `http://localhost:11434` |
 | Qdrant HTTP API | `http://localhost:6333` |
 | Qdrant gRPC | `localhost:6334` |
 
-如果你在 `.env` 中修改了 `BACKEND_PORT`、`FRONTEND_PORT`、`QDRANT_HTTP_PORT` 或 `QDRANT_GRPC_PORT`，上面的访问地址也会随之变化。
+如果你在 `.env` 中修改了 `BACKEND_PORT`、`FRONTEND_PORT`、`OLLAMA_PORT`、`QDRANT_HTTP_PORT`、`QDRANT_GRPC_PORT` 或对应的 `*_BIND_HOST`，上面的访问地址也会随之变化。
 
 ---
 
@@ -208,6 +235,13 @@ docker compose -f docker-compose.prod.yml up -d
 默认前端地址：`http://localhost:4173`  
 默认后端地址：`http://localhost:8080`
 
+生产编排同样会启动：
+
+- `qdrant`
+- `ollama`
+- `backend`
+- `frontend`
+
 > 📖 了解更多镜像构建、版本管理和部署细节，请查看 [Docker 镜像与部署指南](./DOCKER_DEPLOY.md)
 
 ---
@@ -223,8 +257,37 @@ docker compose -f docker-compose.app.yml up --build
 该文件同样会启动：
 
 - `qdrant`
+- `ollama`
 - `backend`
 - `frontend`
+
+### Docker Compose 拉取新模型
+
+如果你已经通过 Docker Compose 启动了内置 Ollama，需要继续拉取新的聊天或 Embedding 模型，可在项目根目录执行：
+
+常用模型包括聊天模型 `qwen3.5:0.8b` 和 Embedding 模型 `nomic-embed-text`。
+
+```bash
+docker compose exec ollama ollama pull <模型名>
+docker compose exec ollama ollama list
+```
+
+例如：
+
+```bash
+docker compose exec ollama ollama pull qwen3.5:0.8b
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull llama3.2
+docker compose exec ollama ollama pull bge-m3
+docker compose exec ollama ollama list
+```
+
+如果你使用的是生产编排，则把命令中的 Compose 文件切到 `docker-compose.prod.yml`：
+
+```bash
+docker compose -f docker-compose.prod.yml exec ollama ollama pull <模型名>
+docker compose -f docker-compose.prod.yml exec ollama ollama list
+```
 
 ## 快速使用流程
 
@@ -243,14 +306,14 @@ docker compose -f docker-compose.app.yml up --build
 **Chat 配置**
 
 - Provider: `ollama`
-- Base URL: `http://localhost:11434`
+- Base URL: `http://ollama:11434`（Docker Compose 默认）或 `http://localhost:11434`（宿主机直接运行 Ollama）
 - Model: `qwen2.5:7b` 或 `llama3.2`
 - API Key: 留空
 
 **Embedding 配置**
 
 - Provider: `ollama`
-- Base URL: `http://localhost:11434`
+- Base URL: `http://ollama:11434`（Docker Compose 默认）或 `http://localhost:11434`（宿主机直接运行 Ollama）
 - Model: `bge-m3` 或 `nomic-embed-text`
 - API Key: 留空
 

@@ -14,6 +14,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onSaveChatConfig,
   onSaveEmbeddingConfig,
 }) => {
+  // 复制 MCP 客户端配置，直接贴到支持 TOML 的客户端配置文件里即可使用。
+  const mcpClientConfigExample = `[mcp_servers.ai_localbase]
+url = "http://127.0.0.1:8080/mcp"
+startup_timeout_sec = 120.0
+http_headers = { "Authorization" = "Bearer your-app-access-token" }`
   const [draftChatConfig, setDraftChatConfig] = useState(config.chat)
   const [draftEmbeddingConfig, setDraftEmbeddingConfig] = useState(config.embedding)
   const [saveNotice, setSaveNotice] = useState<{
@@ -21,6 +26,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     text: string
   } | null>(null)
   const saveNoticeTimerRef = useRef<number | null>(null)
+  const [showCopySuccessHint, setShowCopySuccessHint] = useState(false)
+  const copySuccessTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     setDraftChatConfig(config.chat)
@@ -31,6 +38,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     return () => {
       if (saveNoticeTimerRef.current) {
         window.clearTimeout(saveNoticeTimerRef.current)
+      }
+      if (copySuccessTimerRef.current) {
+        window.clearTimeout(copySuccessTimerRef.current)
       }
     }
   }, [])
@@ -69,6 +79,25 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Embedding 模型设置保存失败'
       showSaveNotice('error', `保存失败：${message}`)
+    }
+  }
+
+  const handleCopyMCPExample = async () => {
+    try {
+      await navigator.clipboard.writeText(mcpClientConfigExample)
+      setShowCopySuccessHint(true)
+      if (copySuccessTimerRef.current) {
+        window.clearTimeout(copySuccessTimerRef.current)
+      }
+      copySuccessTimerRef.current = window.setTimeout(() => {
+        setShowCopySuccessHint(false)
+        copySuccessTimerRef.current = null
+      }, 1800)
+      showSaveNotice('success', 'MCP 客户端配置已复制')
+    } catch (error) {
+      setShowCopySuccessHint(false)
+      const message = error instanceof Error ? error.message : '复制 MCP 客户端配置失败'
+      showSaveNotice('error', `复制失败：${message}`)
     }
   }
 
@@ -296,6 +325,61 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   placeholder="选填"
                 />
               </label>
+            </div>
+          </section>
+
+          <section className="settings-panel-block ai-config-panel single-column">
+            {/* 只展示当前后端真实支持的 MCP HTTP 接入要点，避免误导成通用协议文档。 */}
+            <div className="section-title-row knowledge-panel-header">
+              <h3>MCP HTTP 接入说明</h3>
+            </div>
+
+            <div className="mcp-config-summary">
+              <div className="mcp-config-chip-list">
+                <span className="mcp-config-chip">POST /mcp</span>
+                <span className="mcp-config-chip">Bearer Token</span>
+                <span className="mcp-config-chip">JSON-RPC over HTTP</span>
+              </div>
+              <p className="mcp-config-description">
+                当前后端已提供 MCP 单端点入口，接入时请把应用访问令牌放进
+                <code>Authorization: Bearer &lt;token&gt;</code> 请求头。这里的 Bearer Token
+                是应用访问令牌，不是模型的 API Key。
+              </p>
+            </div>
+
+            <div className="mcp-config-grid">
+              <div className="mcp-config-card">
+                <span className="mcp-config-label">Endpoint</span>
+                <strong>/mcp</strong>
+                <p>使用当前站点同域地址，按 JSON-RPC 请求体发起 POST 请求。</p>
+              </div>
+              <div className="mcp-config-card">
+                <span className="mcp-config-label">调用顺序</span>
+                <strong>initialize → tools/list → tools/call</strong>
+                <p>先完成初始化，再读取工具清单，最后按工具名发起调用。</p>
+              </div>
+            </div>
+
+            <div className="mcp-config-example">
+              <div className="mcp-config-example-header">
+                <div>
+                  <span className="mcp-config-label">客户端配置</span>
+                  <h4>一键复制 MCP 连接配置</h4>
+                </div>
+                <div className="mcp-copy-actions">
+                  <button type="button" className="mcp-copy-btn" onClick={handleCopyMCPExample}>
+                    {showCopySuccessHint ? '已复制' : '复制配置'}
+                  </button>
+                  {showCopySuccessHint && (
+                    <span className="mcp-copy-feedback" role="status" aria-live="polite">
+                      复制成功
+                    </span>
+                  )}
+                </div>
+              </div>
+              <pre className="mcp-config-code">
+                <code>{mcpClientConfigExample}</code>
+              </pre>
             </div>
           </section>
         </div>

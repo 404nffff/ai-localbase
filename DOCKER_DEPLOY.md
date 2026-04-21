@@ -59,13 +59,22 @@ cp .env.example .env
 
 ```bash
 # Docker 宿主机端口映射
+PORT_BIND_HOST=127.0.0.1
 BACKEND_PORT=8080
 FRONTEND_PORT=4173
+OLLAMA_PORT=11434
 QDRANT_HTTP_PORT=6333
 QDRANT_GRPC_PORT=6334
 
-# Ollama 地址 (macOS Docker Desktop 用户)
-OLLAMA_BASE_URL=http://host.docker.internal:11434
+# 单个服务端口绑定地址，留空时继承 PORT_BIND_HOST
+BACKEND_BIND_HOST=
+FRONTEND_BIND_HOST=
+OLLAMA_BIND_HOST=
+QDRANT_HTTP_BIND_HOST=
+QDRANT_GRPC_BIND_HOST=
+
+# Ollama 地址（使用内置 Ollama 服务时保持默认即可）
+OLLAMA_BASE_URL=http://ollama:11434
 
 # 应用访问令牌
 APP_AUTH_TOKEN=change-me-app-token

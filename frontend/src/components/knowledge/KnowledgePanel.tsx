@@ -1,5 +1,5 @@
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { DirectoryUploadTask, KnowledgeBase } from '../../App'
+import { DirectoryUploadTask, KnowledgeBase, KnowledgeBaseFileUploadState } from '../../App'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -7,7 +7,8 @@ interface KnowledgePanelProps {
   collapsedKnowledgeBases: Record<string, boolean>
   onToggleCollapse: (knowledgeBaseId: string) => void
   selectedKnowledgeBaseId: string | null
-  selectedDocumentId: string | null
+  activeKnowledgeBaseId: string | null
+  activeDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
   onCreateKnowledgeBase: (name: string, description: string) => void
@@ -15,6 +16,7 @@ interface KnowledgePanelProps {
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
   directoryUploadTask: DirectoryUploadTask
+  knowledgeBaseFileUploadStates: Record<string, KnowledgeBaseFileUploadState>
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
@@ -27,7 +29,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   collapsedKnowledgeBases,
   onToggleCollapse,
   selectedKnowledgeBaseId,
-  selectedDocumentId,
+  activeKnowledgeBaseId,
+  activeDocumentId,
   onSelectKnowledgeBase,
   onSelectDocument,
   onCreateKnowledgeBase,
@@ -35,6 +38,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onUploadFiles,
   onUploadDirectory,
   directoryUploadTask,
+  knowledgeBaseFileUploadStates,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
@@ -43,6 +47,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
+  const [knowledgeBaseQuery, setKnowledgeBaseQuery] = useState('')
+  const [documentQuery, setDocumentQuery] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
   const [showFailedItems, setShowFailedItems] = useState(false)
@@ -106,6 +112,71 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     [directoryUploadTask.skippedItems],
   )
 
+  const selectedKnowledgeBase = useMemo(
+    () =>
+      knowledgeBases.find((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId) ?? null,
+    [knowledgeBases, selectedKnowledgeBaseId],
+  )
+
+  const activeKnowledgeBase = useMemo(
+    () => knowledgeBases.find((knowledgeBase) => knowledgeBase.id === activeKnowledgeBaseId) ?? null,
+    [activeKnowledgeBaseId, knowledgeBases],
+  )
+
+  const activeDocument = useMemo(() => {
+    if (!activeKnowledgeBase || !activeDocumentId) {
+      return null
+    }
+
+    return (
+      activeKnowledgeBase.documents.find((document) => document.id === activeDocumentId) ?? null
+    )
+  }, [activeDocumentId, activeKnowledgeBase])
+
+  const normalizedKnowledgeBaseQuery = knowledgeBaseQuery.trim().toLowerCase()
+  const filteredKnowledgeBases = useMemo(() => {
+    if (!normalizedKnowledgeBaseQuery) {
+      return knowledgeBases
+    }
+
+    return knowledgeBases.filter((knowledgeBase) => {
+      const baseText = `${knowledgeBase.name} ${knowledgeBase.description}`.toLowerCase()
+      if (baseText.includes(normalizedKnowledgeBaseQuery)) {
+        return true
+      }
+
+      return knowledgeBase.documents.some((document) =>
+        `${document.name} ${document.contentPreview ?? ''}`
+          .toLowerCase()
+          .includes(normalizedKnowledgeBaseQuery),
+      )
+    })
+  }, [knowledgeBases, normalizedKnowledgeBaseQuery])
+
+  const normalizedDocumentQuery = documentQuery.trim().toLowerCase()
+  const filteredDocuments = useMemo(() => {
+    if (!selectedKnowledgeBase) {
+      return []
+    }
+
+    if (!normalizedDocumentQuery) {
+      return selectedKnowledgeBase.documents
+    }
+
+    return selectedKnowledgeBase.documents.filter((document) =>
+      `${document.name} ${document.contentPreview ?? ''}`
+        .toLowerCase()
+        .includes(normalizedDocumentQuery),
+    )
+  }, [normalizedDocumentQuery, selectedKnowledgeBase])
+  const isBrowsingActiveKnowledgeBase =
+    selectedKnowledgeBase?.id !== null && selectedKnowledgeBase?.id === activeKnowledgeBaseId
+  const activeScopeText = activeDocument
+    ? `文档问答：${activeDocument.name}`
+    : activeKnowledgeBase
+      ? `知识库问答：${activeKnowledgeBase.name}`
+      : '未设置聊天范围'
+
   const isTaskVisible = directoryUploadTask.status !== 'idle'
   const canCancelUpload =
     directoryUploadTask.status === 'uploading' || directoryUploadTask.status === 'canceling'
@@ -128,6 +199,10 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setShowFailedItems(false)
     setShowSkippedItems(false)
   }, [directoryUploadTask.knowledgeBaseId, directoryUploadTask.status])
+
+  useEffect(() => {
+    setDocumentQuery('')
+  }, [selectedKnowledgeBaseId])
 
   if (!open) return null
 
@@ -168,64 +243,132 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 </button>
               </div>
             ) : (
-              <div className="kb-list">
-                {knowledgeBases.map((kb) => {
-                  const isSelected = selectedKnowledgeBaseId === kb.id
-                  const isCollapsed = collapsedKnowledgeBases[kb.id]
-                  return (
-                    <div key={kb.id} className={`kb-card${isSelected ? ' kb-card--active' : ''}`}>
-                      {/* 知识库卡片头部 */}
-                      <div className="kb-card-header">
-                        <button
-                          className="kb-card-main"
-                          onClick={() => onSelectKnowledgeBase(kb.id)}
-                        >
+              <div className="kb-workspace">
+                <aside className="kb-sidebar-panel">
+                  <div className="kb-panel-heading">
+                    <div>
+                      <h3>知识库</h3>
+                      <p>先定位知识库，再在右侧查看和筛选文件。</p>
+                    </div>
+                    <span className="kb-panel-count">
+                      {filteredKnowledgeBases.length}/{knowledgeBases.length}
+                    </span>
+                  </div>
+
+                  <label className="kb-search-field">
+                    <span>搜索知识库</span>
+                    <input
+                      type="text"
+                      value={knowledgeBaseQuery}
+                      onChange={(event) => setKnowledgeBaseQuery(event.target.value)}
+                      placeholder="按名称、描述或文件名筛选"
+                    />
+                  </label>
+
+                  <div className="kb-side-list">
+                    {filteredKnowledgeBases.length === 0 ? (
+                      <div className="kb-side-empty">未找到匹配的知识库</div>
+                    ) : (
+                      filteredKnowledgeBases.map((kb) => {
+                        const isSelected = selectedKnowledgeBaseId === kb.id
+                        const fileUploadState = knowledgeBaseFileUploadStates[kb.id]
+                        return (
+                          <button
+                            key={kb.id}
+                            type="button"
+                            className={`kb-side-item${isSelected ? ' kb-side-item--active' : ''}`}
+                            onClick={() => onSelectKnowledgeBase(kb.id)}
+                          >
+                            <div className="kb-side-item-top">
+                              <span className="kb-side-item-name">{kb.name}</span>
+                              <span className="kb-side-item-count">{kb.documents.length}</span>
+                            </div>
+                            {kb.description && (
+                              <p className="kb-side-item-desc">{kb.description}</p>
+                            )}
+                            <div className="kb-side-item-meta">
+                              <span>创建于 {new Date(kb.createdAt).toLocaleDateString('zh-CN')}</span>
+                              {fileUploadState && (
+                                <span className="kb-side-item-uploading">
+                                  上传中 {fileUploadState.completedFiles}/{fileUploadState.totalFiles}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </aside>
+
+                <section className="kb-detail-panel">
+                  {selectedKnowledgeBase ? (
+                    <>
+                      <div className="kb-detail-header">
+                        <div className="kb-detail-summary">
                           <div className="kb-card-icon">📁</div>
                           <div className="kb-card-info">
-                            <span className="kb-card-name">{kb.name}</span>
-                            {kb.description && (
-                              <span className="kb-card-desc">{kb.description}</span>
+                            <span className="kb-card-name">{selectedKnowledgeBase.name}</span>
+                            {selectedKnowledgeBase.description && (
+                              <span className="kb-card-desc">{selectedKnowledgeBase.description}</span>
                             )}
                             <span className="kb-card-meta">
-                              {kb.documents.length} 份文档 · 创建于 {new Date(kb.createdAt).toLocaleDateString('zh-CN')}
+                              {selectedKnowledgeBase.documents.length} 份文档 · 创建于{' '}
+                              {new Date(selectedKnowledgeBase.createdAt).toLocaleDateString('zh-CN')}
                             </span>
                           </div>
-                        </button>
-                        <div className="kb-card-actions">
-                          <label className="kb-upload-btn" title="上传文档">
-                            <span>📤</span> 上传文件
+                        </div>
+
+                        <div className="kb-card-actions kb-card-actions--detail">
+                          {/* 单文件上传直接在按钮上反馈进度，避免与目录上传任务面板混淆。 */}
+                          <label
+                            className={`kb-upload-btn${knowledgeBaseFileUploadStates[selectedKnowledgeBase.id] ? ' kb-upload-btn--loading' : ''}`}
+                            title={knowledgeBaseFileUploadStates[selectedKnowledgeBase.id] ? '文件上传中' : '上传文档'}
+                            aria-disabled={Boolean(knowledgeBaseFileUploadStates[selectedKnowledgeBase.id])}
+                          >
+                            {knowledgeBaseFileUploadStates[selectedKnowledgeBase.id] ? (
+                              <span className="kb-inline-spinner" aria-hidden="true" />
+                            ) : (
+                              <span>📤</span>
+                            )}
+                            <span className="kb-upload-btn-label">
+                              {knowledgeBaseFileUploadStates[selectedKnowledgeBase.id]
+                                ? `上传中 ${knowledgeBaseFileUploadStates[selectedKnowledgeBase.id]?.completedFiles ?? 0}/${knowledgeBaseFileUploadStates[selectedKnowledgeBase.id]?.totalFiles ?? 0}`
+                                : '上传文件'}
+                            </span>
                             <input
                               type="file"
                               multiple
                               accept=".txt,.md,.pdf,.csv,.xlsx"
                               className="hidden-input"
-                              onChange={(e) => handleFileChange(kb.id, e)}
+                              disabled={Boolean(knowledgeBaseFileUploadStates[selectedKnowledgeBase.id])}
+                              onChange={(event) => handleFileChange(selectedKnowledgeBase.id, event)}
                             />
                           </label>
                           <label className="kb-upload-btn kb-upload-btn--secondary" title="上传目录">
                             <span>🗂️</span> 上传目录
                             <input
-                              ref={(element) => registerDirectoryInput(kb.id, element)}
+                              ref={(element) => registerDirectoryInput(selectedKnowledgeBase.id, element)}
                               type="file"
                               multiple
                               className="hidden-input"
-                              onChange={(e) => handleDirectoryChange(kb.id, e)}
+                              onChange={(event) => handleDirectoryChange(selectedKnowledgeBase.id, event)}
                             />
                           </label>
                           <button
                             className="kb-collapse-btn"
-                            onClick={() => onToggleCollapse(kb.id)}
-                            title={isCollapsed ? '展开' : '折叠'}
+                            onClick={() => onToggleCollapse(selectedKnowledgeBase.id)}
+                            title={collapsedKnowledgeBases[selectedKnowledgeBase.id] ? '展开文件列表' : '折叠文件列表'}
                           >
-                            {isCollapsed ? '▸' : '▾'}
+                            {collapsedKnowledgeBases[selectedKnowledgeBase.id] ? '▸' : '▾'}
                           </button>
-                          {deleteConfirmId === kb.id ? (
+                          {deleteConfirmId === selectedKnowledgeBase.id ? (
                             <div className="kb-delete-confirm">
                               <span>确认删除？</span>
                               <button
                                 className="kb-delete-yes"
                                 onClick={() => {
-                                  onDeleteKnowledgeBase(kb.id)
+                                  onDeleteKnowledgeBase(selectedKnowledgeBase.id)
                                   setDeleteConfirmId(null)
                                 }}
                               >
@@ -241,7 +384,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           ) : (
                             <button
                               className="kb-delete-btn"
-                              onClick={() => setDeleteConfirmId(kb.id)}
+                              onClick={() => setDeleteConfirmId(selectedKnowledgeBase.id)}
                               title="删除知识库"
                             >
                               🗑️
@@ -250,196 +393,218 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                         </div>
                       </div>
 
-                      {isSelected && isTaskVisible && directoryUploadTask.knowledgeBaseId === kb.id && (
-                        <div className="kb-upload-task-shell">
-                          <div className="kb-upload-task-compact">
-                            <div className="kb-upload-task-compact-main">
-                              <span className={`kb-upload-task-pill kb-upload-task-pill--${directoryUploadTask.status}`}>
-                                {directoryUploadTask.status === 'scanning' && '扫描中'}
-                                {directoryUploadTask.status === 'uploading' && '上传中'}
-                                {directoryUploadTask.status === 'canceling' && '取消中'}
-                                {directoryUploadTask.status === 'canceled' && '已取消'}
-                                {directoryUploadTask.status === 'done' && '已完成'}
-                                {directoryUploadTask.status === 'partial-failed' && '部分完成'}
-                                {directoryUploadTask.status === 'failed' && '失败'}
-                              </span>
-                              <div className="kb-upload-task-compact-text">
-                                <div className="kb-upload-task-compact-title">目录上传任务</div>
-                                <div className="kb-upload-task-compact-summary">
-                                  {directoryUploadTask.processedFiles}/{directoryUploadTask.eligibleFiles} · 成功 {directoryUploadTask.successFiles} · 失败 {directoryUploadTask.failedFiles} · 跳过 {directoryUploadTask.skippedFiles}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="kb-upload-task-actions">
-                              <button
-                                className="kb-upload-task-btn kb-upload-task-btn--ghost"
-                                onClick={() => setShowUploadTaskDetails((prev) => !prev)}
-                              >
-                                {showUploadTaskDetails ? '收起' : '详情'}
-                              </button>
-                              {canContinueUpload && (
-                                <button className="kb-upload-task-btn" onClick={onContinueDirectoryUpload}>
-                                  继续上传
-                                </button>
-                              )}
-                              {canCancelUpload && (
-                                <button
-                                  className="kb-upload-task-btn kb-upload-task-btn--danger"
-                                  onClick={onCancelDirectoryUpload}
-                                  disabled={directoryUploadTask.status === 'canceling'}
-                                >
-                                  {directoryUploadTask.status === 'canceling' ? '取消中…' : '取消上传'}
-                                </button>
-                              )}
-                            </div>
+                      {normalizedKnowledgeBaseQuery &&
+                        !filteredKnowledgeBases.some(
+                          (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBase.id,
+                        ) && (
+                          <div className="kb-filter-notice">
+                            当前右侧仍展示已选知识库，左侧筛选结果中未包含它。
                           </div>
+                        )}
 
-                          {showUploadTaskDetails && (
-                            <div className="kb-upload-task">
-                              <div className="kb-upload-progress-meta">
-                                <span>
-                                  已处理 {directoryUploadTask.processedFiles} / {directoryUploadTask.eligibleFiles}
-                                </span>
-                                <span>{uploadProgressPercent}%</span>
-                              </div>
-                              <div className="kb-upload-progress-track">
-                                <div
-                                  className="kb-upload-progress-fill"
-                                  style={{ width: `${uploadProgressPercent}%` }}
-                                />
-                              </div>
-
-                              <div className="kb-upload-stats-grid">
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">总文件</span>
-                                  <strong>{directoryUploadTask.totalFiles}</strong>
-                                </div>
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">可上传</span>
-                                  <strong>{directoryUploadTask.eligibleFiles}</strong>
-                                </div>
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">成功</span>
-                                  <strong>{directoryUploadTask.successFiles}</strong>
-                                </div>
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">失败</span>
-                                  <strong>{directoryUploadTask.failedFiles}</strong>
-                                </div>
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">跳过</span>
-                                  <strong>{directoryUploadTask.skippedFiles}</strong>
-                                </div>
-                                <div className="kb-upload-stat-card">
-                                  <span className="kb-upload-stat-label">未执行</span>
-                                  <strong>{directoryUploadTask.pendingFiles}</strong>
-                                </div>
-                              </div>
-
-                              {directoryUploadTask.currentFilePath && (
-                                <div className="kb-upload-current-file">
-                                  当前处理：{directoryUploadTask.currentFilePath}
-                                </div>
-                              )}
-
-                              {directoryUploadTask.summaryMessage && (
-                                <div className="kb-upload-summary">{directoryUploadTask.summaryMessage}</div>
-                              )}
-
-                              {directoryUploadTask.failedItems.length > 0 && (
-                                <div className="kb-upload-issues-toggle-row">
-                                  <button
-                                    className="kb-upload-task-btn kb-upload-task-btn--ghost"
-                                    onClick={() => setShowFailedItems((prev) => !prev)}
-                                  >
-                                    {showFailedItems
-                                      ? '隐藏失败文件'
-                                      : `查看失败文件（${directoryUploadTask.failedItems.length}）`}
-                                  </button>
-                                </div>
-                              )}
-
-                              {showFailedItems && visibleFailedItems.length > 0 && (
-                                <div className="kb-upload-issues">
-                                  <div className="kb-upload-issues-title">失败文件</div>
-                                  {visibleFailedItems.map((item) => (
-                                    <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
-                                      <span className="kb-upload-issue-path">{item.path}</span>
-                                      <span className="kb-upload-issue-reason">{item.reason}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              {directoryUploadTask.skippedItems.length > 0 && (
-                                <div className="kb-upload-issues-toggle-row">
-                                  <button
-                                    className="kb-upload-task-btn kb-upload-task-btn--ghost"
-                                    onClick={() => setShowSkippedItems((prev) => !prev)}
-                                  >
-                                    {showSkippedItems
-                                      ? '隐藏已跳过文件'
-                                      : `查看已跳过文件（${directoryUploadTask.skippedItems.length}）`}
-                                  </button>
-                                </div>
-                              )}
-
-                              {showSkippedItems && visibleSkippedItems.length > 0 && (
-                                <div className="kb-upload-issues kb-upload-issues--muted">
-                                  <div className="kb-upload-issues-title">已跳过文件</div>
-                                  {visibleSkippedItems.map((item) => (
-                                    <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
-                                      <span className="kb-upload-issue-path">{item.path}</span>
-                                      <span className="kb-upload-issue-reason">{item.reason}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
+                      {!isBrowsingActiveKnowledgeBase && activeKnowledgeBase && (
+                        <div className="kb-filter-notice">
+                          当前正在浏览“{selectedKnowledgeBase.name}”，聊天仍使用“{activeScopeText}”。
+                          需要点击“全部文档”或某个文件后，才会切换聊天范围。
                         </div>
                       )}
 
-                      {/* 查询范围选择 */}
-                      {isSelected && (
-                        <div className="kb-scope-bar">
+                      {isTaskVisible &&
+                        directoryUploadTask.knowledgeBaseId === selectedKnowledgeBase.id && (
+                          <div className="kb-upload-task-shell">
+                            <div className="kb-upload-task-compact">
+                              <div className="kb-upload-task-compact-main">
+                                <span className={`kb-upload-task-pill kb-upload-task-pill--${directoryUploadTask.status}`}>
+                                  {directoryUploadTask.status === 'scanning' && '扫描中'}
+                                  {directoryUploadTask.status === 'uploading' && '上传中'}
+                                  {directoryUploadTask.status === 'canceling' && '取消中'}
+                                  {directoryUploadTask.status === 'canceled' && '已取消'}
+                                  {directoryUploadTask.status === 'done' && '已完成'}
+                                  {directoryUploadTask.status === 'partial-failed' && '部分完成'}
+                                  {directoryUploadTask.status === 'failed' && '失败'}
+                                </span>
+                                <div className="kb-upload-task-compact-text">
+                                  <div className="kb-upload-task-compact-title">目录上传任务</div>
+                                  <div className="kb-upload-task-compact-summary">
+                                    {directoryUploadTask.processedFiles}/{directoryUploadTask.eligibleFiles} · 成功 {directoryUploadTask.successFiles} · 失败 {directoryUploadTask.failedFiles} · 跳过 {directoryUploadTask.skippedFiles}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="kb-upload-task-actions">
+                                <button
+                                  className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                  onClick={() => setShowUploadTaskDetails((prev) => !prev)}
+                                >
+                                  {showUploadTaskDetails ? '收起' : '详情'}
+                                </button>
+                                {canContinueUpload && (
+                                  <button className="kb-upload-task-btn" onClick={onContinueDirectoryUpload}>
+                                    继续上传
+                                  </button>
+                                )}
+                                {canCancelUpload && (
+                                  <button
+                                    className="kb-upload-task-btn kb-upload-task-btn--danger"
+                                    onClick={onCancelDirectoryUpload}
+                                    disabled={directoryUploadTask.status === 'canceling'}
+                                  >
+                                    {directoryUploadTask.status === 'canceling' ? '取消中…' : '取消上传'}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {showUploadTaskDetails && (
+                              <div className="kb-upload-task">
+                                <div className="kb-upload-progress-meta">
+                                  <span>
+                                    已处理 {directoryUploadTask.processedFiles} / {directoryUploadTask.eligibleFiles}
+                                  </span>
+                                  <span>{uploadProgressPercent}%</span>
+                                </div>
+                                <div className="kb-upload-progress-track">
+                                  <div
+                                    className="kb-upload-progress-fill"
+                                    style={{ width: `${uploadProgressPercent}%` }}
+                                  />
+                                </div>
+
+                                <div className="kb-upload-stats-grid">
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">总文件</span>
+                                    <strong>{directoryUploadTask.totalFiles}</strong>
+                                  </div>
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">可上传</span>
+                                    <strong>{directoryUploadTask.eligibleFiles}</strong>
+                                  </div>
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">成功</span>
+                                    <strong>{directoryUploadTask.successFiles}</strong>
+                                  </div>
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">失败</span>
+                                    <strong>{directoryUploadTask.failedFiles}</strong>
+                                  </div>
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">跳过</span>
+                                    <strong>{directoryUploadTask.skippedFiles}</strong>
+                                  </div>
+                                  <div className="kb-upload-stat-card">
+                                    <span className="kb-upload-stat-label">未执行</span>
+                                    <strong>{directoryUploadTask.pendingFiles}</strong>
+                                  </div>
+                                </div>
+
+                                {directoryUploadTask.currentFilePath && (
+                                  <div className="kb-upload-current-file">
+                                    当前处理：{directoryUploadTask.currentFilePath}
+                                  </div>
+                                )}
+
+                                {directoryUploadTask.summaryMessage && (
+                                  <div className="kb-upload-summary">{directoryUploadTask.summaryMessage}</div>
+                                )}
+
+                                {directoryUploadTask.failedItems.length > 0 && (
+                                  <div className="kb-upload-issues-toggle-row">
+                                    <button
+                                      className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                      onClick={() => setShowFailedItems((prev) => !prev)}
+                                    >
+                                      {showFailedItems
+                                        ? '隐藏失败文件'
+                                        : `查看失败文件（${directoryUploadTask.failedItems.length}）`}
+                                    </button>
+                                  </div>
+                                )}
+
+                                {showFailedItems && visibleFailedItems.length > 0 && (
+                                  <div className="kb-upload-issues">
+                                    <div className="kb-upload-issues-title">失败文件</div>
+                                    {visibleFailedItems.map((item) => (
+                                      <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
+                                        <span className="kb-upload-issue-path">{item.path}</span>
+                                        <span className="kb-upload-issue-reason">{item.reason}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {directoryUploadTask.skippedItems.length > 0 && (
+                                  <div className="kb-upload-issues-toggle-row">
+                                    <button
+                                      className="kb-upload-task-btn kb-upload-task-btn--ghost"
+                                      onClick={() => setShowSkippedItems((prev) => !prev)}
+                                    >
+                                      {showSkippedItems
+                                        ? '隐藏已跳过文件'
+                                        : `查看已跳过文件（${directoryUploadTask.skippedItems.length}）`}
+                                    </button>
+                                  </div>
+                                )}
+
+                                {showSkippedItems && visibleSkippedItems.length > 0 && (
+                                  <div className="kb-upload-issues kb-upload-issues--muted">
+                                    <div className="kb-upload-issues-title">已跳过文件</div>
+                                    {visibleSkippedItems.map((item) => (
+                                      <div key={`${item.path}-${item.reason}`} className="kb-upload-issue-item">
+                                        <span className="kb-upload-issue-path">{item.path}</span>
+                                        <span className="kb-upload-issue-reason">{item.reason}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                      <div className="kb-detail-toolbar">
+                        <div className="kb-current-scope">
                           <button
-                            className={`kb-scope-btn${selectedDocumentId === null ? ' kb-scope-btn--active' : ''}`}
-                            onClick={() => onSelectDocument(kb.id, null)}
+                            className={`kb-scope-btn${isBrowsingActiveKnowledgeBase && activeDocumentId === null ? ' kb-scope-btn--active' : ''}`}
+                            onClick={() => onSelectDocument(selectedKnowledgeBase.id, null)}
                           >
                             全部文档
                           </button>
-                          {kb.documents.map((doc) => (
-                            <button
-                              key={doc.id}
-                              className={`kb-scope-btn${selectedDocumentId === doc.id ? ' kb-scope-btn--active' : ''}`}
-                              onClick={() => onSelectDocument(kb.id, doc.id)}
-                            >
-                              {doc.name}
-                            </button>
-                          ))}
+                          <span className="kb-current-scope-chip">当前聊天范围：{activeScopeText}</span>
                         </div>
-                      )}
 
-                      {/* 文档列表 */}
-                      {!isCollapsed && (
+                        <label className="kb-search-field kb-search-field--compact">
+                          <span>搜索文件</span>
+                          <input
+                            type="text"
+                            value={documentQuery}
+                            onChange={(event) => setDocumentQuery(event.target.value)}
+                            placeholder="按文件名或预览内容筛选"
+                          />
+                        </label>
+                      </div>
+
+                      {!collapsedKnowledgeBases[selectedKnowledgeBase.id] ? (
                         <div className="kb-docs">
-                          {kb.documents.length === 0 ? (
+                          {selectedKnowledgeBase.documents.length === 0 ? (
                             <div className="kb-docs-empty">
                               <span>📄</span>
                               <span>暂无文档，点击「上传」添加文件</span>
                             </div>
+                          ) : filteredDocuments.length === 0 ? (
+                            <div className="kb-docs-empty">
+                              <span>🔎</span>
+                              <span>没有匹配当前筛选条件的文件</span>
+                            </div>
                           ) : (
-                            kb.documents.map((doc) => {
+                            filteredDocuments.map((doc) => {
                               const badge = statusLabel(doc.status)
                               return (
                                 <div
                                   key={doc.id}
-                                  className={`kb-doc-item${selectedDocumentId === doc.id ? ' kb-doc-item--active' : ''}`}
+                                  className={`kb-doc-item${isBrowsingActiveKnowledgeBase && activeDocumentId === doc.id ? ' kb-doc-item--active' : ''}`}
                                 >
                                   <button
                                     className="kb-doc-main"
-                                    onClick={() => onSelectDocument(kb.id, doc.id)}
+                                    onClick={() => onSelectDocument(selectedKnowledgeBase.id, doc.id)}
                                   >
                                     <div className="kb-doc-top">
                                       <span className="kb-doc-icon">📄</span>
@@ -462,7 +627,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                   </button>
                                   <button
                                     className="kb-doc-remove"
-                                    onClick={() => onRemoveDocument(kb.id, doc.id)}
+                                    onClick={() => onRemoveDocument(selectedKnowledgeBase.id, doc.id)}
                                     title="删除文档"
                                   >
                                     ✕
@@ -472,10 +637,21 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             })
                           )}
                         </div>
+                      ) : (
+                        <div className="kb-docs-empty kb-docs-empty--collapsed">
+                          <span>🗂️</span>
+                          <span>文件列表已折叠，点击右上角展开。</span>
+                        </div>
                       )}
+                    </>
+                  ) : (
+                    <div className="kb-empty kb-empty--inner">
+                      <div className="kb-empty-icon">📁</div>
+                      <p className="kb-empty-title">请选择知识库</p>
+                      <p className="kb-empty-sub">先在左侧选择一个知识库，再查看和筛选文件。</p>
                     </div>
-                  )
-                })}
+                  )}
+                </section>
               </div>
             )}
           </div>

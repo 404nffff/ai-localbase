@@ -4,6 +4,7 @@ import {
   Conversation,
   DirectoryUploadTask,
   KnowledgeBase,
+  KnowledgeBaseFileUploadState,
 } from '../App'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
@@ -13,7 +14,8 @@ interface SidebarProps {
   onToggle: () => void
   knowledgeBases: KnowledgeBase[]
   selectedKnowledgeBaseId: string | null
-  selectedDocumentId: string | null
+  activeKnowledgeBaseId: string | null
+  activeDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
   onCreateKnowledgeBase: (name: string, description: string) => void
@@ -21,6 +23,7 @@ interface SidebarProps {
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
   directoryUploadTask: DirectoryUploadTask
+  knowledgeBaseFileUploadStates: Record<string, KnowledgeBaseFileUploadState>
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
@@ -52,7 +55,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onToggle,
   knowledgeBases,
   selectedKnowledgeBaseId,
-  selectedDocumentId,
+  activeKnowledgeBaseId,
+  activeDocumentId,
   onSelectKnowledgeBase,
   onSelectDocument,
   onCreateKnowledgeBase,
@@ -60,6 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onUploadFiles,
   onUploadDirectory,
   directoryUploadTask,
+  knowledgeBaseFileUploadStates,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
@@ -298,7 +303,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         collapsedKnowledgeBases={collapsedKnowledgeBases}
         onToggleCollapse={toggleKnowledgeBaseCollapse}
         selectedKnowledgeBaseId={selectedKnowledgeBaseId}
-        selectedDocumentId={selectedDocumentId}
+        activeKnowledgeBaseId={activeKnowledgeBaseId}
+        activeDocumentId={activeDocumentId}
         onSelectKnowledgeBase={onSelectKnowledgeBase}
         onSelectDocument={onSelectDocument}
         onCreateKnowledgeBase={onCreateKnowledgeBase}
@@ -306,6 +312,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onUploadFiles={onUploadFiles}
         onUploadDirectory={onUploadDirectory}
         directoryUploadTask={directoryUploadTask}
+        knowledgeBaseFileUploadStates={knowledgeBaseFileUploadStates}
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}

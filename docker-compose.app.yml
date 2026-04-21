@@ -8,10 +8,24 @@ services:
     environment:
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - "${QDRANT_HTTP_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - ./qdrant_storage:/qdrant/storage
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-localbase-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ./ollama_storage:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
@@ -20,10 +34,15 @@ services:
     container_name: ai-localbase-backend
     restart: unless-stopped
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_healthy
     environment:
       PORT: "8080"
       UPLOAD_DIR: /app/data/uploads
+      STATE_FILE: /app/data/app-state.json
+      CHAT_HISTORY_FILE: /app/data/chat-history.db
       APP_AUTH_TOKEN: ${APP_AUTH_TOKEN:-change-me-app-token}
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       QDRANT_URL: http://qdrant:6333
@@ -31,9 +50,9 @@ services:
       QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:-768}"
       QDRANT_DISTANCE: Cosine
       QDRANT_TIMEOUT_SECONDS: "${QDRANT_TIMEOUT_SECONDS:-5}"
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - "${BACKEND_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${BACKEND_PORT:-8080}:8080"
     volumes:
       - ./backend/data:/app/data
 
@@ -48,4 +67,4 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8080
     ports:
-      - "${FRONTEND_PORT:-4173}:4173"
+      - "${FRONTEND_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${FRONTEND_PORT:-4173}:4173"

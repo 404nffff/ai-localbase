@@ -1354,6 +1354,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 interface ChatAreaProps {
   sidebarOpen: boolean
   activeConversation: Conversation
+  knowledgeBases: KnowledgeBase[]
   selectedKnowledgeBase: KnowledgeBase | null
   selectedDocument: DocumentItem | null
   config: AppConfig
@@ -1361,6 +1362,7 @@ interface ChatAreaProps {
   isGlobalGenerating: boolean
   generatingConversationTitle: string
   enforceSingleFlight: boolean
+  onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSendMessage: (content: string) => Promise<void>
   onClearConversation: () => void
 }
@@ -1380,6 +1382,7 @@ const formatTime = (value: string) =>
 const ChatArea: React.FC<ChatAreaProps> = ({
   sidebarOpen,
   activeConversation,
+  knowledgeBases,
   selectedKnowledgeBase,
   selectedDocument,
   config,
@@ -1387,6 +1390,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   isGlobalGenerating,
   generatingConversationTitle,
   enforceSingleFlight,
+  onSelectKnowledgeBase,
   onSendMessage,
   onClearConversation,
 }) => {
@@ -1411,17 +1415,14 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [activeConversation.messages])
 
+  const knowledgeBaseText = selectedKnowledgeBase ? selectedKnowledgeBase.name : '未选择知识库'
   const scopeText = selectedDocument
-    ? `文档问答：${selectedDocument.name}`
+    ? `文档：${selectedDocument.name}`
     : selectedKnowledgeBase
-      ? `知识库问答：${selectedKnowledgeBase.name}`
-      : '未选择知识库'
+      ? '范围：全部文档'
+      : '范围：未设置'
 
   const toolbarItems = [
-    {
-      icon: '📚',
-      text: scopeText,
-    },
     {
       icon: '🤖',
       text: config.chat.model,
@@ -1461,6 +1462,14 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }
 
+  const handleKnowledgeBaseChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!event.target.value) {
+      return
+    }
+
+    onSelectKnowledgeBase(event.target.value)
+  }
+
   return (
     <main className={`chat-area ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
       <div className="chat-topbar">
@@ -1473,6 +1482,37 @@ const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
 
         <div className="chat-topbar-pills">
+          <label
+            className="topbar-pill topbar-pill--select"
+            title={`当前会话知识库：${knowledgeBaseText}`}
+          >
+            <span className="topbar-pill-icon">📚</span>
+            <span className="topbar-pill-label">当前会话</span>
+            <select
+              className="topbar-pill-select"
+              value={selectedKnowledgeBase?.id ?? ''}
+              onChange={handleKnowledgeBaseChange}
+              disabled={knowledgeBases.length === 0}
+            >
+              <option value="" disabled>
+                {knowledgeBases.length === 0 ? '暂无知识库' : '选择知识库'}
+              </option>
+              {knowledgeBases.map((knowledgeBase) => (
+                <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                  {knowledgeBase.name}
+                </option>
+              ))}
+            </select>
+            <span className="topbar-pill-caret" aria-hidden="true">
+              ▾
+            </span>
+          </label>
+
+          <div className="topbar-pill" title={scopeText}>
+            <span className="topbar-pill-icon">🧭</span>
+            <span className="topbar-pill-text">{scopeText}</span>
+          </div>
+
           {toolbarItems.map((item) => (
             <div key={item.text} className="topbar-pill" title={item.text}>
               <span className="topbar-pill-icon">{item.icon}</span>
