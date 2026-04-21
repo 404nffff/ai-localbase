@@ -211,24 +211,36 @@ func TestRouterKnowledgeBaseExportSkipsMissingMarkdownArchive(t *testing.T) {
 	}
 	kbID := knowledgeBases[0].ID
 
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"missing-on-disk.md",
+		strings.Repeat("用于制造归档文件丢失场景。", 20),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	var uploadResult model.UploadResponse
+	decodeJSONResponse(t, uploadResp.Body.Bytes(), &uploadResult)
+	missingOnDiskMarkdownPath := mustReadMarkdownPathFromDocument(t, uploadResult.Uploaded, "uploaded document")
+	if err := os.Remove(missingOnDiskMarkdownPath); err != nil {
+		t.Fatalf("remove markdown archive %q to simulate missing on disk: %v", missingOnDiskMarkdownPath, err)
+	}
+
 	legacyPath := filepath.Join(t.TempDir(), "legacy-source.md")
 	if err := os.WriteFile(legacyPath, []byte("遗留文档正文"), 0o644); err != nil {
 		t.Fatalf("write legacy document source: %v", err)
 	}
-	legacyDocument := appService.AddDocument(kbID, model.Document{
+	appService.AddDocument(kbID, model.Document{
 		ID:              "doc-legacy-no-markdown-archive",
 		KnowledgeBaseID: kbID,
 		Name:            "legacy-source.md",
 		Path:            legacyPath,
 		Status:          "indexed",
 	})
-
-	forcedMarkdownPath := filepath.Join(t.TempDir(), "missing-markdown-archive.md")
-	if setDocumentMarkdownPathIfExists(&legacyDocument, forcedMarkdownPath) {
-		if _, err := appService.ReplaceDocument(kbID, legacyDocument); err != nil {
-			t.Fatalf("replace legacy document with forced markdownPath: %v", err)
-		}
-	}
 
 	exportResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/knowledge-bases/%s/export", kbID), nil, "")
 	if exportResp.Code != http.StatusOK {
@@ -246,16 +258,14 @@ func TestRouterKnowledgeBaseExportSkipsMissingMarkdownArchive(t *testing.T) {
 		t.Fatalf("expected manifest documents to be non-empty, got %#v", manifestDocuments)
 	}
 
-	hasReason := false
-	for _, item := range manifestDocuments {
-		reason, _ := item["reason"].(string)
-		if strings.TrimSpace(reason) != "" {
-			hasReason = true
-			break
-		}
+	notGeneratedReason := mustFindManifestReason(t, manifestDocuments, "doc-legacy-no-markdown-archive", "legacy-source.md")
+	if notGeneratedReason != "markdown archive not generated" {
+		t.Fatalf("expected legacy document reason %q, got %q", "markdown archive not generated", notGeneratedReason)
 	}
-	if !hasReason {
-		t.Fatalf("expected manifest to include reason for missing markdown archive, got %#v", manifestDocuments)
+
+	missingOnDiskReason := mustFindManifestReason(t, manifestDocuments, uploadResult.Uploaded.ID, uploadResult.Uploaded.Name)
+	if missingOnDiskReason != "markdown archive missing on disk" {
+		t.Fatalf("expected uploaded document reason %q, got %q", "markdown archive missing on disk", missingOnDiskReason)
 	}
 }
 
@@ -1931,29 +1941,66 @@ func mapKeys(data map[string][]byte) []string {
 	return keys
 }
 
-func setDocumentMarkdownPathIfExists(document *model.Document, markdownPath string) bool {
+func mustReadMarkdownPathFromDocument(t *testing.T, document model.Document, source string) string {
+	t.Helper()
+
 	payload, err := json.Marshal(document)
 	if err != nil {
-		return false
+		t.Fatalf("marshal %s for markdownPath assertion: %v", source, err)
 	}
 
 	var documentMap map[string]any
 	if err := json.Unmarshal(payload, &documentMap); err != nil {
-		return false
+		t.Fatalf("decode %s payload for markdownPath assertion: %v", source, err)
 	}
 
-	if _, ok := documentMap["markdownPath"]; !ok {
-		return false
-	}
-	documentMap["markdownPath"] = markdownPath
-
-	encoded, err := json.Marshal(documentMap)
-	if err != nil {
-		return false
+	rawPath, ok := documentMap["markdownPath"]
+	if !ok {
+		t.Fatalf("expected %s to include markdownPath, got %#v", source, documentMap)
 	}
 
-	if err := json.Unmarshal(encoded, document); err != nil {
-		return false
+	markdownPath, ok := rawPath.(string)
+	if !ok {
+		t.Fatalf("expected %s markdownPath to be string, got %#v", source, rawPath)
 	}
-	return true
+	markdownPath = strings.TrimSpace(markdownPath)
+	if markdownPath == "" {
+		t.Fatalf("expected %s markdownPath to be non-empty, got %#v", source, documentMap)
+	}
+	return markdownPath
+}
+
+func mustFindManifestReason(t *testing.T, documents []map[string]any, expectedDocumentID, expectedDocumentName string) string {
+	t.Helper()
+
+	for _, item := range documents {
+		reason, _ := item["reason"].(string)
+		if strings.TrimSpace(reason) == "" {
+			continue
+		}
+
+		idCandidates := []string{
+			strings.TrimSpace(fmt.Sprint(item["id"])),
+			strings.TrimSpace(fmt.Sprint(item["documentId"])),
+		}
+		nameCandidates := []string{
+			strings.TrimSpace(fmt.Sprint(item["name"])),
+			strings.TrimSpace(fmt.Sprint(item["filename"])),
+			strings.TrimSpace(fmt.Sprint(item["documentName"])),
+		}
+
+		for _, candidate := range idCandidates {
+			if candidate != "" && candidate == expectedDocumentID {
+				return reason
+			}
+		}
+		for _, candidate := range nameCandidates {
+			if candidate != "" && candidate == expectedDocumentName {
+				return reason
+			}
+		}
+	}
+
+	t.Fatalf("expected manifest to include reason for document id=%q name=%q, got %#v", expectedDocumentID, expectedDocumentName, documents)
+	return ""
 }
