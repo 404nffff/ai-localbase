@@ -12,7 +12,9 @@ services:
       - ./qdrant_storage:/qdrant/storage
 
   backend:
-    image: golang:1.25-alpine
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.dev.Dockerfile
     container_name: ai-localbase-backend-dev
     restart: unless-stopped
     working_dir: /app
@@ -23,6 +25,8 @@ services:
     environment:
       PORT: "8080"
       UPLOAD_DIR: /app/data/uploads
+      STATE_FILE: /app/data/app-state.json
+      CHAT_HISTORY_FILE: /app/data/chat-history.db
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION_PREFIX: kb_
       QDRANT_VECTOR_SIZE: "768"
@@ -30,14 +34,14 @@ services:
       QDRANT_TIMEOUT_SECONDS: "5"
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       GO111MODULE: "on"
-    command: sh -c "apk add --no-cache git build-base && go mod download && go run ."
+    command: sh -c "go mod download && go run ."
     ports:
       - "8080:8080"
     volumes:
       - ./backend:/app
 
   frontend:
-    image: node:18-alpine
+    image: node:20-alpine
     container_name: ai-localbase-frontend-dev
     restart: unless-stopped
     working_dir: /app
@@ -45,8 +49,9 @@ services:
       - backend
     environment:
       VITE_API_BASE_URL: http://localhost:8080
+      VITE_DEV_PROXY_TARGET: http://backend:8080
       CHOKIDAR_USEPOLLING: "true"
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 4173"
+    command: sh -c "npm ci && until wget -qO- http://backend:8080/health >/dev/null 2>&1; do echo 'waiting for backend...'; sleep 2; done && npm run dev -- --host 0.0.0.0 --port 4173"
     ports:
       - "4173:4173"
     volumes:

@@ -626,11 +626,50 @@ function App() {
   const generatingConversationTitle =
     conversations.find((conversation) => conversation.id === streamingConversationId)?.title ?? '当前会话'
 
-  const handleCreateConversation = () => {
+  const persistConversation = async (conversation: Conversation) => {
+    const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversation.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: conversation.id,
+        title: conversation.title,
+        knowledgeBaseId: '',
+        documentId: '',
+        messages: conversation.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.timestamp,
+          metadata: message.metadata,
+        })),
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response))
+    }
+
+    return normalizeConversation((await response.json()) as BackendConversation)
+  }
+
+  const handleCreateConversation = async () => {
     const conversation = createWelcomeConversation()
 
     setConversations((prev) => [conversation, ...prev])
     setActiveConversationId(conversation.id)
+
+    try {
+      const savedConversation = await persistConversation(conversation)
+      setConversations((prev) =>
+        prev.map((item) => (item.id === conversation.id ? savedConversation : item)),
+      )
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '新建会话失败，请稍后重试。'
+      window.alert(`新建会话失败：${message}`)
+    }
   }
 
   const handleSelectConversation = async (conversationId: string) => {
