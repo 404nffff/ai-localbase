@@ -45,7 +45,7 @@ func main() {
 	toolPlanner := mcp.NewToolUsePlanner(mcpRegistry)
 	appHandler := handler.NewAppHandler(serverConfig, appService, llmService, toolPlanner)
 	mcpServer := mcp.NewServer(mcpRegistry, appService, serverConfig)
-	r := router.NewRouter(appHandler, serverConfig, mcpServer)
+	r := router.NewRouter(appHandler, serverConfig, mcpServer, frontendFS())
 
 	log.Printf("backend server listening on :%s", serverConfig.Port)
 	if err := r.Run(":" + serverConfig.Port); err != nil {
