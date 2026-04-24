@@ -1,6 +1,7 @@
 package router
 
 import (
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -14,11 +15,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, mcpServer *mcp.Server) *gin.Engine {
+func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, mcpServer *mcp.Server, frontendFS fs.FS) *gin.Engine {
 	r := gin.New()
 	r.Use(requestIDMiddleware(), accessLogMiddleware(), gin.Recovery(), corsMiddleware())
 
-	r.GET("/", appHandler.Root)
 	r.GET("/health", appHandler.Health)
 	r.POST("/upload", appHandler.Upload)
 
@@ -54,7 +54,25 @@ func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, 
 		mcpServer.RegisterRoutes(r.Group(basePath))
 	}
 
+	r.NoRoute(spaHandler(frontendFS))
+
 	return r
+}
+
+func spaHandler(frontendFS fs.FS) gin.HandlerFunc {
+	fileServer := http.FileServer(http.FS(frontendFS))
+	return func(c *gin.Context) {
+		path := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if path != "" {
+			if f, err := frontendFS.Open(path); err == nil {
+				f.Close()
+				fileServer.ServeHTTP(c.Writer, c.Request)
+				return
+			}
+		}
+		c.Request.URL.Path = "/"
+		fileServer.ServeHTTP(c.Writer, c.Request)
+	}
 }
 
 func corsMiddleware() gin.HandlerFunc {
