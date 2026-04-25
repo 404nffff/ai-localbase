@@ -94,7 +94,7 @@ docker-compose.override.yml
 # Build outputs
 
 build/
-dist/
+/dist/
 out/
 
 ---
