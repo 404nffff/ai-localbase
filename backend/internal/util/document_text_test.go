@@ -85,8 +85,8 @@ func TestSemanticChunkMinSize(t *testing.T) {
 
 func TestExtractDocumentTextFromCSV(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "customers.csv")
-	content := "姓名,部门,城市\n张三,销售部,上海\n李四,技术部,杭州\n"
+	path := filepath.Join(dir, "sample.csv")
+	content := "字段A,字段B,字段C\n值甲,分类一,区域甲\n值乙,分类二,区域乙\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -95,24 +95,24 @@ func TestExtractDocumentTextFromCSV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract csv: %v", err)
 	}
-	if !strings.Contains(text, "文件：customers.csv。字段：姓名、部门、城市。数据行数：2。") {
+	if !strings.Contains(text, "文件：sample.csv。字段：字段A、字段B、字段C。数据行数：2。") {
 		t.Fatalf("expected csv summary, got %q", text)
 	}
-	if !strings.Contains(text, "第2行：姓名：张三。部门：销售部。城市：上海。") {
+	if !strings.Contains(text, "第2行：字段A：值甲。字段B：分类一。字段C：区域甲。") {
 		t.Fatalf("expected first csv row, got %q", text)
 	}
 }
 
 func TestExtractDocumentTextFromXLSX(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "finance.xlsx")
+	path := filepath.Join(dir, "sample.xlsx")
 	workbook := excelize.NewFile()
 	defer func() { _ = workbook.Close() }()
-	workbook.SetSheetName("Sheet1", "付款记录")
-	if err := workbook.SetSheetRow("付款记录", "A1", &[]string{"供应商", "金额", "状态"}); err != nil {
+	workbook.SetSheetName("Sheet1", "示例记录")
+	if err := workbook.SetSheetRow("示例记录", "A1", &[]string{"字段A", "字段B", "字段C"}); err != nil {
 		t.Fatalf("set xlsx header: %v", err)
 	}
-	if err := workbook.SetSheetRow("付款记录", "A2", &[]string{"A公司", "120000", "已完成"}); err != nil {
+	if err := workbook.SetSheetRow("示例记录", "A2", &[]string{"值甲", "120000", "状态甲"}); err != nil {
 		t.Fatalf("set xlsx row: %v", err)
 	}
 	if err := workbook.SaveAs(path); err != nil {
@@ -123,18 +123,18 @@ func TestExtractDocumentTextFromXLSX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract xlsx: %v", err)
 	}
-	if !strings.Contains(text, "文件：finance.xlsx。工作表：付款记录。字段：供应商、金额、状态。数据行数：1。") {
+	if !strings.Contains(text, "文件：sample.xlsx。工作表：示例记录。字段：字段A、字段B、字段C。数据行数：1。") {
 		t.Fatalf("expected xlsx summary, got %q", text)
 	}
-	if !strings.Contains(text, "第2行：工作表：付款记录；供应商：A公司。金额：120000。状态：已完成。") {
+	if !strings.Contains(text, "第2行：工作表：示例记录；字段A：值甲。字段B：120000。字段C：状态甲。") {
 		t.Fatalf("expected xlsx row, got %q", text)
 	}
 }
 
 func TestExtractStructuredTableSummaryFromCSV(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "users.csv")
-	content := "城市,人数,状态\n武汉,120,活跃\n上海,80,活跃\n武汉,100,停用\n杭州,60,活跃\n"
+	path := filepath.Join(dir, "sample-users.csv")
+	content := "类别,数量,状态\n甲类,120,启用\n乙类,80,启用\n甲类,100,停用\n丙类,60,启用\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -143,13 +143,16 @@ func TestExtractStructuredTableSummaryFromCSV(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract csv: %v", err)
 	}
-	if !strings.Contains(text, "统计摘要：文件《users.csv》共有4条数据记录。") {
+	if !strings.Contains(text, "统计摘要：文件《sample-users.csv》共有4条数据记录。") {
 		t.Fatalf("expected table-level summary, got %q", text)
 	}
-	if !strings.Contains(text, "统计摘要：字段“城市”为类别列，共4个非空值，主要分布为：武汉(2)、上海(1)、杭州(1)。") {
-		t.Fatalf("expected category summary, got %q", text)
+	if !strings.Contains(text, "统计摘要：字段“类别”为类别列，共4个非空值，主要分布为：甲类(2)、") {
+		t.Fatalf("expected category summary prefix, got %q", text)
 	}
-	if !strings.Contains(text, "统计摘要：字段“人数”为数值列，非空值4个，最小值60.00，最大值120.00，平均值90.00。") {
+	if !strings.Contains(text, "乙类(1)") || !strings.Contains(text, "丙类(1)") {
+		t.Fatalf("expected category summary entries, got %q", text)
+	}
+	if !strings.Contains(text, "统计摘要：字段“数量”为数值列，非空值4个，最小值60.00，最大值120.00，平均值90.00。") {
 		t.Fatalf("expected numeric summary, got %q", text)
 	}
 }

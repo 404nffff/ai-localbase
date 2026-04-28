@@ -104,6 +104,8 @@ out/
 Session.vim
 .exrc
 
+# Local planning notes
+plans/
 
-# data 
+# data
 data/*

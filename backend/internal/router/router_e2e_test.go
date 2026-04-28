@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 
 	"ai-localbase/internal/handler"
 	"ai-localbase/internal/mcp"
@@ -58,16 +59,16 @@ func TestRouterConfigEndpoints(t *testing.T) {
 	updatePayload := map[string]any{
 		"chat": map[string]any{
 			"provider":    "ollama",
-			"baseUrl":     "http://chat.local/v1",
-			"model":       "llama3.2",
+			"baseUrl":     "http://chat.example.invalid/v1",
+			"model":       "chat-model-a",
 			"apiKey":      "",
 			"temperature": 0.4,
 		},
 		"embedding": map[string]any{
 			"provider": "openai-compatible",
-			"baseUrl":  "http://embed.local/v1",
-			"model":    "bge-m3",
-			"apiKey":   "embed-key",
+			"baseUrl":  "http://embed.example.invalid/v1",
+			"model":    "embed-model-a",
+			"apiKey":   "test-embed-key",
 		},
 	}
 
@@ -78,10 +79,10 @@ func TestRouterConfigEndpoints(t *testing.T) {
 
 	var updated model.AppConfig
 	decodeJSONResponse(t, resp.Body.Bytes(), &updated)
-	if updated.Chat.BaseURL != "http://chat.local/v1" {
+	if updated.Chat.BaseURL != "http://chat.example.invalid/v1" {
 		t.Fatalf("expected chat baseUrl to be updated, got %s", updated.Chat.BaseURL)
 	}
-	if updated.Embedding.Model != "bge-m3" {
+	if updated.Embedding.Model != "embed-model-a" {
 		t.Fatalf("expected embedding model to be updated, got %s", updated.Embedding.Model)
 	}
 
@@ -95,7 +96,7 @@ func TestRouterConfigEndpoints(t *testing.T) {
 	if fetched.Chat.Temperature != 0.4 {
 		t.Fatalf("expected persisted chat temperature 0.4, got %v", fetched.Chat.Temperature)
 	}
-	if fetched.Embedding.APIKey != "embed-key" {
+	if fetched.Embedding.APIKey != "test-embed-key" {
 		t.Fatalf("expected persisted embedding apiKey, got %s", fetched.Embedding.APIKey)
 	}
 }
@@ -260,8 +261,8 @@ func TestMCPUploadTextDocument(t *testing.T) {
 				"name": "upload_text_document",
 				"arguments": map[string]any{
 					"knowledgeBaseId": knowledgeBaseID,
-					"fileName":        "whu-intro.txt",
-					"content":         "武汉大学是教育部直属重点综合性大学。",
+					"fileName":        "sample-intro.txt",
+					"content":         "示例机构A是一所综合性院校。",
 				},
 			},
 		})),
@@ -280,7 +281,7 @@ func TestMCPUploadTextDocument(t *testing.T) {
 		} `json:"result"`
 	}
 	decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
-	if rpcResp.Result.Data.Uploaded.Name != "whu-intro.txt" {
+	if rpcResp.Result.Data.Uploaded.Name != "sample-intro.txt" {
 		t.Fatalf("expected uploaded text document, got %+v", rpcResp.Result.Data.Uploaded)
 	}
 }
@@ -310,7 +311,7 @@ func TestHTTPStageUploadAndMCPRegisterStagedUpload(t *testing.T) {
 	}
 	knowledgeBaseID := kbList.Items[0].ID
 
-	stageResp := performMultipartUpload(t, engine, http.MethodPost, "/api/uploads", "staged-guide.md", "# Staged Upload\n\n这是通过 staging + MCP register 导入的文档。")
+	stageResp := performMultipartUpload(t, engine, http.MethodPost, "/api/uploads", "sample-stage.md", "# Sample Stage\n\n这是通过 staging + MCP register 导入的示例文档。")
 	if stageResp.Code != http.StatusOK {
 		t.Fatalf("expected stage upload status 200, got %d, body=%s", stageResp.Code, stageResp.Body.String())
 	}
@@ -334,7 +335,7 @@ func TestHTTPStageUploadAndMCPRegisterStagedUpload(t *testing.T) {
 				"arguments": map[string]any{
 					"uploadId":        stagedResult.UploadID,
 					"knowledgeBaseId": knowledgeBaseID,
-					"fileName":        "registered-guide.md",
+					"fileName":        "registered-sample.md",
 				},
 			},
 		})),
@@ -352,7 +353,7 @@ func TestHTTPStageUploadAndMCPRegisterStagedUpload(t *testing.T) {
 		} `json:"result"`
 	}
 	decodeJSONResponse(t, registerResp.Body.Bytes(), &rpcResp)
-	if rpcResp.Result.Data.Uploaded.Name != "registered-guide.md" {
+	if rpcResp.Result.Data.Uploaded.Name != "registered-sample.md" {
 		t.Fatalf("expected registered staged upload name, got %+v", rpcResp.Result.Data.Uploaded)
 	}
 	if rpcResp.Result.Data.Uploaded.Status != "indexed" {
@@ -440,8 +441,8 @@ func TestChatCompletionsIncludesToolUseMetadata(t *testing.T) {
 		engine,
 		http.MethodPost,
 		fmt.Sprintf("/api/knowledge-bases/%s/documents", knowledgeBaseID),
-		"redis-tooluse.md",
-		"# Redis\n\nRedis 是高性能内存数据库，支持缓存、消息队列与持久化。",
+		"tooluse-sample.md",
+		"# 示例组件\n\n示例组件A支持缓存、队列与持久化能力。",
 	)
 	if uploadResp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
@@ -461,7 +462,7 @@ func TestChatCompletionsIncludesToolUseMetadata(t *testing.T) {
 		},
 		"messages": []map[string]string{{
 			"role":    "user",
-			"content": "请介绍 Redis 的主要用途",
+			"content": "请介绍示例组件A的主要用途",
 		}},
 	}
 
@@ -513,8 +514,8 @@ func TestMCPDangerToolsDeleteKnowledgeBaseAndDocument(t *testing.T) {
 			"params": map[string]any{
 				"name": "create_knowledge_base",
 				"arguments": map[string]any{
-					"name":        "危险工具测试知识库",
-					"description": "用于删除测试",
+					"name":        "删除工具测试知识库",
+					"description": "用于通用删除流程测试",
 				},
 			},
 		})),
@@ -543,8 +544,8 @@ func TestMCPDangerToolsDeleteKnowledgeBaseAndDocument(t *testing.T) {
 		engine,
 		http.MethodPost,
 		fmt.Sprintf("/api/knowledge-bases/%s/documents", knowledgeBaseID),
-		"danger-tool-doc.md",
-		"# 删除测试\n\n用于验证 MCP 删除文档工具。",
+		"delete-tool-sample.md",
+		"# 通用删除测试\n\n用于验证 MCP 删除文档工具。",
 	)
 	if uploadResp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
@@ -633,16 +634,16 @@ func TestRouterRejectSensitiveStructuredUploadWithoutLocalOllama(t *testing.T) {
 	updatePayload := map[string]any{
 		"chat": map[string]any{
 			"provider":    "openai-compatible",
-			"baseUrl":     "http://chat.remote/v1",
-			"model":       "gpt-test",
-			"apiKey":      "chat-key",
+			"baseUrl":     "http://chat.example.invalid/v1",
+			"model":       "chat-model-b",
+			"apiKey":      "test-chat-key",
 			"temperature": 0.4,
 		},
 		"embedding": map[string]any{
 			"provider": "openai-compatible",
-			"baseUrl":  "http://embed.remote/v1",
-			"model":    "bge-m3",
-			"apiKey":   "embed-key",
+			"baseUrl":  "http://embed.example.invalid/v1",
+			"model":    "embed-model-b",
+			"apiKey":   "test-embed-key-2",
 		},
 	}
 	resp := performJSONRequest(t, engine, http.MethodPut, "/api/config", updatePayload)
@@ -667,8 +668,8 @@ func TestRouterRejectSensitiveStructuredUploadWithoutLocalOllama(t *testing.T) {
 		engine,
 		http.MethodPost,
 		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbList.Items[0].ID),
-		"sensitive.csv",
-		"姓名,部门\n张三,销售部\n",
+		"structured-sensitive.csv",
+		"字段A,字段B\n值1,值2\n",
 	)
 	if uploadResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
@@ -904,7 +905,9 @@ func newTestRouter(t *testing.T) (*http.ServeMux, string, func()) {
 	toolPlanner := mcp.NewToolUsePlanner(mcpRegistry)
 	appHandler := handler.NewAppHandler(serverConfig, appService, service.NewLLMService(), toolPlanner)
 	mcpServer := mcp.NewServer(mcpRegistry, appService, serverConfig)
-	ginEngine := NewRouter(appHandler, serverConfig, mcpServer)
+	ginEngine := NewRouter(appHandler, serverConfig, mcpServer, fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html><body>test</body></html>")},
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ginEngine)

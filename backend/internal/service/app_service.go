@@ -827,6 +827,90 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	return s.AddDocument(document.KnowledgeBaseID, document), nil
 }
 
+func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Document, error) {
+	if s == nil {
+		return nil, fmt.Errorf("app service is nil")
+	}
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	if knowledgeBaseID == "" {
+		return nil, fmt.Errorf("knowledge base id is required")
+	}
+
+	s.state.Mu.RLock()
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		s.state.Mu.RUnlock()
+		return nil, fmt.Errorf("knowledge base not found")
+	}
+	originalDocs := make([]model.Document, len(kb.Documents))
+	copy(originalDocs, kb.Documents)
+	config := s.state.Config
+	s.state.Mu.RUnlock()
+
+	if err := s.deleteKnowledgeBaseCollection(knowledgeBaseID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureKnowledgeBaseCollection(knowledgeBaseID); err != nil {
+		return nil, err
+	}
+
+	reindexed := make([]model.Document, 0, len(originalDocs))
+	for _, document := range originalDocs {
+		doc := document
+		if strings.TrimSpace(doc.Path) == "" {
+			return nil, fmt.Errorf("document %s path is empty", doc.ID)
+		}
+		indexed, err := reindexDocumentWithConfig(s, config, doc)
+		if err != nil {
+			return nil, fmt.Errorf("reindex document %s: %w", doc.ID, err)
+		}
+		reindexed = append(reindexed, indexed)
+	}
+
+	s.state.Mu.Lock()
+	kb = s.state.KnowledgeBases[knowledgeBaseID]
+	kb.Documents = reindexed
+	s.state.KnowledgeBases[knowledgeBaseID] = kb
+	s.state.Mu.Unlock()
+
+	if err := s.saveState(); err != nil {
+		return nil, err
+	}
+	return reindexed, nil
+}
+
+func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document model.Document) (model.Document, error) {
+	content, err := util.ExtractDocumentText(document.Path)
+	if err != nil {
+		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
+	}
+
+	chunks := s.rag.BuildDocumentChunks(document, content)
+	if len(chunks) == 0 {
+		document.ContentPreview = util.BuildContentPreviewFromText(content)
+		document.Status = "ready"
+		return document, nil
+	}
+
+	vectors, err := s.rag.EmbedTexts(context.Background(), model.EmbeddingModelConfig{
+		Provider: strings.TrimSpace(cfg.Embedding.Provider),
+		BaseURL:  strings.TrimSpace(cfg.Embedding.BaseURL),
+		Model:    strings.TrimSpace(cfg.Embedding.Model),
+		APIKey:   strings.TrimSpace(cfg.Embedding.APIKey),
+	}, chunkTexts(chunks), s.qdrantVectorSize())
+	if err != nil {
+		return model.Document{}, err
+	}
+
+	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+		return model.Document{}, err
+	}
+
+	document.Status = "indexed"
+	document.ContentPreview = previewFromChunks(chunks)
+	return document, nil
+}
+
 func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) model.Document {
 	s.state.Mu.Lock()
 	kb := s.state.KnowledgeBases[knowledgeBaseID]
@@ -995,6 +1079,13 @@ func (s *AppService) CurrentChatConfig() model.ChatModelConfig {
 		return model.ChatModelConfig{}
 	}
 	return s.currentChatConfig()
+}
+
+func (s *AppService) ServerConfig() model.ServerConfig {
+	if s == nil {
+		return model.ServerConfig{}
+	}
+	return s.serverConfig
 }
 
 func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, []map[string]string, error) {
@@ -2172,7 +2263,13 @@ func (s *AppService) shouldUseHybridSearch(req model.ChatCompletionRequest) bool
 	if s == nil {
 		return false
 	}
-	return false
+	if !s.serverConfig.EnableHybridSearch {
+		return false
+	}
+	if strings.TrimSpace(req.DocumentID) != "" {
+		return false
+	}
+	return true
 }
 
 func (s *AppService) shouldUseHybridFallback(selected []RetrievedChunk) bool {

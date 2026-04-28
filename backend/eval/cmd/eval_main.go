@@ -60,6 +60,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("[eval] 初始化真实评估模式失败: %v", err)
 		}
+		log.Printf("[eval] 真实模式配置: evalKnowledgeBaseID=%q retrieval(topKDoc=%d candidateDoc=%d topKKB=%d candidateAll=%d perDocLimit=%d autoExpand=%v)",
+			runtime.appService.ServerConfig().EvalKnowledgeBaseID,
+			runtime.appService.ServerConfig().RetrievalTopKDocument,
+			runtime.appService.ServerConfig().RetrievalCandidateTopKDocument,
+			runtime.appService.ServerConfig().RetrievalTopKKnowledgeBase,
+			runtime.appService.ServerConfig().RetrievalCandidateTopKAllDocs,
+			runtime.appService.ServerConfig().RetrievalMaxChunksPerDocument,
+			runtime.appService.ServerConfig().RetrievalEnableAutoExpand,
+		)
 		retrievalFn = runtime.retrieval
 		generationFn = runtime.generation
 		runIDPrefix = "baseline"
@@ -229,6 +238,9 @@ func (r *realEvalRuntime) generation(ctx context.Context, question string, chunk
 }
 
 func (r *realEvalRuntime) resolveKnowledgeBaseID(gtCase offline.GroundTruthCase) (string, error) {
+	if configured := strings.TrimSpace(r.appService.ServerConfig().EvalKnowledgeBaseID); configured != "" {
+		return r.appService.ResolveKnowledgeBaseID(configured)
+	}
 	if len(gtCase.SourceDocuments) > 0 {
 		candidate := strings.TrimSpace(gtCase.SourceDocuments[0].KnowledgeBaseID)
 		if candidate != "" {

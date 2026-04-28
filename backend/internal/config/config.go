@@ -30,13 +30,14 @@ func LoadServerConfig() model.ServerConfig {
 		MCPBasePath:                    getEnv("MCP_BASE_PATH", "/mcp"),
 		MCPRequestTimeoutSeconds:       getEnvAsInt("MCP_REQUEST_TIMEOUT_SECONDS", 15),
 		MCPRequestsPerMinute:           getEnvAsInt("MCP_REQUESTS_PER_MINUTE", 120),
-		RetrievalTopKDocument:          getEnvAsInt("RETRIEVAL_TOPK_DOCUMENT", 4),
-		RetrievalCandidateTopKDocument: getEnvAsInt("RETRIEVAL_CANDIDATE_TOPK_DOCUMENT", 8),
-		RetrievalTopKKnowledgeBase:     getEnvAsInt("RETRIEVAL_TOPK_KNOWLEDGE_BASE", 5),
-		RetrievalCandidateTopKAllDocs:  getEnvAsInt("RETRIEVAL_CANDIDATE_TOPK_ALL_DOCS", 10),
-		RetrievalMaxChunksPerDocument:  getEnvAsInt("RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT", 1),
+		RetrievalTopKDocument:          getEnvAsInt("RETRIEVAL_TOPK_DOCUMENT", 6),
+		RetrievalCandidateTopKDocument: getEnvAsInt("RETRIEVAL_CANDIDATE_TOPK_DOCUMENT", 12),
+		RetrievalTopKKnowledgeBase:     getEnvAsInt("RETRIEVAL_TOPK_KNOWLEDGE_BASE", 10),
+		RetrievalCandidateTopKAllDocs:  getEnvAsInt("RETRIEVAL_CANDIDATE_TOPK_ALL_DOCS", 32),
+		RetrievalMaxChunksPerDocument:  getEnvAsInt("RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT", 2),
 		RetrievalMaxContextChars:       getEnvAsInt("RETRIEVAL_MAX_CONTEXT_CHARS", 2400),
 		RetrievalEnableAutoExpand:      getEnvAsBool("RETRIEVAL_ENABLE_AUTO_EXPAND", false),
+		EvalKnowledgeBaseID:            getEnv("EVAL_KNOWLEDGE_BASE_ID", ""),
 	}
 }
 

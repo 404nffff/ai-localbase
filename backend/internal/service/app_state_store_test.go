@@ -16,20 +16,20 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 		Config: model.AppConfig{
 			Chat: model.ChatConfig{
 				Provider:    "ollama",
-				BaseURL:     "http://localhost:11434/v1",
-				Model:       "llama3.2",
+				BaseURL:     "http://example.invalid/v1",
+				Model:       "chat-model-a",
 				Temperature: 0.5,
 			},
 			Embedding: model.EmbeddingConfig{
 				Provider: "ollama",
-				BaseURL:  "http://localhost:11434/v1",
-				Model:    "nomic-embed-text",
+				BaseURL:  "http://example.invalid/v1",
+				Model:    "embed-model-a",
 			},
 		},
 		KnowledgeBases: map[string]model.KnowledgeBase{
 			"kb-1": {
 				ID:        "kb-1",
-				Name:      "默认知识库",
+				Name:      "示例知识库",
 				CreatedAt: "2026-03-12T00:00:00Z",
 				Documents: []model.Document{{
 					ID:   "doc-1",
@@ -50,8 +50,8 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	if loaded == nil {
 		t.Fatal("expected loaded state")
 	}
-	if loaded.Config.Chat.Model != "llama3.2" {
-		t.Fatalf("expected chat model llama3.2, got %s", loaded.Config.Chat.Model)
+	if loaded.Config.Chat.Model != "chat-model-a" {
+		t.Fatalf("expected chat model chat-model-a, got %s", loaded.Config.Chat.Model)
 	}
 	if len(loaded.KnowledgeBases["kb-1"].Documents) != 1 {
 		t.Fatalf("expected persisted documents, got %d", len(loaded.KnowledgeBases["kb-1"].Documents))
@@ -76,21 +76,21 @@ func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 		Config: model.AppConfig{
 			Chat: model.ChatConfig{
 				Provider:    "ollama",
-				BaseURL:     "http://persisted-chat.local/v1",
-				Model:       "persisted-chat-model",
+				BaseURL:     "http://chat.example.invalid/v1",
+				Model:       "persisted-chat-model-a",
 				Temperature: 0.3,
 			},
 			Embedding: model.EmbeddingConfig{
 				Provider: "openai-compatible",
-				BaseURL:  "http://persisted-embed.local/v1",
-				Model:    "persisted-embed-model",
+				BaseURL:  "http://embed.example.invalid/v1",
+				Model:    "persisted-embed-model-a",
 			},
 		},
 		KnowledgeBases: map[string]model.KnowledgeBase{
 			"kb-persisted": {
 				ID:          "kb-persisted",
-				Name:        "持久化知识库",
-				Description: "来自磁盘状态",
+				Name:        "示例持久化知识库",
+				Description: "来自示例磁盘状态",
 				CreatedAt:   "2026-03-12T00:00:00Z",
 			},
 		},
@@ -101,7 +101,7 @@ func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 
 	service := NewAppService(nil, store, nil, model.ServerConfig{})
 	config := service.GetConfig()
-	if config.Chat.Model != "persisted-chat-model" {
+	if config.Chat.Model != "persisted-chat-model-a" {
 		t.Fatalf("expected persisted chat model, got %s", config.Chat.Model)
 	}
 

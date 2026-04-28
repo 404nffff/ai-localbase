@@ -239,6 +239,8 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 	}
 
 	denseVector := float32ToFloat64(params.DenseVector)
+	sparseDenseFallback := sparseFallbackVector(params.SparseVector, len(denseVector))
+	searchLimit := maxInt(topK, minInt(topK*2, 64))
 
 	var denseResults []SearchResult
 	var sparseResults []SearchResult
@@ -249,7 +251,7 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		results, err := s.Search(ctx, params.CollectionName, denseVector, topK, filter)
+		results, err := s.Search(ctx, params.CollectionName, denseVector, searchLimit, filter)
 		if err != nil {
 			denseErr = err
 			return
@@ -257,28 +259,29 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 		denseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		fallbackVector := sparseFallbackVector(params.SparseVector, len(denseVector))
-		if len(fallbackVector) == 0 {
-			return
-		}
-		// TODO: 升级 Qdrant SDK 后替换为真实 sparse vector search
-		results, err := s.Search(ctx, params.CollectionName, fallbackVector, topK, filter)
-		if err != nil {
-			sparseErr = err
-			return
-		}
-		sparseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
-	}()
+	if len(sparseDenseFallback) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// TODO: 升级 Qdrant SDK 后替换为真实 sparse vector search
+			results, err := s.Search(ctx, params.CollectionName, sparseDenseFallback, searchLimit, filter)
+			if err != nil {
+				sparseErr = err
+				return
+			}
+			sparseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
+		}()
+	}
 
 	wg.Wait()
 	if denseErr != nil {
 		return nil, denseErr
 	}
 	if sparseErr != nil {
-		return nil, sparseErr
+		return denseResults, nil
+	}
+	if len(sparseResults) == 0 {
+		return denseResults, nil
 	}
 
 	return rrfFusion(denseResults, sparseResults, topK), nil

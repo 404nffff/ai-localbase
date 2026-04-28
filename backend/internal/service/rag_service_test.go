@@ -57,13 +57,13 @@ func TestRagServiceBuildDocumentChunksStructuredSummaryFirst(t *testing.T) {
 	document := model.Document{
 		ID:              "doc-structured",
 		KnowledgeBaseID: "kb-1",
-		Name:            "users.csv",
+		Name:            "sample.csv",
 	}
 	text := strings.Join([]string{
-		"文件：users.csv。字段：城市、人数、状态。数据行数：4。",
-		"统计摘要：文件《users.csv》共有4条数据记录。",
-		"统计摘要：字段“城市”为类别列，共4个非空值，主要分布为：武汉(2)、上海(1)、杭州(1)。",
-		"第2行：城市：武汉。人数：120。状态：活跃。",
+		"文件：sample.csv。字段：类别、数量、状态。数据行数：4。",
+		"统计摘要：文件《sample.csv》共有4条数据记录。",
+		"统计摘要：字段“类别”为类别列，共4个非空值，主要分布为：甲类(2)、乙类(1)、丙类(1)。",
+		"第2行：类别：甲类。数量：120。状态：启用。",
 	}, "\n")
 
 	chunks := rag.BuildDocumentChunks(document, text)
@@ -86,7 +86,7 @@ func TestRagServiceEmbedTextsFallback(t *testing.T) {
 		Model:    "demo-embedding-model",
 	}
 
-	embeddings, err := rag.EmbedTexts(t.Context(), cfg, []string{"redis 缓存", "qdrant 检索"}, 8)
+	embeddings, err := rag.EmbedTexts(t.Context(), cfg, []string{"示例缓存", "示例检索"}, 8)
 	if err != nil {
 		t.Fatalf("expected fallback embeddings without error, got %v", err)
 	}
@@ -165,7 +165,7 @@ func TestExtractContentPreviewFromMarkdown(t *testing.T) {
 func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "indexed.md")
-	content := strings.Repeat("真实文本抽取后进入索引链路。", 80)
+	content := strings.Repeat("示例文本抽取后进入索引链路。", 80)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write indexed markdown file: %v", err)
 	}
@@ -192,13 +192,13 @@ func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
 	if indexed.Status != "indexed" {
 		t.Fatalf("expected indexed status, got %s", indexed.Status)
 	}
-	if !strings.Contains(indexed.ContentPreview, "真实文本抽取后进入索引链路") {
+	if !strings.Contains(indexed.ContentPreview, "示例文本抽取后进入索引链路") {
 		t.Fatalf("expected content preview to come from extracted text, got %q", indexed.ContentPreview)
 	}
 }
 
 func TestBuildSparseVector(t *testing.T) {
-	vector := BuildSparseVector("混合 Hybrid Search 支持 iPhone14 Pro Max")
+	vector := BuildSparseVector("混合 hybrid search 支持 sample device max")
 	if len(vector.Indices) == 0 {
 		t.Fatal("expected sparse vector indices")
 	}
@@ -231,6 +231,83 @@ func TestRRFFusion(t *testing.T) {
 	}
 	if merged[0].ID == "b" && merged[1].ID != "a" {
 		t.Fatalf("expected a to rank near top, got %s", merged[1].ID)
+	}
+}
+
+func TestSearchHybridFallsBackToDenseResults(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/points/search") {
+			http.NotFound(w, r)
+			return
+		}
+		call := atomic.AddInt32(&calls, 1)
+		var req qdrantSearchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode search request: %v", err)
+		}
+		if call == 2 {
+			http.Error(w, "sparse fallback unavailable", http.StatusInternalServerError)
+			return
+		}
+		resp := qdrantSearchResponse{
+			Result: []struct {
+				ID      any            `json:"id"`
+				Score   float64        `json:"score"`
+				Payload map[string]any `json:"payload"`
+			}{
+				{
+					ID:    "chunk-dense-1",
+					Score: 0.91,
+					Payload: map[string]any{
+						"chunk_id":          "chunk-dense-1",
+						"text":              "dense result one",
+						"document_id":       "doc-1",
+						"document_name":     "Doc 1",
+						"knowledge_base_id": "kb-1",
+						"chunk_index":       0,
+					},
+				},
+				{
+					ID:    "chunk-dense-2",
+					Score: 0.87,
+					Payload: map[string]any{
+						"chunk_id":          "chunk-dense-2",
+						"text":              "dense result two",
+						"document_id":       "doc-2",
+						"document_name":     "Doc 2",
+						"knowledge_base_id": "kb-1",
+						"chunk_index":       1,
+					},
+				},
+			},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode qdrant response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	rag := NewRagService()
+	qdrant := NewQdrantService(model.ServerConfig{
+		QdrantURL:        server.URL,
+		QdrantVectorSize: 4,
+		QdrantDistance:   "cosine",
+	})
+	rag.SetQdrantService(qdrant)
+
+	results, err := rag.SearchHybrid(t.Context(), qdrant, "kb-1", []float64{0.2, 0.4, 0.1, 0.3}, BuildSparseVector("示例机构 人员"), 2, nil)
+	if err != nil {
+		t.Fatalf("search hybrid: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected dense fallback results size 2, got %d", len(results))
+	}
+	if results[0].ID != "chunk-dense-1" {
+		t.Fatalf("expected first dense result, got %s", results[0].ID)
+	}
+	if atomic.LoadInt32(&calls) < 2 {
+		t.Fatalf("expected at least dense and sparse fallback search attempts, got %d", calls)
 	}
 }
 
@@ -379,7 +456,7 @@ func TestLLMQueryRewriterParsing(t *testing.T) {
 		}
 	})
 
-	result, err := rewriter.Rewrite(t.Context(), "原始问题", []string{"上下文1", "上下文2"})
+	result, err := rewriter.Rewrite(t.Context(), "示例问题", []string{"示例上下文1", "示例上下文2"})
 	if err != nil {
 		t.Fatalf("rewrite query: %v", err)
 	}
@@ -397,5 +474,5 @@ func TestLLMQueryRewriterParsing(t *testing.T) {
 	assertContains("查询一")
 	assertContains("查询二")
 	assertContains("查询三")
-	assertContains("原始问题")
+	assertContains("示例问题")
 }

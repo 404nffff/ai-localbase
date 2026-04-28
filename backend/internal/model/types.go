@@ -30,6 +30,7 @@ type ServerConfig struct {
 	RetrievalMaxChunksPerDocument  int
 	RetrievalMaxContextChars       int
 	RetrievalEnableAutoExpand      bool
+	EvalKnowledgeBaseID            string
 }
 
 type AppState struct {
