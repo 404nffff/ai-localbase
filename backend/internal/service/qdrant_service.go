@@ -24,6 +24,7 @@ type QdrantService struct {
 	vectorSize       int
 	distance         string
 	httpClient       *http.Client
+	writeHTTPClient  *http.Client
 }
 
 type QdrantPoint struct {
@@ -93,6 +94,15 @@ func NewQdrantService(cfg model.ServerConfig) *QdrantService {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   4,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 
 	return &QdrantService{
 		baseURL:          baseURL,
@@ -101,7 +111,11 @@ func NewQdrantService(cfg model.ServerConfig) *QdrantService {
 		vectorSize:       cfg.QdrantVectorSize,
 		distance:         normalizeQdrantDistance(cfg.QdrantDistance),
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
+		},
+		writeHTTPClient: &http.Client{
+			Transport: transport,
 		},
 	}
 }
@@ -174,7 +188,7 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 			end = len(points)
 		}
 		batch := points[i:end]
-		if _, err := s.doJSON(ctx, http.MethodPut, collPath, qdrantPointUpsertRequest{Points: batch}); err != nil {
+		if _, err := s.doJSONWithClient(ctx, s.writeHTTPClient, http.MethodPut, collPath, qdrantPointUpsertRequest{Points: batch}); err != nil {
 			return fmt.Errorf("upsert batch [%d:%d]: %w", i, end, err)
 		}
 	}
@@ -396,8 +410,15 @@ func sparseFallbackVector(vector SparseVector, vectorSize int) []float64 {
 }
 
 func (s *QdrantService) doJSON(ctx context.Context, method, requestPath string, payload any) ([]byte, error) {
+	return s.doJSONWithClient(ctx, s.httpClient, method, requestPath, payload)
+}
+
+func (s *QdrantService) doJSONWithClient(ctx context.Context, client *http.Client, method, requestPath string, payload any) ([]byte, error) {
 	if s == nil {
 		return nil, fmt.Errorf("qdrant service is not initialized")
+	}
+	if client == nil {
+		return nil, fmt.Errorf("qdrant http client is not initialized")
 	}
 
 	requestURL, err := url.Parse(s.baseURL)
@@ -427,7 +448,7 @@ func (s *QdrantService) doJSON(ctx context.Context, method, requestPath string, 
 		req.Header.Set("api-key", s.apiKey)
 	}
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request qdrant: %w", err)
 	}
