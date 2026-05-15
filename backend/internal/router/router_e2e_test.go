@@ -565,6 +565,21 @@ func TestMCPRouteRequiresBearerToken(t *testing.T) {
 	}
 }
 
+func TestAPIMCPRouteRequiresBearerToken(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
+	defer cleanup()
+
+	resp := performJSONRequest(t, engine, http.MethodPost, "/api/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{},
+	})
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected api mcp route to require bearer token with 401, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestMCPInitializeReturnsJSONRPCResult(t *testing.T) {
 	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
 	defer cleanup()
@@ -596,6 +611,37 @@ func TestMCPInitializeReturnsJSONRPCResult(t *testing.T) {
 	}
 }
 
+func TestAPIMCPInitializeReturnsJSONRPCResult(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
+	defer cleanup()
+
+	resp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/api/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "test-client",
+				"version": "1.0.0",
+			},
+		},
+	}, "app-access-token")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected authorized /api/mcp initialize to return 200 json-rpc result, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var rpcResp map[string]any
+	decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
+	if rpcResp["jsonrpc"] != "2.0" {
+		t.Fatalf("expected jsonrpc version 2.0, got %#v", rpcResp["jsonrpc"])
+	}
+	if _, ok := rpcResp["result"]; !ok {
+		t.Fatalf("expected json-rpc response to contain result, got %#v", rpcResp)
+	}
+}
+
 func TestMCPInitializedNotificationReturnsAcceptedWithoutBody(t *testing.T) {
 	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
 	defer cleanup()
@@ -610,6 +656,54 @@ func TestMCPInitializedNotificationReturnsAcceptedWithoutBody(t *testing.T) {
 	}
 	if strings.TrimSpace(resp.Body.String()) != "" {
 		t.Fatalf("expected initialized notification response body to be empty, got %q", resp.Body.String())
+	}
+}
+
+func TestAPIMCPToolCallReturnsTopLevelStructuredContent(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
+	defer cleanup()
+
+	resp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/api/mcp/tools/knowledge_base.create/call", map[string]any{
+		"arguments": map[string]any{
+			"name":        "API MCP 新知识库",
+			"description": "通过 API MCP 工具调用创建的知识库",
+		},
+	}, "app-access-token")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected api mcp tool call to return 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var apiResp struct {
+		Name              string `json:"name"`
+		StructuredContent struct {
+			ID              string `json:"id"`
+			KnowledgeBaseID string `json:"knowledgeBaseId"`
+			Name            string `json:"name"`
+			Created         bool   `json:"created"`
+		} `json:"structuredContent"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	decodeJSONResponse(t, resp.Body.Bytes(), &apiResp)
+	if apiResp.Name != "knowledge_base.create" {
+		t.Fatalf("expected response name knowledge_base.create, got %q", apiResp.Name)
+	}
+	if apiResp.StructuredContent.ID == "" {
+		t.Fatal("expected created knowledge base id")
+	}
+	if apiResp.StructuredContent.KnowledgeBaseID != apiResp.StructuredContent.ID {
+		t.Fatalf("expected knowledgeBaseId to equal id, got id=%q knowledgeBaseId=%q", apiResp.StructuredContent.ID, apiResp.StructuredContent.KnowledgeBaseID)
+	}
+	if !apiResp.StructuredContent.Created {
+		t.Fatal("expected first api mcp knowledge_base.create call to create knowledge base")
+	}
+	if apiResp.StructuredContent.Name != "API MCP 新知识库" {
+		t.Fatalf("expected created knowledge base name, got %q", apiResp.StructuredContent.Name)
+	}
+	if len(apiResp.Content) == 0 {
+		t.Fatal("expected api mcp tool call to include content summary blocks")
 	}
 }
 

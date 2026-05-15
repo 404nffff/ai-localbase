@@ -36,6 +36,8 @@ func NewRouter(appHandler *handler.AppHandler, mcpHandler *handler.MCPHandler, a
 		api.GET("/knowledge-bases/:id/documents", appHandler.ListDocuments)
 		api.POST("/knowledge-bases/:id/documents", appHandler.UploadToKnowledgeBase)
 		api.DELETE("/knowledge-bases/:id/documents/:documentId", appHandler.DeleteDocument)
+		api.POST("/mcp", mcpHandler.Handle)
+		api.POST("/mcp/tools/:name/call", mcpHandler.CallTool)
 	}
 
 	v1 := r.Group("/v1")

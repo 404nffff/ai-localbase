@@ -50,3 +50,35 @@ func (h *MCPHandler) Handle(c *gin.Context) {
 
 	c.JSON(http.StatusOK, h.mcpService.Handle(req))
 }
+
+// CallTool godoc
+// @Summary 通过普通 API 调用 MCP 工具
+// @Description 复用 MCP tools/call 能力，但以 /api/mcp/tools/:name/call 暴露结构化 JSON 响应。
+// @Tags MCP
+// @Accept json
+// @Produce json
+// @Param name path string true "MCP 工具名称"
+// @Param request body model.MCPAPIToolCallRequest true "MCP 工具调用请求"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/mcp/tools/{name}/call [post]
+func (h *MCPHandler) CallTool(c *gin.Context) {
+	var req model.MCPAPIToolCallRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mcp tool call request body"})
+		return
+	}
+
+	name := c.Param("name")
+	result, err := h.mcpService.CallTool(name, req.Arguments)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"name":              name,
+		"content":           result["content"],
+		"structuredContent": result["structuredContent"],
+		"isError":           result["isError"],
+	})
+}

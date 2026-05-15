@@ -375,45 +375,50 @@ func (s *MCPService) handleToolCall(params map[string]any) (map[string]any, erro
 		return nil, fmt.Errorf("invalid params")
 	}
 
-	switch strings.TrimSpace(callParams.Name) {
+	return s.CallTool(strings.TrimSpace(callParams.Name), callParams.Arguments)
+}
+
+// CallTool 执行单个 MCP 工具并返回 MCP tool result 格式，供 JSON-RPC 与普通 API 入口复用。
+func (s *MCPService) CallTool(name string, arguments map[string]any) (map[string]any, error) {
+	switch strings.TrimSpace(name) {
 	case "chat.ask":
-		result, err := s.CallChatAsk(callParams.Arguments)
+		result, err := s.CallChatAsk(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("chat.ask", result)
 	case "knowledge_base.search":
-		result, err := s.CallKnowledgeBaseSearch(callParams.Arguments)
+		result, err := s.CallKnowledgeBaseSearch(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("knowledge_base.search", result)
 	case "knowledge_base.create":
-		result, err := s.CallKnowledgeBaseCreate(callParams.Arguments)
+		result, err := s.CallKnowledgeBaseCreate(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("knowledge_base.create", result)
 	case "document.upload":
-		result, err := s.CallDocumentUpload(callParams.Arguments)
+		result, err := s.CallDocumentUpload(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("document.upload", result)
 	case "document.append":
-		result, err := s.CallDocumentAppend(callParams.Arguments)
+		result, err := s.CallDocumentAppend(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("document.append", result)
 	case "document.update":
-		result, err := s.CallDocumentUpdate(callParams.Arguments)
+		result, err := s.CallDocumentUpdate(arguments)
 		if err != nil {
 			return nil, err
 		}
 		return buildMCPToolResult("document.update", result)
 	case "document.delete":
-		result, err := s.CallDocumentDelete(callParams.Arguments)
+		result, err := s.CallDocumentDelete(arguments)
 		if err != nil {
 			return nil, err
 		}

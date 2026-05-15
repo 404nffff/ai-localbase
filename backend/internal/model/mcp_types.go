@@ -6,6 +6,11 @@ type MCPToolCallParams struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
+// MCPAPIToolCallRequest 描述 /api/mcp/tools/:name/call 的普通 HTTP 调用请求体。
+type MCPAPIToolCallRequest struct {
+	Arguments map[string]any `json:"arguments"`
+}
+
 // JSONRPCRequest 表示 MCP HTTP 入口接收的 JSON-RPC 请求基础结构。
 type JSONRPCRequest struct {
 	JSONRPC string         `json:"jsonrpc"`

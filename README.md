@@ -483,6 +483,8 @@ docker compose up --build
 ### MCP HTTP 接口
 
 - `POST /mcp`
+- `POST /api/mcp`
+- `POST /api/mcp/tools/:name/call`
 
 MCP 客户端接入示例：
 
@@ -502,6 +504,8 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }
 - `document.append`
 - `document.update`
 - `document.delete`
+
+`/api/mcp` 是 `/mcp` 的 API 命名空间镜像，仍然使用 MCP JSON-RPC 请求体。`/api/mcp/tools/:name/call` 是普通 HTTP API 调用方式，适合不想手动拼 `tools/call` JSON-RPC 包装的客户端。
 
 ### MCP 使用方式
 
@@ -654,6 +658,137 @@ curl -s "$MCP_URL" \
 `knowledge_base.create` 会先按名称检查是否已存在；若已存在则直接返回现有 `knowledgeBaseId`，若新建成功也会显式返回 `knowledgeBaseId` 供后续上传文档使用。
 
 完整 `initialize`、`tools/list`、`chat.ask`、`knowledge_base.search`、`knowledge_base.create`、`document.upload`、`document.append`、`document.update`、`document.delete` 调用样例见 [docs/mcp-http-server/access-examples.md](./docs/mcp-http-server/access-examples.md)。
+
+### MCP API 调用方式
+
+如果调用方只是普通 HTTP 客户端，推荐使用 `/api/mcp/tools/:name/call`。该接口复用 MCP 工具实现，但请求体只需要传 `arguments`，响应会直接返回 `structuredContent`。
+
+```bash
+export MCP_API_BASE_URL="http://127.0.0.1:8080/api/mcp"
+export MCP_AUTH_HEADER="Authorization: Bearer your-app-access-token"
+```
+
+如果后端没有配置应用访问令牌，可以去掉 `-H "$MCP_AUTH_HEADER"` 这一行。
+
+#### 1. 复用 JSON-RPC MCP 入口
+
+`POST /api/mcp` 与 `POST /mcp` 请求体一致：
+
+```bash
+curl -s "$MCP_API_BASE_URL" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }'
+```
+
+#### 2. 普通 API 方式调用工具
+
+接口格式：
+
+```http
+POST /api/mcp/tools/:name/call
+Authorization: Bearer your-app-access-token
+Content-Type: application/json
+```
+
+请求体格式：
+
+```json
+{
+  "arguments": {}
+}
+```
+
+响应体格式：
+
+```json
+{
+  "name": "knowledge_base.create",
+  "content": [
+    {
+      "type": "text",
+      "text": "已创建知识库 API 示例知识库（kb_xxx）"
+    }
+  ],
+  "structuredContent": {},
+  "isError": false
+}
+```
+
+创建知识库示例：
+
+```bash
+curl -s "$MCP_API_BASE_URL/tools/knowledge_base.create/call" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "arguments": {
+      "name": "API 示例知识库",
+      "description": "通过 /api/mcp/tools/:name/call 创建"
+    }
+  }'
+```
+
+上传文档示例：
+
+```bash
+curl -s "$MCP_API_BASE_URL/tools/document.upload/call" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "arguments": {
+      "knowledgeBaseId": "kb-1",
+      "filename": "redis-notes.md",
+      "content": "# Redis\n\nRedis 是一个高性能内存数据库。"
+    }
+  }'
+```
+
+检索示例：
+
+```bash
+curl -s "$MCP_API_BASE_URL/tools/knowledge_base.search/call" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "arguments": {
+      "knowledgeBaseId": "kb-1",
+      "query": "Redis",
+      "topK": 3
+    }
+  }'
+```
+
+问答示例：
+
+```bash
+curl -s "$MCP_API_BASE_URL/tools/chat.ask/call" \
+  -H 'Content-Type: application/json' \
+  -H "$MCP_AUTH_HEADER" \
+  -d '{
+    "arguments": {
+      "knowledgeBaseId": "kb-1",
+      "message": "请概括 Redis 的核心特点"
+    }
+  }'
+```
+
+#### 3. 工具清单
+
+| 工具名 | 说明 | 必填参数 | 可选参数 |
+|--------|------|----------|----------|
+| `chat.ask` | 基于当前知识库上下文执行一次非流式问答 | `message` | `knowledgeBaseId`、`documentId`、`conversationId` |
+| `knowledge_base.search` | 对知识库执行检索并返回命中的片段 | `query` | `knowledgeBaseId`、`documentId`、`topK` |
+| `knowledge_base.create` | 创建一个新的知识库；同名时复用已有知识库 | `name` | `description` |
+| `document.upload` | 向指定知识库上传文本内容文档并建立索引 | `knowledgeBaseId`、`content` | `filename` |
+| `document.append` | 向指定知识库中的文档追加文本内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 |
+| `document.update` | 用完整文本覆盖指定知识库中的文档内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 |
+| `document.delete` | 删除指定知识库中的文档 | `knowledgeBaseId`、`documentId` | 无 |
 
 ## 检索流程说明
 
