@@ -21,11 +21,6 @@ services:
       - "${OLLAMA_BIND_HOST:-${PORT_BIND_HOST:-127.0.0.1}}:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ./ollama_storage:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
 
   backend:
     build:
@@ -37,7 +32,7 @@ services:
       qdrant:
         condition: service_started
       ollama:
-        condition: service_healthy
+        condition: service_started
     environment:
       PORT: "8080"
       UPLOAD_DIR: /app/data/uploads

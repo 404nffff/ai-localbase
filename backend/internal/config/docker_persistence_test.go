@@ -53,8 +53,9 @@ func TestComposeIncludesBundledOllamaStack(t *testing.T) {
 		"ollama:",
 		"./ollama_storage:/root/.ollama",
 		"OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}",
-		"test: [\"CMD\", \"ollama\", \"list\"]",
+		"ollama:\n        condition: service_started",
 	}, []string{
+		"test: [\"CMD\", \"ollama\", \"list\"]",
 		"ollama-init:",
 		`"http://ollama:11434/api/tags"`,
 		`"name":"qwen3.5:0.8b"`,
@@ -67,8 +68,9 @@ func TestAppComposeIncludesBundledOllamaStack(t *testing.T) {
 		"ollama:",
 		"./ollama_storage:/root/.ollama",
 		"OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}",
-		"test: [\"CMD\", \"ollama\", \"list\"]",
+		"ollama:\n        condition: service_started",
 	}, []string{
+		"test: [\"CMD\", \"ollama\", \"list\"]",
 		"ollama-init:",
 		`"http://ollama:11434/api/tags"`,
 		`"name":"qwen3.5:0.8b"`,
@@ -81,9 +83,10 @@ func TestProdComposeIncludesBundledOllamaStack(t *testing.T) {
 		"ollama:",
 		"ollama_storage:/root/.ollama",
 		"OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}",
-		"test: [\"CMD\", \"ollama\", \"list\"]",
+		"ollama:\n        condition: service_started",
 		"ollama_storage:",
 	}, []string{
+		"test: [\"CMD\", \"ollama\", \"list\"]",
 		"ollama-init:",
 		`"http://ollama:11434/api/tags"`,
 		`"name":"qwen3.5:0.8b"`,
