@@ -68,6 +68,16 @@ func ExtractContentPreview(path string) string {
 	return BuildContentPreviewFromText(content)
 }
 
+// KnowledgeBaseUploadDir 返回某个知识库的原始上传文件目录，避免不同知识库文件混在同一层。
+func KnowledgeBaseUploadDir(uploadDir, knowledgeBaseID string) string {
+	return filepath.Join(uploadDir, SanitizeFilename(knowledgeBaseID))
+}
+
+// BuildKnowledgeBaseUploadPath 生成知识库隔离后的上传文件完整路径。
+func BuildKnowledgeBaseUploadPath(uploadDir, knowledgeBaseID, storedName string) string {
+	return filepath.Join(KnowledgeBaseUploadDir(uploadDir, knowledgeBaseID), storedName)
+}
+
 func SanitizeFilename(name string) string {
 	name = filepath.Base(name)
 	name = strings.ReplaceAll(name, " ", "_")

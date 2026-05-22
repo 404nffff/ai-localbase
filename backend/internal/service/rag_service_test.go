@@ -74,6 +74,37 @@ func TestRagServiceEmbedTextsFallback(t *testing.T) {
 	}
 }
 
+func TestRagServiceEmbedTextsRejectsUnexpectedDimension(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(openAIEmbeddingResponse{
+			Data: []struct {
+				Embedding []float64 `json:"embedding"`
+				Index     int       `json:"index"`
+			}{
+				{Index: 0, Embedding: []float64{0.1, 0.2, 0.3}},
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	rag := NewRagService()
+	_, err := rag.EmbedTexts(t.Context(), model.EmbeddingModelConfig{
+		Provider: "openai-compatible",
+		BaseURL:  server.URL,
+		Model:    "dimension-test-model",
+	}, []string{"维度必须严格匹配"}, 4)
+	if err == nil {
+		t.Fatal("expected dimension mismatch error")
+	}
+	if !strings.Contains(err.Error(), "embedding dimension mismatch") {
+		t.Fatalf("expected dimension mismatch error, got %v", err)
+	}
+}
+
 func TestRagServiceBuildContext(t *testing.T) {
 	rag := NewRagService()
 	contextText, sources := rag.BuildContext([]RetrievedChunk{
@@ -209,6 +240,76 @@ func TestAppServiceIndexDocumentCreatesMarkdownArchive(t *testing.T) {
 	}
 	if !strings.Contains(string(archivedContent), "索引后应该产出 markdown 归档文件") {
 		t.Fatalf("expected markdown archive to contain indexed content, got %q", string(archivedContent))
+	}
+}
+
+func TestAppServiceIndexDocumentRemovesMarkdownArchiveWhenEmbeddingFails(t *testing.T) {
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(openAIEmbeddingResponse{
+			Data: []struct {
+				Embedding []float64 `json:"embedding"`
+				Index     int       `json:"index"`
+			}{
+				{Index: 0, Embedding: []float64{0.1, 0.2}},
+			},
+		})
+	}))
+	t.Cleanup(modelHTTP.Close)
+
+	dir := t.TempDir()
+	uploadDir := filepath.Join(dir, "uploads")
+	path := filepath.Join(uploadDir, "source.md")
+	content := strings.Repeat("索引失败时不应残留 markdown 归档。", 80)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		t.Fatalf("create upload dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source markdown file: %v", err)
+	}
+
+	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{
+		UploadDir: uploadDir,
+	})
+	knowledgeBases := service.ListKnowledgeBases()
+	if len(knowledgeBases) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	_, err := service.UpdateConfig(model.ConfigUpdateRequest{
+		Chat: model.ChatConfig{
+			Provider:            "openai-compatible",
+			BaseURL:             modelHTTP.URL,
+			Model:               "chat-test-model",
+			Temperature:         0.2,
+			ContextMessageLimit: 12,
+		},
+		Embedding: model.EmbeddingConfig{
+			Provider: "openai-compatible",
+			BaseURL:  modelHTTP.URL,
+			Model:    "embedding-test-model",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	document := model.Document{
+		ID:              "doc-failed-archive",
+		KnowledgeBaseID: knowledgeBases[0].ID,
+		Name:            "source.md",
+		Path:            path,
+		Status:          "processing",
+	}
+	_, err = service.IndexDocument(document)
+	if err == nil {
+		t.Fatal("expected index document to fail")
+	}
+	markdownPath := filepath.Join(uploadDir, "md", document.KnowledgeBaseID, document.ID+".md")
+	if _, statErr := os.Stat(markdownPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected markdown archive %q to be removed, got err=%v", markdownPath, statErr)
 	}
 }
 

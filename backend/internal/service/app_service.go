@@ -57,15 +57,15 @@ type KnowledgeBaseExportKnowledgeBase struct {
 
 // KnowledgeBaseExportDocument 描述单个文档在导出包中的状态。
 type KnowledgeBaseExportDocument struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	UploadedAt string `json:"uploadedAt"`
-	Status     string `json:"status"`
-	Size       int64  `json:"size"`
-	SizeLabel  string `json:"sizeLabel"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	UploadedAt  string `json:"uploadedAt"`
+	Status      string `json:"status"`
+	Size        int64  `json:"size"`
+	SizeLabel   string `json:"sizeLabel"`
 	ArchivePath string `json:"archivePath"`
-	Exported   bool   `json:"exported"`
-	Reason     string `json:"reason"`
+	Exported    bool   `json:"exported"`
+	Reason      string `json:"reason"`
 }
 
 // KnowledgeBaseExportManifest 描述 zip 中 manifest.json 的结构。
@@ -664,6 +664,9 @@ func (s *AppService) CreateKnowledgeBase(req model.KnowledgeBaseInput) (model.Kn
 		s.state.Mu.Lock()
 		delete(s.state.KnowledgeBases, knowledgeBase.ID)
 		s.state.Mu.Unlock()
+		if saveErr := s.saveState(); saveErr != nil {
+			return model.KnowledgeBase{}, fmt.Errorf("%w; rollback state save failed: %v", err, saveErr)
+		}
 		return model.KnowledgeBase{}, err
 	}
 
@@ -809,11 +812,18 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 		return model.Document{}, err
 	}
 	document.MarkdownPath = markdownPath
+	indexSucceeded := false
+	defer func() {
+		if !indexSucceeded {
+			_ = os.Remove(markdownPath)
+		}
+	}()
 
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
+		indexSucceeded = true
 		return s.AddDocument(document.KnowledgeBaseID, document), nil
 	}
 
@@ -828,6 +838,7 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
+	indexSucceeded = true
 	return s.AddDocument(document.KnowledgeBaseID, document), nil
 }
 
@@ -1354,15 +1365,18 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 	if s.qdrant == nil || !s.qdrant.IsEnabled() || len(chunks) == 0 {
 		return nil
 	}
+	if len(vectors) != len(chunks) {
+		return fmt.Errorf("embedding vector count mismatch: expected %d, got %d", len(chunks), len(vectors))
+	}
 	points := make([]QdrantPoint, 0, len(chunks))
+	vectorSize := s.qdrantVectorSize()
 	for index, chunk := range chunks {
-		vector := make([]float64, s.qdrantVectorSize())
-		if index < len(vectors) {
-			copy(vector, vectors[index])
+		if len(vectors[index]) != vectorSize {
+			return fmt.Errorf("embedding dimension mismatch for chunk %s: expected %d, got %d", chunk.ID, vectorSize, len(vectors[index]))
 		}
 		points = append(points, QdrantPoint{
 			ID:     qdrantPointID(chunk.ID),
-			Vector: vector,
+			Vector: vectors[index],
 			Payload: map[string]any{
 				"knowledge_base_id": chunk.KnowledgeBaseID,
 				"document_id":       chunk.DocumentID,

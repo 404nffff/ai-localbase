@@ -48,6 +48,24 @@ func TestProdComposeBackendUsesMountedAppDataPaths(t *testing.T) {
 	})
 }
 
+func TestDockerDefaultsUseConsistentQdrantVectorSize(t *testing.T) {
+	expected := []struct {
+		file string
+		text string
+	}{
+		{file: "docker-compose.yml", text: `QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:-1024}"`},
+		{file: "docker-compose.app.yml", text: `QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:-1024}"`},
+		{file: "docker-compose.prod.yml", text: `QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-1024}`},
+		{file: ".env.example", text: "QDRANT_VECTOR_SIZE=1024"},
+	}
+	for _, item := range expected {
+		content := readProjectFile(t, item.file)
+		if !strings.Contains(content, item.text) {
+			t.Fatalf("%s missing consistent Qdrant vector size default %q", item.file, item.text)
+		}
+	}
+}
+
 func TestComposeIncludesBundledOllamaStack(t *testing.T) {
 	assertComposeHasOllamaStack(t, "docker-compose.yml", []string{
 		"ollama:",

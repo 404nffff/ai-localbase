@@ -263,12 +263,17 @@ func (s *RagService) EmbedTexts(ctx context.Context, cfg model.EmbeddingModelCon
 			if len(uncachedTexts) > 0 {
 				embeddings, err := s.requestEmbeddings(ctx, cfg, uncachedTexts)
 				if err == nil && len(embeddings) == len(uncachedTexts) {
-					normed := normalizeEmbeddings(embeddings, vectorSize)
+					normed, err := normalizeEmbeddings(embeddings, vectorSize)
+					if err != nil {
+						return nil, err
+					}
 					for k, idx := range uncachedIdx {
 						batchVectors[idx] = normed[k]
 						key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, batch[idx])
 						s.cache.Set(key, normed[k])
 					}
+				} else if err == nil {
+					return nil, fmt.Errorf("embeddings api returned %d vectors for %d texts", len(embeddings), len(uncachedTexts))
 				} else {
 					// first failure: fall back to deterministic for remaining batches
 					useFallback = true
@@ -645,19 +650,18 @@ func normalizeChunkText(text string) string {
 	return strings.TrimSpace(strings.Join(cleanedLines, "\n"))
 }
 
-func normalizeEmbeddings(vectors [][]float64, vectorSize int) [][]float64 {
-	normalized := make([][]float64, 0, len(vectors))
-	for _, vector := range vectors {
-		if len(vector) == vectorSize {
-			normalized = append(normalized, vector)
-			continue
-		}
-
-		current := make([]float64, vectorSize)
-		copy(current, vector)
-		normalized = append(normalized, current)
+func normalizeEmbeddings(vectors [][]float64, vectorSize int) ([][]float64, error) {
+	if vectorSize <= 0 {
+		return nil, fmt.Errorf("invalid target embedding dimension: %d", vectorSize)
 	}
-	return normalized
+	normalized := make([][]float64, 0, len(vectors))
+	for index, vector := range vectors {
+		if len(vector) != vectorSize {
+			return nil, fmt.Errorf("embedding dimension mismatch at index %d: expected %d, got %d", index, vectorSize, len(vector))
+		}
+		normalized = append(normalized, vector)
+	}
+	return normalized, nil
 }
 
 func deterministicEmbedding(text string, vectorSize int) []float64 {

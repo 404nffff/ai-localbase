@@ -302,6 +302,9 @@ func TestRouterDeleteDocumentRemovesMarkdownArchive(t *testing.T) {
 	if strings.TrimSpace(uploadResult.Uploaded.Path) == "" {
 		t.Fatal("expected uploaded document path")
 	}
+	if filepath.Base(filepath.Dir(uploadResult.Uploaded.Path)) != kbID {
+		t.Fatalf("expected uploaded source file to be stored under knowledge base dir %q, got %q", kbID, uploadResult.Uploaded.Path)
+	}
 	if strings.TrimSpace(uploadResult.Uploaded.MarkdownPath) == "" {
 		t.Fatal("expected uploaded markdown archive path")
 	}
@@ -1145,6 +1148,9 @@ func TestMCPToolsCallDocumentUploadReturnsUploadedDocument(t *testing.T) {
 	if rpcResp.Result.StructuredContent.Uploaded.Status == "" {
 		t.Fatal("expected uploaded document status")
 	}
+	if filepath.Base(filepath.Dir(rpcResp.Result.StructuredContent.Uploaded.Path)) != kbList.Items[0].ID {
+		t.Fatalf("expected MCP uploaded source file to be stored under knowledge base dir %q, got %q", kbList.Items[0].ID, rpcResp.Result.StructuredContent.Uploaded.Path)
+	}
 }
 
 func TestMCPToolsCallDocumentDeleteReturnsDeletedDocument(t *testing.T) {
@@ -1639,6 +1645,66 @@ func TestRouterProtectedRoutesAcceptValidBearerToken(t *testing.T) {
 	}
 }
 
+func TestRouterRebuildQdrantIndexRequiresConfirm(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	resp := performJSONRequest(t, engine, http.MethodPost, "/api/admin/rebuild-qdrant-index", map[string]any{
+		"confirm": false,
+	})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected rebuild without confirm to return 400, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestRouterRebuildQdrantIndexCreatesKBZeroFromUploads(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"restore.md",
+		strings.Repeat("Redis 恢复索引验证。", 80),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload before rebuild to return 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	rebuildResp := performJSONRequest(t, engine, http.MethodPost, "/api/admin/rebuild-qdrant-index", map[string]any{
+		"confirm":           true,
+		"knowledgeBaseId":   "kb-0",
+		"knowledgeBaseName": "初始知识库",
+	})
+	if rebuildResp.Code != http.StatusOK {
+		t.Fatalf("expected rebuild to return 200, got %d, body=%s", rebuildResp.Code, rebuildResp.Body.String())
+	}
+
+	listResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected list knowledge bases to return 200, got %d, body=%s", listResp.Code, listResp.Body.String())
+	}
+	var listBody struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, listResp.Body.Bytes(), &listBody)
+	if len(listBody.Items) != 1 {
+		t.Fatalf("expected one rebuilt knowledge base, got %#v", listBody.Items)
+	}
+	if listBody.Items[0].ID != "kb-0" {
+		t.Fatalf("expected rebuilt knowledge base kb-0, got %#v", listBody.Items[0])
+	}
+	if len(listBody.Items[0].Documents) != 1 {
+		t.Fatalf("expected one rebuilt document, got %#v", listBody.Items[0].Documents)
+	}
+	if listBody.Items[0].Documents[0].KnowledgeBaseID != "kb-0" {
+		t.Fatalf("expected rebuilt document to belong to kb-0, got %#v", listBody.Items[0].Documents[0])
+	}
+}
+
 func newTestRouter(t *testing.T) (*http.ServeMux, string, func()) {
 	engine, _, modelBaseURL, cleanup := newTestRouterWithAccessTokenAndService(t, "")
 	return engine, modelBaseURL, cleanup
@@ -1729,7 +1795,11 @@ func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet && len(segments) == 1 {
-		writeJSON(http.StatusOK, map[string]any{"result": []any{}})
+		collections := make([]map[string]string, 0, len(s.collections))
+		for name := range s.collections {
+			collections = append(collections, map[string]string{"name": name})
+		}
+		writeJSON(http.StatusOK, map[string]any{"result": map[string]any{"collections": collections}})
 		return
 	}
 

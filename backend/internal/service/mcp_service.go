@@ -542,13 +542,14 @@ func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]an
 		return nil, err
 	}
 
-	if err := os.MkdirAll(s.appService.serverConfig.UploadDir, 0o755); err != nil {
+	uploadDir := util.KnowledgeBaseUploadDir(s.appService.serverConfig.UploadDir, resolvedKnowledgeBaseID)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to prepare upload directory")
 	}
 
 	contentBytes := []byte(content)
 	storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(filename))
-	destination := filepath.Join(s.appService.serverConfig.UploadDir, storedName)
+	destination := util.BuildKnowledgeBaseUploadPath(s.appService.serverConfig.UploadDir, resolvedKnowledgeBaseID, storedName)
 	if err := os.WriteFile(destination, contentBytes, 0o644); err != nil {
 		return nil, fmt.Errorf("failed to save uploaded file")
 	}

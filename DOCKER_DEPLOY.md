@@ -80,7 +80,7 @@ OLLAMA_BASE_URL=http://ollama:11434
 APP_AUTH_TOKEN=change-me-app-token
 
 # Qdrant 向量维度 (根据嵌入模型调整)
-QDRANT_VECTOR_SIZE=768
+QDRANT_VECTOR_SIZE=1024
 
 # Qdrant API 密钥 (可选)
 QDRANT_API_KEY=

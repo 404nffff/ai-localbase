@@ -40,7 +40,7 @@ services:
       - CHAT_HISTORY_FILE=/app/data/chat-history.db
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-      - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-768}
+      - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-1024}
       - QDRANT_TIMEOUT_SECONDS=${QDRANT_TIMEOUT_SECONDS:-5}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       - APP_AUTH_TOKEN=${APP_AUTH_TOKEN:-change-me-app-token}

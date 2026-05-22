@@ -60,6 +60,42 @@ func (h *AppHandler) VerifyAccessToken(c *gin.Context) {
 	})
 }
 
+type rebuildQdrantIndexRequest struct {
+	Confirm           bool   `json:"confirm"`
+	KnowledgeBaseID   string `json:"knowledgeBaseId"`
+	KnowledgeBaseName string `json:"knowledgeBaseName"`
+	IncludeArchives   bool   `json:"includeArchives"`
+}
+
+// RebuildQdrantIndex 清空本应用 Qdrant 索引，并从 uploads 目录重建 kb-0 初始知识库。
+func (h *AppHandler) RebuildQdrantIndex(c *gin.Context) {
+	var req rebuildQdrantIndexRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid rebuild request body")
+		return
+	}
+
+	result, err := h.appService.RebuildQdrantIndexFromUploads(c.Request.Context(), service.RebuildQdrantIndexRequest{
+		Confirm:           req.Confirm,
+		KnowledgeBaseID:   req.KnowledgeBaseID,
+		KnowledgeBaseName: req.KnowledgeBaseName,
+		IncludeArchives:   req.IncludeArchives,
+	})
+	if err != nil {
+		if err == service.ErrRebuildConfirmationRequired {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "qdrant index rebuilt from uploads",
+		"result":  result,
+	})
+}
+
 func (h *AppHandler) ListConversations(c *gin.Context) {
 	items, err := h.appService.ListConversations()
 	if err != nil {
@@ -582,7 +618,12 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 	}
 
 	storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(file.Filename))
-	destination := filepath.Join(h.serverConfig.UploadDir, storedName)
+	uploadDir := util.KnowledgeBaseUploadDir(h.serverConfig.UploadDir, knowledgeBaseID)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		writeError(c, http.StatusInternalServerError, "failed to prepare upload directory")
+		return
+	}
+	destination := util.BuildKnowledgeBaseUploadPath(h.serverConfig.UploadDir, knowledgeBaseID, storedName)
 	if err := c.SaveUploadedFile(file, destination); err != nil {
 		writeError(c, http.StatusInternalServerError, "failed to save uploaded file")
 		return

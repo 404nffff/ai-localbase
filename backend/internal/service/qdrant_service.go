@@ -56,6 +56,24 @@ type qdrantCollectionRequest struct {
 	Vectors qdrantVectorConfig `json:"vectors"`
 }
 
+type qdrantCollectionInfoResponse struct {
+	Result struct {
+		Config struct {
+			Params struct {
+				Vectors qdrantVectorConfig `json:"vectors"`
+			} `json:"params"`
+		} `json:"config"`
+	} `json:"result"`
+}
+
+type qdrantCollectionsResponse struct {
+	Result struct {
+		Collections []struct {
+			Name string `json:"name"`
+		} `json:"collections"`
+	} `json:"result"`
+}
+
 type qdrantVectorConfig struct {
 	Size     int    `json:"size"`
 	Distance string `json:"distance"`
@@ -150,6 +168,13 @@ func (s *QdrantService) EnsureCollection(ctx context.Context, knowledgeBaseID st
 		return nil
 	}
 
+	collectionName := s.CollectionName(knowledgeBaseID)
+	if existing, err := s.getCollectionVectorConfig(ctx, collectionName); err == nil {
+		return s.validateCollectionVectorConfig(collectionName, existing)
+	} else if !isQdrantNotFound(err) {
+		return err
+	}
+
 	body := qdrantCollectionRequest{
 		Vectors: qdrantVectorConfig{
 			Size:     s.vectorSize,
@@ -157,8 +182,44 @@ func (s *QdrantService) EnsureCollection(ctx context.Context, knowledgeBaseID st
 		},
 	}
 
-	_, err := s.doJSON(ctx, http.MethodPut, "/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID)), body)
+	_, err := s.doJSON(ctx, http.MethodPut, "/collections/"+url.PathEscape(collectionName), body)
+	if err != nil && isQdrantConflict(err) {
+		existing, getErr := s.getCollectionVectorConfig(ctx, collectionName)
+		if getErr != nil {
+			return getErr
+		}
+		return s.validateCollectionVectorConfig(collectionName, existing)
+	}
 	return err
+}
+
+func (s *QdrantService) getCollectionVectorConfig(ctx context.Context, collectionName string) (qdrantVectorConfig, error) {
+	responseBody, err := s.doJSON(ctx, http.MethodGet, "/collections/"+url.PathEscape(collectionName), nil)
+	if err != nil {
+		return qdrantVectorConfig{}, err
+	}
+
+	var response qdrantCollectionInfoResponse
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return qdrantVectorConfig{}, fmt.Errorf("decode qdrant collection info: %w", err)
+	}
+	return response.Result.Config.Params.Vectors, nil
+}
+
+func (s *QdrantService) validateCollectionVectorConfig(collectionName string, existing qdrantVectorConfig) error {
+	expectedDistance := normalizeQdrantDistance(s.distance)
+	actualDistance := normalizeQdrantDistance(existing.Distance)
+	if existing.Size != s.vectorSize || actualDistance != expectedDistance {
+		return fmt.Errorf(
+			"qdrant collection schema mismatch for %s: expected vector size %d distance %s, got size %d distance %s",
+			collectionName,
+			s.vectorSize,
+			expectedDistance,
+			existing.Size,
+			actualDistance,
+		)
+	}
+	return nil
 }
 
 func (s *QdrantService) DeleteCollection(ctx context.Context, knowledgeBaseID string) error {
@@ -166,7 +227,49 @@ func (s *QdrantService) DeleteCollection(ctx context.Context, knowledgeBaseID st
 		return nil
 	}
 
-	_, err := s.doJSON(ctx, http.MethodDelete, "/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID)), nil)
+	return s.DeleteCollectionByName(ctx, s.CollectionName(knowledgeBaseID))
+}
+
+// ListCollections 返回当前 Qdrant 实例中的 collection 名称，用于受控恢复时清理旧索引。
+func (s *QdrantService) ListCollections(ctx context.Context) ([]string, error) {
+	if !s.IsEnabled() {
+		return nil, nil
+	}
+
+	responseBody, err := s.doJSON(ctx, http.MethodGet, "/collections", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response qdrantCollectionsResponse
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return nil, fmt.Errorf("decode qdrant collections response: %w", err)
+	}
+
+	collections := make([]string, 0, len(response.Result.Collections))
+	for _, collection := range response.Result.Collections {
+		name := strings.TrimSpace(collection.Name)
+		if name == "" {
+			continue
+		}
+		collections = append(collections, name)
+	}
+	sort.Strings(collections)
+	return collections, nil
+}
+
+// DeleteCollectionByName 按真实 collection 名称删除，避免恢复流程重复拼接前缀。
+func (s *QdrantService) DeleteCollectionByName(ctx context.Context, collectionName string) error {
+	if !s.IsEnabled() {
+		return nil
+	}
+
+	collectionName = strings.TrimSpace(collectionName)
+	if collectionName == "" {
+		return nil
+	}
+
+	_, err := s.doJSON(ctx, http.MethodDelete, "/collections/"+url.PathEscape(collectionName), nil)
 	if err != nil && isQdrantNotFound(err) {
 		return nil
 	}
@@ -485,6 +588,11 @@ func normalizeQdrantDistance(distance string) string {
 func isQdrantNotFound(err error) bool {
 	requestErr, ok := err.(*qdrantRequestError)
 	return ok && requestErr.StatusCode == http.StatusNotFound
+}
+
+func isQdrantConflict(err error) bool {
+	requestErr, ok := err.(*qdrantRequestError)
+	return ok && requestErr.StatusCode == http.StatusConflict
 }
 
 type qdrantRequestError struct {
