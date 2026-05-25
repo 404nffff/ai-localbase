@@ -7,6 +7,7 @@ type ServerConfig struct {
 	UploadDir                string
 	StateFile                string
 	ChatHistoryFile          string
+	OperationLogFile         string
 	AccessToken              string
 	QdrantURL                string
 	QdrantAPIKey             string
@@ -86,6 +87,59 @@ type UploadResponse struct {
 	Message       string   `json:"message"`
 	KnowledgeBase string   `json:"knowledgeBaseId"`
 	Uploaded      Document `json:"uploaded"`
+}
+
+const (
+	OperationUploadFile    = "upload_file"
+	OperationIndexDocument = "index_document"
+	OperationRebuildIndex  = "rebuild_index"
+
+	OperationSourceWeb          = "web"
+	OperationSourceMCP          = "mcp"
+	OperationSourceAdminRebuild = "admin_rebuild"
+
+	OperationStatusSuccess        = "success"
+	OperationStatusFailed         = "failed"
+	OperationStatusPartialSuccess = "partial_success"
+)
+
+type OperationLogEntry struct {
+	ID                string         `json:"id"`
+	CorrelationID     string         `json:"correlationId"`
+	Operation         string         `json:"operation"`
+	Source            string         `json:"source"`
+	Status            string         `json:"status"`
+	KnowledgeBaseID   string         `json:"knowledgeBaseId"`
+	KnowledgeBaseName string         `json:"knowledgeBaseName"`
+	DocumentID        string         `json:"documentId"`
+	DocumentName      string         `json:"documentName"`
+	FileSize          int64          `json:"fileSize"`
+	SizeLabel         string         `json:"sizeLabel"`
+	Stage             string         `json:"stage"`
+	IndexStatus       string         `json:"indexStatus"`
+	Message           string         `json:"message"`
+	Error             string         `json:"error"`
+	Metadata          map[string]any `json:"metadata"`
+	StartedAt         string         `json:"startedAt"`
+	FinishedAt        string         `json:"finishedAt"`
+	DurationMs        int64          `json:"durationMs"`
+	CreatedAt         string         `json:"createdAt"`
+}
+
+type OperationLogListQuery struct {
+	KnowledgeBaseID string
+	Operation       string
+	Status          string
+	Source          string
+	Limit           int
+	Offset          int
+}
+
+type OperationLogListResponse struct {
+	Items  []OperationLogEntry `json:"items"`
+	Total  int                 `json:"total"`
+	Limit  int                 `json:"limit"`
+	Offset int                 `json:"offset"`
 }
 
 type ChatMessage struct {

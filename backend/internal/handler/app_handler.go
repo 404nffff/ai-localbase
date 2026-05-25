@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,24 @@ func (h *AppHandler) ListDocuments(c *gin.Context) {
 		"knowledgeBaseId": c.Param("id"),
 		"items":           items,
 	})
+}
+
+func (h *AppHandler) ListOperationLogs(c *gin.Context) {
+	limit, _ := strconv.Atoi(strings.TrimSpace(c.Query("limit")))
+	offset, _ := strconv.Atoi(strings.TrimSpace(c.Query("offset")))
+	result, err := h.appService.ListOperationLogs(model.OperationLogListQuery{
+		KnowledgeBaseID: strings.TrimSpace(c.Query("knowledgeBaseId")),
+		Operation:       strings.TrimSpace(c.Query("operation")),
+		Status:          strings.TrimSpace(c.Query("status")),
+		Source:          strings.TrimSpace(c.Query("source")),
+		Limit:           limit,
+		Offset:          offset,
+	})
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // ExportKnowledgeBase 将知识库的 Markdown 归档与 manifest 打包成 zip 返回。
@@ -600,19 +619,24 @@ func buildTableAnswerRules(questionType string) []string {
 }
 
 func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID string) {
+	startedAt := time.Now().UTC()
+	correlationID := util.NextID("op")
 	file, err := c.FormFile("file")
 	if err != nil {
+		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "validate", candidateKnowledgeBaseID, nil, startedAt, err)
 		writeError(c, http.StatusBadRequest, "missing file field 'file'")
 		return
 	}
 
 	if err := validateUploadFile(file, h.appService.GetConfig()); err != nil {
+		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "validate", candidateKnowledgeBaseID, file, startedAt, err)
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	knowledgeBaseID, err := h.appService.ResolveKnowledgeBaseID(candidateKnowledgeBaseID)
 	if err != nil {
+		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "resolve_knowledge_base", candidateKnowledgeBaseID, file, startedAt, err)
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -620,14 +644,17 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 	storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(file.Filename))
 	uploadDir := util.KnowledgeBaseUploadDir(h.serverConfig.UploadDir, knowledgeBaseID)
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "prepare_upload_dir", knowledgeBaseID, file, startedAt, err)
 		writeError(c, http.StatusInternalServerError, "failed to prepare upload directory")
 		return
 	}
 	destination := util.BuildKnowledgeBaseUploadPath(h.serverConfig.UploadDir, knowledgeBaseID, storedName)
 	if err := c.SaveUploadedFile(file, destination); err != nil {
+		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "save_file", knowledgeBaseID, file, startedAt, err)
 		writeError(c, http.StatusInternalServerError, "failed to save uploaded file")
 		return
 	}
+	h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusSuccess, "save_file", knowledgeBaseID, file, startedAt, nil)
 
 	document := model.Document{
 		ID:              util.NextID("doc"),
@@ -641,7 +668,7 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 		ContentPreview:  util.ExtractContentPreview(destination),
 	}
 
-	uploaded, err := h.appService.IndexDocument(document)
+	uploaded, err := h.appService.IndexDocumentWithLog(document, model.OperationSourceWeb, correlationID)
 	if err != nil {
 		_ = os.Remove(destination)
 		writeError(c, http.StatusBadGateway, err.Error())
@@ -654,6 +681,36 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 			KnowledgeBase: knowledgeBaseID,
 			Uploaded:      uploaded,
 		})
+}
+
+func (h *AppHandler) recordUploadLog(correlationID string, source string, status string, stage string, knowledgeBaseID string, file *multipart.FileHeader, startedAt time.Time, uploadErr error) {
+	finishedAt := time.Now().UTC()
+	message := "文件上传完成"
+	errText := ""
+	if uploadErr != nil {
+		message = "文件上传失败"
+		errText = uploadErr.Error()
+	}
+	entry := model.OperationLogEntry{
+		CorrelationID:   correlationID,
+		Operation:       model.OperationUploadFile,
+		Source:          source,
+		Status:          status,
+		KnowledgeBaseID: strings.TrimSpace(knowledgeBaseID),
+		Stage:           stage,
+		Message:         message,
+		Error:           errText,
+		StartedAt:       startedAt.Format(time.RFC3339),
+		FinishedAt:      finishedAt.Format(time.RFC3339),
+		DurationMs:      finishedAt.Sub(startedAt).Milliseconds(),
+		CreatedAt:       finishedAt.Format(time.RFC3339),
+	}
+	if file != nil {
+		entry.DocumentName = file.Filename
+		entry.FileSize = file.Size
+		entry.SizeLabel = util.FormatFileSize(file.Size)
+	}
+	h.appService.RecordOperationLog(entry)
 }
 
 func validateUploadFile(file *multipart.FileHeader, cfg model.AppConfig) error {

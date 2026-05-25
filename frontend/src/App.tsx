@@ -159,8 +159,8 @@ interface ConfigResponse {
 interface BackendConversationListItem {
   id: string
   title: string
-  knowledgeBaseId: string
-  documentId: string
+  knowledgeBaseId: string | null
+  documentId: string | null
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -173,8 +173,8 @@ interface ConversationListResponse {
 interface BackendConversation {
   id: string
   title: string
-  knowledgeBaseId: string
-  documentId: string
+  knowledgeBaseId: string | null
+  documentId: string | null
   createdAt: string
   updatedAt: string
   messages: Array<{
@@ -188,6 +188,43 @@ interface BackendConversation {
 
 interface UploadResponse {
   uploaded: BackendDocumentItem
+}
+
+export interface OperationLogEntry {
+  id: string
+  correlationId: string
+  operation: string
+  source: string
+  status: string
+  knowledgeBaseId: string
+  knowledgeBaseName: string
+  documentId: string
+  documentName: string
+  fileSize: number
+  sizeLabel: string
+  stage: string
+  indexStatus: string
+  message: string
+  error: string
+  metadata: Record<string, unknown>
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  createdAt: string
+}
+
+export interface OperationLogListResponse {
+  items: OperationLogEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface OperationLogFilters {
+  knowledgeBaseId: string
+  operation: string
+  status: string
+  source: string
 }
 
 interface UploadQueueItem {
@@ -236,6 +273,12 @@ export interface KnowledgeBaseFileUploadState {
 }
 
 const DIRECTORY_UPLOAD_ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.pdf', '.csv', '.xlsx'])
+const DEFAULT_OPERATION_LOG_FILTERS: OperationLogFilters = {
+  knowledgeBaseId: '',
+  operation: '',
+  status: '',
+  source: '',
+}
 
 const createEmptyDirectoryUploadTask = (): DirectoryUploadTask => ({
   knowledgeBaseId: null,
@@ -448,6 +491,17 @@ function App() {
     Record<string, KnowledgeBaseFileUploadState>
   >({})
   const [exportingKnowledgeBaseId, setExportingKnowledgeBaseId] = useState<string | null>(null)
+  const [operationLogs, setOperationLogs] = useState<OperationLogListResponse>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  })
+  const [operationLogFilters, setOperationLogFilters] = useState<OperationLogFilters>(
+    DEFAULT_OPERATION_LOG_FILTERS,
+  )
+  const [isOperationLogLoading, setIsOperationLogLoading] = useState(false)
+  const [operationLogError, setOperationLogError] = useState<string | null>(null)
   const [directoryUploadPendingFiles, setDirectoryUploadPendingFiles] = useState<UploadQueueItem[]>([])
   const directoryUploadCancelRef = useRef(false)
   const chatAbortControllerRef = useRef<AbortController | null>(null)
@@ -480,6 +534,37 @@ function App() {
       ...init,
       headers: nextHeaders,
     })
+  }
+
+  const loadOperationLogs = async (filters = operationLogFilters) => {
+    setIsOperationLogLoading(true)
+    setOperationLogError(null)
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '50')
+      params.set('offset', '0')
+      if (filters.knowledgeBaseId) params.set('knowledgeBaseId', filters.knowledgeBaseId)
+      if (filters.operation) params.set('operation', filters.operation)
+      if (filters.status) params.set('status', filters.status)
+      if (filters.source) params.set('source', filters.source)
+
+      const response = await apiFetch(`/api/operation-logs?${params.toString()}`)
+      if (!response.ok) {
+        throw new Error(await extractErrorMessage(response))
+      }
+      setOperationLogs((await response.json()) as OperationLogListResponse)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '加载操作日志失败，请稍后重试。'
+      setOperationLogError(message)
+    } finally {
+      setIsOperationLogLoading(false)
+    }
+  }
+
+  const handleOperationLogFiltersChange = (filters: OperationLogFilters) => {
+    setOperationLogFilters(filters)
+    void loadOperationLogs(filters)
   }
 
   const loadConversationDetail = async (conversationId: string): Promise<Conversation> => {
@@ -632,7 +717,7 @@ function App() {
       const summarizedConversations = conversationItems.map((conversation) => ({
         id: conversation.id,
         title: conversation.title,
-        knowledgeBaseId: conversation.knowledgeBaseId || nextKnowledgeBases[0]?.id || null,
+        knowledgeBaseId: conversation.knowledgeBaseId || null,
         documentId: conversation.documentId || null,
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
@@ -640,18 +725,6 @@ function App() {
       }))
       setConversations(summarizedConversations)
       setActiveConversationId(conversationItems[0].id)
-    } else {
-      setConversations((prev) =>
-        prev.map((conversation, index) =>
-          index === 0 && !conversation.knowledgeBaseId
-            ? {
-                ...conversation,
-                knowledgeBaseId: nextKnowledgeBases[0]?.id ?? null,
-                documentId: null,
-              }
-            : conversation,
-        ),
-      )
     }
   }
 
@@ -712,17 +785,18 @@ function App() {
     [activeConversationId, conversations],
   )
 
-  const activeConversationKnowledgeBaseId =
-    activeConversation?.knowledgeBaseId ?? knowledgeBases[0]?.id ?? null
+  const activeConversationKnowledgeBaseId = activeConversation?.knowledgeBaseId ?? null
   const activeConversationDocumentId = activeConversation?.documentId ?? null
 
   const selectedKnowledgeBase = useMemo(() => {
-    const fallbackKnowledgeBase = knowledgeBases[0] ?? null
+    if (!activeConversationKnowledgeBaseId) {
+      return null
+    }
 
     return (
       knowledgeBases.find(
         (knowledgeBase) => knowledgeBase.id === activeConversationKnowledgeBaseId,
-      ) ?? fallbackKnowledgeBase
+      ) ?? null
     )
   }, [activeConversationKnowledgeBaseId, knowledgeBases])
 
@@ -840,7 +914,7 @@ function App() {
 
   const handleCreateConversation = () => {
     const conversation = createWelcomeConversation({
-      knowledgeBaseId: selectedKnowledgeBase?.id ?? knowledgeBases[0]?.id ?? null,
+      knowledgeBaseId: null,
       documentId: null,
     })
 
@@ -990,7 +1064,7 @@ function App() {
         remainingConversations[0] ??
         (() => {
           const conversation = createWelcomeConversation({
-            knowledgeBaseId: knowledgeBases[0]?.id ?? null,
+            knowledgeBaseId: null,
             documentId: null,
           })
           return conversation
@@ -1061,17 +1135,6 @@ function App() {
 
       setKnowledgeBases((prev) => [createdKnowledgeBase, ...prev])
       setPanelSelectedKnowledgeBaseId(createdKnowledgeBase.id)
-      setConversations((prev) =>
-        prev.map((conversation) =>
-          conversation.knowledgeBaseId
-            ? conversation
-            : {
-                ...conversation,
-                knowledgeBaseId: createdKnowledgeBase.id,
-                documentId: null,
-              },
-        ),
-      )
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '创建知识库失败，请稍后重试。'
@@ -1104,7 +1167,7 @@ function App() {
             conversation.knowledgeBaseId === knowledgeBaseId
               ? {
                   ...conversation,
-                  knowledgeBaseId: nextKnowledgeBases[0]?.id ?? null,
+                  knowledgeBaseId: null,
                   documentId: null,
                   updatedAt: new Date().toISOString(),
                 }
@@ -1180,7 +1243,7 @@ function App() {
     updateConversationScope(activeConversation.id, knowledgeBaseId, documentId)
   }
 
-  const handleSelectChatKnowledgeBase = (knowledgeBaseId: string) => {
+  const handleSelectChatKnowledgeBase = (knowledgeBaseId: string | null) => {
     // 顶部切换只影响当前会话的问答范围，不联动知识库管理面板的浏览状态。
     if (!activeConversation) {
       return
@@ -1587,7 +1650,7 @@ function App() {
     const requestBody: ChatRequestBody = {
       conversationId,
       model: config.chat.model,
-      knowledgeBaseId: selectedKnowledgeBase?.id ?? '',
+      knowledgeBaseId: activeConversationKnowledgeBaseId ?? '',
       documentId: selectedDocument?.id ?? '',
       config: config.chat,
       embedding: config.embedding,
@@ -1976,6 +2039,7 @@ function App() {
       const next = !prev
       if (next) {
         setIsSettingsOpen(false)
+        void loadOperationLogs(operationLogFilters)
       }
       return next
     })
@@ -2014,7 +2078,7 @@ function App() {
         knowledgeBases={knowledgeBases}
         selectedKnowledgeBaseId={panelSelectedKnowledgeBaseId}
         selectedDocumentId={activeConversationDocumentId}
-        activeKnowledgeBaseId={selectedKnowledgeBase?.id ?? null}
+        activeKnowledgeBaseId={activeConversationKnowledgeBaseId}
         activeDocumentId={selectedDocument?.id ?? null}
         onSelectKnowledgeBase={handleSelectKnowledgeBase}
         onSelectDocument={handleSelectDocument}
@@ -2042,6 +2106,12 @@ function App() {
         onToggleKnowledgePanel={handleToggleKnowledgePanel}
         onSaveChatConfig={handleSaveChatConfig}
         onSaveEmbeddingConfig={handleSaveEmbeddingConfig}
+        operationLogs={operationLogs}
+        operationLogFilters={operationLogFilters}
+        isOperationLogLoading={isOperationLogLoading}
+        operationLogError={operationLogError}
+        onOperationLogFiltersChange={handleOperationLogFiltersChange}
+        onRefreshOperationLogs={() => loadOperationLogs(operationLogFilters)}
       />
       <ChatArea
         sidebarOpen={sidebarOpen}

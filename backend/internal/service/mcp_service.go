@@ -519,8 +519,11 @@ func (s *MCPService) CallKnowledgeBaseCreate(arguments map[string]any) (map[stri
 
 // CallDocumentUpload 执行 document.upload 工具，客户端可通过多次调用实现目录上传。
 func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]any, error) {
+	startedAt := time.Now().UTC()
+	correlationID := util.NextID("op")
 	args, err := decodeMCPArguments[model.MCPDocumentUploadArguments](arguments)
 	if err != nil {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "validate", "", "", 0, startedAt, err)
 		return nil, fmt.Errorf("invalid params")
 	}
 
@@ -528,22 +531,26 @@ func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]an
 	filename := strings.TrimSpace(args.Filename)
 	content := args.Content
 	if knowledgeBaseID == "" || strings.TrimSpace(content) == "" {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "validate", knowledgeBaseID, filename, int64(len([]byte(content))), startedAt, fmt.Errorf("invalid params"))
 		return nil, fmt.Errorf("invalid params")
 	}
 	if filename == "" {
 		filename = fmt.Sprintf("mcp-content-%d.md", util.NowUnixNano())
 	}
 	if err := validateMCPUploadFile(filename, s.appService.GetConfig()); err != nil {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "validate", knowledgeBaseID, filename, int64(len([]byte(content))), startedAt, err)
 		return nil, err
 	}
 
 	resolvedKnowledgeBaseID, err := s.appService.ResolveKnowledgeBaseID(knowledgeBaseID)
 	if err != nil {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "resolve_knowledge_base", knowledgeBaseID, filename, int64(len([]byte(content))), startedAt, err)
 		return nil, err
 	}
 
 	uploadDir := util.KnowledgeBaseUploadDir(s.appService.serverConfig.UploadDir, resolvedKnowledgeBaseID)
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "prepare_upload_dir", resolvedKnowledgeBaseID, filename, int64(len([]byte(content))), startedAt, err)
 		return nil, fmt.Errorf("failed to prepare upload directory")
 	}
 
@@ -551,8 +558,10 @@ func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]an
 	storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(filename))
 	destination := util.BuildKnowledgeBaseUploadPath(s.appService.serverConfig.UploadDir, resolvedKnowledgeBaseID, storedName)
 	if err := os.WriteFile(destination, contentBytes, 0o644); err != nil {
+		s.recordMCPUploadLog(correlationID, model.OperationStatusFailed, "save_file", resolvedKnowledgeBaseID, filename, int64(len(contentBytes)), startedAt, err)
 		return nil, fmt.Errorf("failed to save uploaded file")
 	}
+	s.recordMCPUploadLog(correlationID, model.OperationStatusSuccess, "save_file", resolvedKnowledgeBaseID, filename, int64(len(contentBytes)), startedAt, nil)
 
 	document := model.Document{
 		ID:              util.NextID("doc"),
@@ -566,7 +575,7 @@ func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]an
 		ContentPreview:  util.ExtractContentPreview(destination),
 	}
 
-	uploaded, err := s.appService.IndexDocument(document)
+	uploaded, err := s.appService.IndexDocumentWithLog(document, model.OperationSourceMCP, correlationID)
 	if err != nil {
 		_ = os.Remove(destination)
 		return nil, err
@@ -577,6 +586,36 @@ func (s *MCPService) CallDocumentUpload(arguments map[string]any) (map[string]an
 		"knowledgeBaseId": resolvedKnowledgeBaseID,
 		"uploaded":        uploaded,
 	}, nil
+}
+
+func (s *MCPService) recordMCPUploadLog(correlationID string, status string, stage string, knowledgeBaseID string, filename string, size int64, startedAt time.Time, uploadErr error) {
+	if s == nil || s.appService == nil {
+		return
+	}
+	finishedAt := time.Now().UTC()
+	message := "文件上传完成"
+	errText := ""
+	if uploadErr != nil {
+		message = "文件上传失败"
+		errText = uploadErr.Error()
+	}
+	s.appService.RecordOperationLog(model.OperationLogEntry{
+		CorrelationID:   correlationID,
+		Operation:       model.OperationUploadFile,
+		Source:          model.OperationSourceMCP,
+		Status:          status,
+		KnowledgeBaseID: strings.TrimSpace(knowledgeBaseID),
+		DocumentName:    strings.TrimSpace(filename),
+		FileSize:        size,
+		SizeLabel:       util.FormatFileSize(size),
+		Stage:           stage,
+		Message:         message,
+		Error:           errText,
+		StartedAt:       startedAt.Format(time.RFC3339),
+		FinishedAt:      finishedAt.Format(time.RFC3339),
+		DurationMs:      finishedAt.Sub(startedAt).Milliseconds(),
+		CreatedAt:       finishedAt.Format(time.RFC3339),
+	})
 }
 
 // CallDocumentAppend 执行 document.append 工具，向现有文档尾部追加文本并重建整篇索引。

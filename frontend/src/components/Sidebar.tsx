@@ -5,6 +5,8 @@ import {
   DirectoryUploadTask,
   KnowledgeBase,
   KnowledgeBaseFileUploadState,
+  OperationLogFilters,
+  OperationLogListResponse,
 } from '../App'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
@@ -43,6 +45,12 @@ interface SidebarProps {
   onToggleKnowledgePanel: () => void
   onSaveChatConfig: (value: AppConfig['chat']) => Promise<void>
   onSaveEmbeddingConfig: (value: AppConfig['embedding']) => Promise<void>
+  operationLogs: OperationLogListResponse
+  operationLogFilters: OperationLogFilters
+  isOperationLogLoading: boolean
+  operationLogError: string | null
+  onOperationLogFiltersChange: (filters: OperationLogFilters) => void
+  onRefreshOperationLogs: () => void
 }
 
 const formatDateTime = (value: string) =>
@@ -86,6 +94,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   onToggleKnowledgePanel,
   onSaveChatConfig,
   onSaveEmbeddingConfig,
+  operationLogs,
+  operationLogFilters,
+  isOperationLogLoading,
+  operationLogError,
+  onOperationLogFiltersChange,
+  onRefreshOperationLogs,
 }) => {
   const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<
     Record<string, boolean>
@@ -323,6 +337,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}
+        operationLogs={operationLogs}
+        operationLogFilters={operationLogFilters}
+        isOperationLogLoading={isOperationLogLoading}
+        operationLogError={operationLogError}
+        onOperationLogFiltersChange={onOperationLogFiltersChange}
+        onRefreshOperationLogs={onRefreshOperationLogs}
         onClose={onToggleKnowledgePanel}
       />
     </>

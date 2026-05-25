@@ -1,5 +1,12 @@
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { DirectoryUploadTask, KnowledgeBase, KnowledgeBaseFileUploadState } from '../../App'
+import {
+  DirectoryUploadTask,
+  KnowledgeBase,
+  KnowledgeBaseFileUploadState,
+  OperationLogEntry,
+  OperationLogFilters,
+  OperationLogListResponse,
+} from '../../App'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -22,8 +29,16 @@ interface KnowledgePanelProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  operationLogs: OperationLogListResponse
+  operationLogFilters: OperationLogFilters
+  isOperationLogLoading: boolean
+  operationLogError: string | null
+  onOperationLogFiltersChange: (filters: OperationLogFilters) => void
+  onRefreshOperationLogs: () => void
   onClose: () => void
 }
+
+type KnowledgePanelView = 'knowledge' | 'logs'
 
 const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   open,
@@ -46,8 +61,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  operationLogs,
+  operationLogFilters,
+  isOperationLogLoading,
+  operationLogError,
+  onOperationLogFiltersChange,
+  onRefreshOperationLogs,
   onClose,
 }) => {
+  const [activeView, setActiveView] = useState<KnowledgePanelView>('knowledge')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
@@ -102,6 +124,64 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     if (status === 'indexed') return { text: '已索引', color: '#16a34a', bg: '#dcfce7' }
     if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
     return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
+  }
+
+  const operationLabel = (operation: string) => {
+    if (operation === 'upload_file') return '上传文件'
+    if (operation === 'index_document') return '建立索引'
+    if (operation === 'rebuild_index') return '重建索引'
+    return operation || '-'
+  }
+
+  const operationStatusLabel = (status: string) => {
+    if (status === 'success') return '成功'
+    if (status === 'failed') return '失败'
+    if (status === 'partial_success') return '部分成功'
+    return status || '-'
+  }
+
+  const sourceLabel = (source: string) => {
+    if (source === 'web') return '页面'
+    if (source === 'mcp') return 'MCP'
+    if (source === 'admin_rebuild') return '重建'
+    return source || '-'
+  }
+
+  const formatLogTime = (value: string) => {
+    if (!value) return '-'
+    return new Date(value).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+
+  const formatLogMeta = (log: OperationLogEntry) => {
+    const parts: string[] = []
+    const indexedDocuments = log.metadata?.indexedDocuments
+    const skippedFileCount = log.metadata?.skippedFileCount
+    const chunkCount = log.metadata?.chunkCount
+    if (typeof indexedDocuments === 'number') parts.push(`索引 ${indexedDocuments} 份`)
+    if (typeof skippedFileCount === 'number' && skippedFileCount > 0) {
+      parts.push(`跳过 ${skippedFileCount} 份`)
+    }
+    if (typeof chunkCount === 'number') parts.push(`分块 ${chunkCount}`)
+    if (log.durationMs > 0) parts.push(`${log.durationMs}ms`)
+    return parts.join(' · ')
+  }
+
+  const handleLogFilterChange = (field: keyof OperationLogFilters, value: string) => {
+    onOperationLogFiltersChange({
+      ...operationLogFilters,
+      [field]: value,
+    })
+  }
+
+  const handleShowLogs = () => {
+    setActiveView('logs')
+    onRefreshOperationLogs()
   }
 
   const uploadProgressPercent =
@@ -179,7 +259,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     ? `文档问答：${activeDocument.name}`
     : activeKnowledgeBase
       ? `知识库问答：${activeKnowledgeBase.name}`
-      : '未设置聊天范围'
+      : knowledgeBases.length > 0
+        ? '全部知识库问答'
+        : '未设置聊天范围'
 
   const isTaskVisible = directoryUploadTask.status !== 'idle'
   const canCancelUpload =
@@ -228,6 +310,22 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               </div>
             </div>
             <div className="kb-header-actions">
+              <div className="kb-view-switch" role="tablist" aria-label="知识库面板视图">
+                <button
+                  type="button"
+                  className={`kb-view-switch-btn${activeView === 'knowledge' ? ' kb-view-switch-btn--active' : ''}`}
+                  onClick={() => setActiveView('knowledge')}
+                >
+                  知识库
+                </button>
+                <button
+                  type="button"
+                  className={`kb-view-switch-btn${activeView === 'logs' ? ' kb-view-switch-btn--active' : ''}`}
+                  onClick={handleShowLogs}
+                >
+                  操作日志
+                </button>
+              </div>
               <button className="kb-create-btn" onClick={handleOpenCreate}>
                 <span>＋</span> 新建知识库
               </button>
@@ -237,7 +335,127 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
           {/* 内容区 */}
           <div className="kb-body">
-            {knowledgeBases.length === 0 ? (
+            {activeView === 'logs' ? (
+              <section className="kb-log-panel">
+                <div className="kb-log-toolbar">
+                  <label className="kb-search-field kb-log-filter">
+                    <span>知识库</span>
+                    <select
+                      value={operationLogFilters.knowledgeBaseId}
+                      onChange={(event) => handleLogFilterChange('knowledgeBaseId', event.target.value)}
+                    >
+                      <option value="">全部知识库</option>
+                      {knowledgeBases.map((knowledgeBase) => (
+                        <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                          {knowledgeBase.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="kb-search-field kb-log-filter">
+                    <span>操作</span>
+                    <select
+                      value={operationLogFilters.operation}
+                      onChange={(event) => handleLogFilterChange('operation', event.target.value)}
+                    >
+                      <option value="">全部操作</option>
+                      <option value="upload_file">上传文件</option>
+                      <option value="index_document">建立索引</option>
+                      <option value="rebuild_index">重建索引</option>
+                    </select>
+                  </label>
+                  <label className="kb-search-field kb-log-filter">
+                    <span>结果</span>
+                    <select
+                      value={operationLogFilters.status}
+                      onChange={(event) => handleLogFilterChange('status', event.target.value)}
+                    >
+                      <option value="">全部结果</option>
+                      <option value="success">成功</option>
+                      <option value="failed">失败</option>
+                      <option value="partial_success">部分成功</option>
+                    </select>
+                  </label>
+                  <label className="kb-search-field kb-log-filter">
+                    <span>来源</span>
+                    <select
+                      value={operationLogFilters.source}
+                      onChange={(event) => handleLogFilterChange('source', event.target.value)}
+                    >
+                      <option value="">全部来源</option>
+                      <option value="web">页面</option>
+                      <option value="mcp">MCP</option>
+                      <option value="admin_rebuild">重建</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="kb-export-btn"
+                    onClick={onRefreshOperationLogs}
+                    disabled={isOperationLogLoading}
+                  >
+                    {isOperationLogLoading ? '刷新中...' : '刷新'}
+                  </button>
+                </div>
+
+                <div className="kb-log-summary">
+                  最近 {operationLogs.items.length} 条 / 共 {operationLogs.total} 条，最多保留 1000 条。
+                </div>
+
+                {operationLogError && (
+                  <div className="kb-filter-notice kb-filter-notice--danger">
+                    {operationLogError}
+                  </div>
+                )}
+
+                <div className="kb-log-list">
+                  {isOperationLogLoading && operationLogs.items.length === 0 ? (
+                    <div className="kb-docs-empty">
+                      <span>⏳</span>
+                      <span>正在加载操作日志</span>
+                    </div>
+                  ) : operationLogs.items.length === 0 ? (
+                    <div className="kb-docs-empty">
+                      <span>🧾</span>
+                      <span>暂无匹配的操作日志</span>
+                    </div>
+                  ) : (
+                    operationLogs.items.map((log) => (
+                      <article
+                        key={log.id}
+                        className={`kb-log-item kb-log-item--${log.status}`}
+                      >
+                        <div className="kb-log-main">
+                          <div className="kb-log-title-row">
+                            <span className="kb-log-operation">{operationLabel(log.operation)}</span>
+                            <span className={`kb-log-status kb-log-status--${log.status}`}>
+                              {operationStatusLabel(log.status)}
+                            </span>
+                            <span className="kb-log-source">{sourceLabel(log.source)}</span>
+                          </div>
+                          <div className="kb-log-message">
+                            {log.message || operationLabel(log.operation)}
+                            {log.error && <span className="kb-log-error"> · {log.error}</span>}
+                          </div>
+                          <div className="kb-log-meta">
+                            <span>{formatLogTime(log.createdAt)}</span>
+                            {log.knowledgeBaseName || log.knowledgeBaseId ? (
+                              <span>{log.knowledgeBaseName || log.knowledgeBaseId}</span>
+                            ) : null}
+                            {log.documentName && <span>{log.documentName}</span>}
+                            {log.stage && <span>阶段：{log.stage}</span>}
+                            {formatLogMeta(log) && <span>{formatLogMeta(log)}</span>}
+                          </div>
+                        </div>
+                        <div className="kb-log-correlation" title={log.correlationId}>
+                          {log.correlationId}
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            ) : knowledgeBases.length === 0 ? (
               <div className="kb-empty">
                 <div className="kb-empty-icon">📚</div>
                 <p className="kb-empty-title">暂无知识库</p>

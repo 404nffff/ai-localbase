@@ -1362,10 +1362,12 @@ interface ChatAreaProps {
   isGlobalGenerating: boolean
   generatingConversationTitle: string
   enforceSingleFlight: boolean
-  onSelectKnowledgeBase: (knowledgeBaseId: string) => void
+  onSelectKnowledgeBase: (knowledgeBaseId: string | null) => void
   onSendMessage: (content: string) => Promise<void>
   onClearConversation: () => void
 }
+
+const ALL_KNOWLEDGE_BASES_VALUE = '__all_knowledge_bases__'
 
 const suggestedPrompts = [
   '请总结当前知识库的核心观点',
@@ -1415,12 +1417,18 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [activeConversation.messages])
 
-  const knowledgeBaseText = selectedKnowledgeBase ? selectedKnowledgeBase.name : '未选择知识库'
+  const knowledgeBaseText = selectedKnowledgeBase
+    ? selectedKnowledgeBase.name
+    : knowledgeBases.length > 0
+      ? '全部知识库'
+      : '未选择知识库'
   const scopeText = selectedDocument
     ? `文档：${selectedDocument.name}`
     : selectedKnowledgeBase
       ? '范围：全部文档'
-      : '范围：未设置'
+      : knowledgeBases.length > 0
+        ? '范围：全部知识库'
+        : '范围：暂无知识库'
 
   const toolbarItems = [
     {
@@ -1463,11 +1471,12 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   }
 
   const handleKnowledgeBaseChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    if (!event.target.value) {
+    const nextValue = event.target.value
+    if (!nextValue) {
       return
     }
 
-    onSelectKnowledgeBase(event.target.value)
+    onSelectKnowledgeBase(nextValue === ALL_KNOWLEDGE_BASES_VALUE ? null : nextValue)
   }
 
   return (
@@ -1490,13 +1499,15 @@ const ChatArea: React.FC<ChatAreaProps> = ({
             <span className="topbar-pill-label">当前会话</span>
             <select
               className="topbar-pill-select"
-              value={selectedKnowledgeBase?.id ?? ''}
+              value={selectedKnowledgeBase?.id ?? ALL_KNOWLEDGE_BASES_VALUE}
               onChange={handleKnowledgeBaseChange}
               disabled={knowledgeBases.length === 0}
             >
-              <option value="" disabled>
-                {knowledgeBases.length === 0 ? '暂无知识库' : '选择知识库'}
-              </option>
+              {knowledgeBases.length === 0 ? (
+                <option value={ALL_KNOWLEDGE_BASES_VALUE}>暂无知识库</option>
+              ) : (
+                <option value={ALL_KNOWLEDGE_BASES_VALUE}>全部知识库</option>
+              )}
               {knowledgeBases.map((knowledgeBase) => (
                 <option key={knowledgeBase.id} value={knowledgeBase.id}>
                   {knowledgeBase.name}

@@ -39,6 +39,11 @@ func main() {
 	}()
 
 	appService := service.NewAppService(qdrantService, stateStore, chatHistoryStore, serverConfig)
+	defer func() {
+		if closeErr := appService.Close(); closeErr != nil {
+			log.Printf("failed to close operation log store: %v", closeErr)
+		}
+	}()
 	llmService := service.NewLLMService()
 	appHandler := handler.NewAppHandler(serverConfig, appService, llmService)
 	mcpService := service.NewMCPService(appService, llmService)

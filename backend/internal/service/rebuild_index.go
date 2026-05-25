@@ -48,16 +48,8 @@ type RebuildSkippedFile struct {
 
 // RebuildQdrantIndexFromUploads 清空本应用拥有的 Qdrant collections，并从 uploads 目录重建 kb-0。
 func (s *AppService) RebuildQdrantIndexFromUploads(ctx context.Context, req RebuildQdrantIndexRequest) (RebuildQdrantIndexResult, error) {
-	if !req.Confirm {
-		return RebuildQdrantIndexResult{}, ErrRebuildConfirmationRequired
-	}
-	if s == nil {
-		return RebuildQdrantIndexResult{}, fmt.Errorf("app service is nil")
-	}
-	if s.qdrant == nil || !s.qdrant.IsEnabled() {
-		return RebuildQdrantIndexResult{}, fmt.Errorf("qdrant is not enabled")
-	}
-
+	startedAt := time.Now().UTC()
+	correlationID := util.NextID("op")
 	kbID := strings.TrimSpace(req.KnowledgeBaseID)
 	if kbID == "" {
 		kbID = defaultRebuildKnowledgeBaseID
@@ -67,26 +59,64 @@ func (s *AppService) RebuildQdrantIndexFromUploads(ctx context.Context, req Rebu
 		kbName = defaultRebuildKnowledgeBaseName
 	}
 
+	if !req.Confirm {
+		if s != nil {
+			s.recordRebuildIndexLog(correlationID, kbID, kbName, "confirm", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{}, ErrRebuildConfirmationRequired, nil)
+		}
+		return RebuildQdrantIndexResult{}, ErrRebuildConfirmationRequired
+	}
+	if s == nil {
+		return RebuildQdrantIndexResult{}, fmt.Errorf("app service is nil")
+	}
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		err := fmt.Errorf("qdrant is not enabled")
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "qdrant_check", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{}, err, nil)
+		return RebuildQdrantIndexResult{}, err
+	}
+
 	uploadDir := strings.TrimSpace(s.serverConfig.UploadDir)
 	if uploadDir == "" {
-		return RebuildQdrantIndexResult{}, fmt.Errorf("upload dir is empty")
+		err := fmt.Errorf("upload dir is empty")
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "upload_dir", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{}, err, nil)
+		return RebuildQdrantIndexResult{}, err
 	}
 
 	backupPath, err := s.backupStateFile()
 	if err != nil {
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "backup_state", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{
+			UploadDir: uploadDir,
+		}, err, nil)
 		return RebuildQdrantIndexResult{}, err
 	}
 
 	deletedCollections, err := s.deleteOwnedQdrantCollections(ctx)
 	if err != nil {
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "delete_collections", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{
+			DeletedCollections: deletedCollections,
+			StateBackupPath:    backupPath,
+			UploadDir:          uploadDir,
+		}, err, nil)
 		return RebuildQdrantIndexResult{}, err
 	}
 	if err := s.qdrant.EnsureCollection(ctx, kbID); err != nil {
-		return RebuildQdrantIndexResult{}, fmt.Errorf("ensure rebuild collection %s: %w", kbID, err)
+		wrappedErr := fmt.Errorf("ensure rebuild collection %s: %w", kbID, err)
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "ensure_collection", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{
+			DeletedCollections: deletedCollections,
+			StateBackupPath:    backupPath,
+			UploadDir:          uploadDir,
+		}, wrappedErr, nil)
+		return RebuildQdrantIndexResult{}, wrappedErr
 	}
 
 	files, err := discoverUploadFiles(uploadDir, req.IncludeArchives)
 	if err != nil {
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "discover_files", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{
+			DeletedCollections: deletedCollections,
+			StateBackupPath:    backupPath,
+			UploadDir:          uploadDir,
+		}, err, map[string]any{
+			"includeArchives": req.IncludeArchives,
+		})
 		return RebuildQdrantIndexResult{}, err
 	}
 
@@ -105,17 +135,82 @@ func (s *AppService) RebuildQdrantIndexFromUploads(ctx context.Context, req Rebu
 	syncIDCounterFromState(s.state)
 
 	if err := s.saveState(); err != nil {
-		return RebuildQdrantIndexResult{}, fmt.Errorf("save rebuilt app state: %w", err)
+		wrappedErr := fmt.Errorf("save rebuilt app state: %w", err)
+		s.recordRebuildIndexLog(correlationID, kbID, kbName, "save_state", model.OperationStatusFailed, startedAt, RebuildQdrantIndexResult{
+			KnowledgeBase:      knowledgeBase,
+			IndexedDocuments:   len(documents),
+			SkippedFiles:       skipped,
+			DeletedCollections: deletedCollections,
+			StateBackupPath:    backupPath,
+			UploadDir:          uploadDir,
+		}, wrappedErr, map[string]any{
+			"includeArchives": req.IncludeArchives,
+			"discoveredFiles": len(files),
+		})
+		return RebuildQdrantIndexResult{}, wrappedErr
 	}
 
-	return RebuildQdrantIndexResult{
+	result := RebuildQdrantIndexResult{
 		KnowledgeBase:      knowledgeBase,
 		IndexedDocuments:   len(documents),
 		SkippedFiles:       skipped,
 		DeletedCollections: deletedCollections,
 		StateBackupPath:    backupPath,
 		UploadDir:          uploadDir,
-	}, nil
+	}
+	status := model.OperationStatusSuccess
+	if len(skipped) > 0 {
+		status = model.OperationStatusPartialSuccess
+	}
+	s.recordRebuildIndexLog(correlationID, kbID, kbName, "complete", status, startedAt, result, nil, map[string]any{
+		"includeArchives": req.IncludeArchives,
+		"discoveredFiles": len(files),
+	})
+	return result, nil
+}
+
+func (s *AppService) recordRebuildIndexLog(correlationID string, kbID string, kbName string, stage string, status string, startedAt time.Time, result RebuildQdrantIndexResult, rebuildErr error, extraMetadata map[string]any) {
+	if s == nil {
+		return
+	}
+	finishedAt := time.Now().UTC()
+	message := "重建索引完成"
+	errText := ""
+	if rebuildErr != nil {
+		message = "重建索引失败"
+		errText = rebuildErr.Error()
+	} else if status == model.OperationStatusPartialSuccess {
+		message = "重建索引部分完成"
+	}
+
+	metadata := map[string]any{
+		"indexedDocuments":   result.IndexedDocuments,
+		"skippedFiles":       result.SkippedFiles,
+		"skippedFileCount":   len(result.SkippedFiles),
+		"deletedCollections": result.DeletedCollections,
+		"stateBackupPath":    result.StateBackupPath,
+		"uploadDir":          result.UploadDir,
+	}
+	for key, value := range extraMetadata {
+		metadata[key] = value
+	}
+
+	s.RecordOperationLog(model.OperationLogEntry{
+		CorrelationID:     correlationID,
+		Operation:         model.OperationRebuildIndex,
+		Source:            model.OperationSourceAdminRebuild,
+		Status:            status,
+		KnowledgeBaseID:   strings.TrimSpace(kbID),
+		KnowledgeBaseName: strings.TrimSpace(kbName),
+		Stage:             stage,
+		Message:           message,
+		Error:             errText,
+		Metadata:          metadata,
+		StartedAt:         startedAt.Format(time.RFC3339),
+		FinishedAt:        finishedAt.Format(time.RFC3339),
+		DurationMs:        finishedAt.Sub(startedAt).Milliseconds(),
+		CreatedAt:         finishedAt.Format(time.RFC3339),
+	})
 }
 
 func (s *AppService) rebuildDocumentsFromFiles(ctx context.Context, kbID string, files []string) ([]model.Document, []RebuildSkippedFile) {

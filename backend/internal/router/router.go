@@ -36,6 +36,7 @@ func NewRouter(appHandler *handler.AppHandler, mcpHandler *handler.MCPHandler, a
 		api.GET("/knowledge-bases/:id/documents", appHandler.ListDocuments)
 		api.POST("/knowledge-bases/:id/documents", appHandler.UploadToKnowledgeBase)
 		api.DELETE("/knowledge-bases/:id/documents/:documentId", appHandler.DeleteDocument)
+		api.GET("/operation-logs", appHandler.ListOperationLogs)
 		api.POST("/admin/rebuild-qdrant-index", appHandler.RebuildQdrantIndex)
 		api.POST("/mcp", mcpHandler.Handle)
 		api.POST("/mcp/tools/:name/call", mcpHandler.CallTool)

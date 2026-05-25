@@ -38,6 +38,7 @@ type AppService struct {
 	state             *model.AppState
 	store             *AppStateStore
 	chatHistory       ChatHistoryStore
+	operationLogs     OperationLogStore
 	qdrant            *QdrantService
 	rag               *RagService
 	serverConfig      model.ServerConfig
@@ -347,6 +348,14 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		serverConfig: serverConfig,
 	}
 	service.rag.SetQdrantService(qdrant)
+	if strings.TrimSpace(serverConfig.OperationLogFile) != "" {
+		operationLogs, err := NewSQLiteOperationLogStore(serverConfig.OperationLogFile)
+		if err != nil {
+			log.Printf("failed to initialize sqlite operation log store: %v", err)
+		} else {
+			service.operationLogs = operationLogs
+		}
+	}
 
 	if serverConfig.EnableSemanticReranker {
 		service.reranker = NewEmbeddingReranker(service.rag)
@@ -399,6 +408,13 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	}
 
 	return service
+}
+
+func (s *AppService) Close() error {
+	if s == nil || s.operationLogs == nil {
+		return nil
+	}
+	return s.operationLogs.Close()
 }
 
 // syncIDCounterFromState 会读取当前持久化状态中的知识库和文档编号，保证后续 NextID 不会回退撞号。
@@ -801,14 +817,36 @@ func (s *AppService) ResolveKnowledgeBaseID(candidate string) (string, error) {
 	return "", fmt.Errorf("knowledge base not found")
 }
 
+type operationLogContext struct {
+	CorrelationID string
+	Source        string
+}
+
 func (s *AppService) IndexDocument(document model.Document) (model.Document, error) {
+	return s.indexDocument(document, operationLogContext{})
+}
+
+func (s *AppService) IndexDocumentWithLog(document model.Document, source string, correlationID string) (model.Document, error) {
+	return s.indexDocument(document, operationLogContext{
+		CorrelationID: strings.TrimSpace(correlationID),
+		Source:        strings.TrimSpace(source),
+	})
+}
+
+func (s *AppService) indexDocument(document model.Document, logContext operationLogContext) (model.Document, error) {
+	startedAt := time.Now().UTC()
+	stage := "extract_text"
 	content, err := util.ExtractDocumentText(document.Path)
 	if err != nil {
-		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
+		indexErr := fmt.Errorf("extract uploaded document text: %w", err)
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, indexErr, nil)
+		return model.Document{}, indexErr
 	}
 
+	stage = "write_markdown_archive"
 	markdownPath, err := s.writeMarkdownArchive(document, content)
 	if err != nil {
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, err, nil)
 		return model.Document{}, err
 	}
 	document.MarkdownPath = markdownPath
@@ -824,22 +862,71 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
 		indexSucceeded = true
-		return s.AddDocument(document.KnowledgeBaseID, document), nil
+		added := s.AddDocument(document.KnowledgeBaseID, document)
+		s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
+			"chunkCount": 0,
+		})
+		return added, nil
 	}
 
+	stage = "embed"
 	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
 	if err != nil {
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, err, map[string]any{
+			"chunkCount": len(chunks),
+		})
 		return model.Document{}, err
 	}
 
+	stage = "qdrant_upsert"
 	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, err, map[string]any{
+			"chunkCount": len(chunks),
+		})
 		return model.Document{}, err
 	}
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
 	indexSucceeded = true
-	return s.AddDocument(document.KnowledgeBaseID, document), nil
+	added := s.AddDocument(document.KnowledgeBaseID, document)
+	s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
+		"chunkCount": len(chunks),
+	})
+	return added, nil
+}
+
+func (s *AppService) recordIndexDocumentLog(document model.Document, logContext operationLogContext, status string, stage string, indexStatus string, startedAt time.Time, indexErr error, metadata map[string]any) {
+	if strings.TrimSpace(logContext.Source) == "" && strings.TrimSpace(logContext.CorrelationID) == "" {
+		return
+	}
+	finishedAt := time.Now().UTC()
+	message := "文档索引完成"
+	errText := ""
+	if indexErr != nil {
+		message = "文档索引失败"
+		errText = indexErr.Error()
+	}
+	s.RecordOperationLog(model.OperationLogEntry{
+		CorrelationID:   logContext.CorrelationID,
+		Operation:       model.OperationIndexDocument,
+		Source:          logContext.Source,
+		Status:          status,
+		KnowledgeBaseID: document.KnowledgeBaseID,
+		DocumentID:      document.ID,
+		DocumentName:    document.Name,
+		FileSize:        document.Size,
+		SizeLabel:       document.SizeLabel,
+		Stage:           stage,
+		IndexStatus:     indexStatus,
+		Message:         message,
+		Error:           errText,
+		Metadata:        metadata,
+		StartedAt:       startedAt.Format(time.RFC3339),
+		FinishedAt:      finishedAt.Format(time.RFC3339),
+		DurationMs:      finishedAt.Sub(startedAt).Milliseconds(),
+		CreatedAt:       finishedAt.Format(time.RFC3339),
+	})
 }
 
 // markdownArchiveRoot 返回 Markdown 归档的根目录；测试未注入 UploadDir 时回退到源文件目录。
@@ -1291,6 +1378,46 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 		return nil, err
 	}
 	return &conversation, nil
+}
+
+func (s *AppService) ListOperationLogs(query model.OperationLogListQuery) (model.OperationLogListResponse, error) {
+	if s == nil || s.operationLogs == nil {
+		return model.OperationLogListResponse{
+			Items:  []model.OperationLogEntry{},
+			Total:  0,
+			Limit:  query.Limit,
+			Offset: query.Offset,
+		}, nil
+	}
+	return s.operationLogs.List(query)
+}
+
+func (s *AppService) RecordOperationLog(entry model.OperationLogEntry) {
+	if s == nil || s.operationLogs == nil {
+		return
+	}
+	if strings.TrimSpace(entry.ID) == "" {
+		entry.ID = util.NextID("log")
+	}
+	if strings.TrimSpace(entry.CorrelationID) == "" {
+		entry.CorrelationID = util.NextID("op")
+	}
+	if entry.Metadata == nil {
+		entry.Metadata = map[string]any{}
+	}
+	now := util.NowRFC3339()
+	if strings.TrimSpace(entry.StartedAt) == "" {
+		entry.StartedAt = now
+	}
+	if strings.TrimSpace(entry.FinishedAt) == "" {
+		entry.FinishedAt = now
+	}
+	if strings.TrimSpace(entry.CreatedAt) == "" {
+		entry.CreatedAt = entry.FinishedAt
+	}
+	if err := s.operationLogs.Append(entry); err != nil {
+		log.Printf("failed to append operation log: %v", err)
+	}
 }
 
 func (s *AppService) ListConversations() ([]model.ConversationListItem, error) {

@@ -1703,6 +1703,101 @@ func TestRouterRebuildQdrantIndexCreatesKBZeroFromUploads(t *testing.T) {
 	if listBody.Items[0].Documents[0].KnowledgeBaseID != "kb-0" {
 		t.Fatalf("expected rebuilt document to belong to kb-0, got %#v", listBody.Items[0].Documents[0])
 	}
+
+	logResp := performRequest(t, engine, http.MethodGet, "/api/operation-logs?operation=rebuild_index&limit=5", nil, "")
+	if logResp.Code != http.StatusOK {
+		t.Fatalf("expected operation logs route to return 200, got %d, body=%s", logResp.Code, logResp.Body.String())
+	}
+	var logBody model.OperationLogListResponse
+	decodeJSONResponse(t, logResp.Body.Bytes(), &logBody)
+	if logBody.Total != 1 || len(logBody.Items) != 1 {
+		t.Fatalf("expected one rebuild operation log, got total=%d items=%#v", logBody.Total, logBody.Items)
+	}
+	rebuildLog := logBody.Items[0]
+	if rebuildLog.Operation != model.OperationRebuildIndex || rebuildLog.Status != model.OperationStatusSuccess {
+		t.Fatalf("expected rebuild success log, got %#v", rebuildLog)
+	}
+	if rebuildLog.Source != model.OperationSourceAdminRebuild || rebuildLog.KnowledgeBaseID != "kb-0" {
+		t.Fatalf("expected admin rebuild kb-0 log, got %#v", rebuildLog)
+	}
+}
+
+func TestRouterOperationLogsIncludesUploadAndIndex(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"operation-log.md",
+		strings.Repeat("操作日志验证内容。", 80),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	logResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/operation-logs?knowledgeBaseId=%s&limit=10", kbID), nil, "")
+	if logResp.Code != http.StatusOK {
+		t.Fatalf("expected operation logs status 200, got %d, body=%s", logResp.Code, logResp.Body.String())
+	}
+	var logBody model.OperationLogListResponse
+	decodeJSONResponse(t, logResp.Body.Bytes(), &logBody)
+	if logBody.Total < 2 {
+		t.Fatalf("expected upload and index logs, got %#v", logBody)
+	}
+
+	seenUpload := false
+	seenIndex := false
+	correlationIDs := map[string]struct{}{}
+	for _, item := range logBody.Items {
+		correlationIDs[item.CorrelationID] = struct{}{}
+		if item.Operation == model.OperationUploadFile && item.Status == model.OperationStatusSuccess {
+			seenUpload = true
+		}
+		if item.Operation == model.OperationIndexDocument && item.Status == model.OperationStatusSuccess {
+			seenIndex = true
+		}
+	}
+	if !seenUpload || !seenIndex {
+		t.Fatalf("expected successful upload and index logs, got %#v", logBody.Items)
+	}
+	if len(correlationIDs) != 1 {
+		t.Fatalf("expected upload and index logs to share one correlation id, got %#v", correlationIDs)
+	}
+}
+
+func TestRouterOperationLogsIncludesUploadFailure(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"unsupported.exe",
+		"invalid content",
+	)
+	if uploadResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid upload status 400, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	logResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/operation-logs?knowledgeBaseId=%s&operation=upload_file&status=failed", kbID), nil, "")
+	if logResp.Code != http.StatusOK {
+		t.Fatalf("expected operation logs status 200, got %d, body=%s", logResp.Code, logResp.Body.String())
+	}
+	var logBody model.OperationLogListResponse
+	decodeJSONResponse(t, logResp.Body.Bytes(), &logBody)
+	if logBody.Total != 1 || len(logBody.Items) != 1 {
+		t.Fatalf("expected one upload failure log, got %#v", logBody)
+	}
+	if logBody.Items[0].Stage != "validate" || logBody.Items[0].DocumentName != "unsupported.exe" {
+		t.Fatalf("expected validate failure for unsupported.exe, got %#v", logBody.Items[0])
+	}
 }
 
 func newTestRouter(t *testing.T) (*http.ServeMux, string, func()) {
@@ -1731,6 +1826,7 @@ func newTestRouterWithAccessTokenAndService(t *testing.T, accessToken string) (*
 	serverConfig := model.ServerConfig{
 		Port:                   "0",
 		UploadDir:              uploadDir,
+		OperationLogFile:       filepath.Join(t.TempDir(), "operation-logs.db"),
 		QdrantURL:              qdrantHTTP.URL,
 		AccessToken:            accessToken,
 		QdrantCollectionPrefix: "kb_",
@@ -1769,6 +1865,7 @@ func newTestRouterWithAccessTokenAndService(t *testing.T, accessToken string) (*
 	mux.Handle("/", ginEngine)
 
 	cleanup := func() {
+		_ = appService.Close()
 		_ = chatHistoryStore.Close()
 		modelHTTP.Close()
 		qdrantHTTP.Close()
