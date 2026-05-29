@@ -189,6 +189,23 @@ func (h *AppHandler) GenerateEvalDataset(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *AppHandler) DebugRetrieve(c *gin.Context) {
+	var req model.RetrievalDebugRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid retrieval debug request body")
+		return
+	}
+	req.KnowledgeBaseID = c.Param("id")
+
+	response, err := h.appService.DebugRetrieve(req)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *AppHandler) UploadToKnowledgeBase(c *gin.Context) {
 	h.handleUpload(c, c.Param("id"))
 }

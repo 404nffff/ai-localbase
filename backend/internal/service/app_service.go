@@ -40,6 +40,8 @@ const (
 	documentDetailRawContentLimit = 20000
 	documentDetailChunkLimit      = 30
 	documentDetailChunkTextLimit  = 1200
+	retrievalDebugContextLimit    = 3000
+	retrievalDebugChunkTextLimit  = 1600
 )
 
 type AppService struct {
@@ -1191,6 +1193,70 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 		"selected_chunks": len(chunks),
 	})
 	return chunks, err
+}
+
+func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	if s == nil {
+		return model.RetrievalDebugResponse{}, fmt.Errorf("app service is nil")
+	}
+
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return model.RetrievalDebugResponse{}, fmt.Errorf("query is required")
+	}
+
+	startedAt := time.Now()
+	chatReq := model.ChatCompletionRequest{
+		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
+		DocumentID:      strings.TrimSpace(req.DocumentID),
+		Config:          s.currentChatConfig(),
+		Embedding:       s.currentEmbeddingConfig(),
+		Messages: []model.ChatMessage{{
+			Role:    "user",
+			Content: query,
+		}},
+	}
+
+	chunks, err := s.EvaluateRetrieve(chatReq)
+	if err != nil {
+		return model.RetrievalDebugResponse{}, err
+	}
+
+	chunks = s.expandStructuredSourceRows(chatReq, query, chunks)
+	chunks = deduplicateRetrievedChunks(chunks)
+	if req.TopK > 0 && len(chunks) > req.TopK {
+		chunks = chunks[:req.TopK]
+	}
+
+	contextText, sources := s.rag.BuildContext(chunks)
+	contextText = truncateRunes(strings.TrimSpace(contextText), retrievalDebugContextLimit)
+
+	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		items = append(items, model.RetrievalDebugChunk{
+			ID:              chunk.ID,
+			KnowledgeBaseID: chunk.KnowledgeBaseID,
+			DocumentID:      chunk.DocumentID,
+			DocumentName:    chunk.DocumentName,
+			Index:           chunk.Index,
+			Kind:            chunk.Kind,
+			Score:           chunk.Score,
+			Text:            truncateRunes(strings.TrimSpace(chunk.Text), retrievalDebugChunkTextLimit),
+		})
+	}
+
+	return model.RetrievalDebugResponse{
+		Query:           query,
+		KnowledgeBaseID: chatReq.KnowledgeBaseID,
+		DocumentID:      chatReq.DocumentID,
+		SearchMode:      ternaryString(s.serverConfig.EnableHybridSearch, "hybrid", "dense"),
+		ElapsedMs:       time.Since(startedAt).Milliseconds(),
+		Count:           len(items),
+		LowConfidence:   isLowConfidenceSelection(query, chunks),
+		ContextPreview:  contextText,
+		Sources:         sources,
+		Items:           items,
+	}, nil
 }
 
 func (s *AppService) CurrentEmbeddingConfig() model.EmbeddingModelConfig {

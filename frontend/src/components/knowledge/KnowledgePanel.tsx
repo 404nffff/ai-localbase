@@ -1,6 +1,6 @@
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
-import type { DocumentDetailResponse } from '../../services/api'
+import type { DocumentDetailResponse, RetrievalDebugResponse } from '../../services/api'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -25,6 +25,11 @@ interface KnowledgePanelProps {
     documentId: string,
   ) => Promise<DocumentDetailResponse>
   onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
+  onDebugRetrieval: (
+    knowledgeBaseId: string,
+    query: string,
+    documentId: string | null,
+  ) => Promise<RetrievalDebugResponse>
   onClose: () => void
 }
 
@@ -48,6 +53,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onRemoveDocument,
   onFetchDocumentDetail,
   onReindexDocument,
+  onDebugRetrieval,
   onClose,
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -62,7 +68,16 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
   const [documentDetailError, setDocumentDetailError] = useState('')
   const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
+  const [retrievalQuery, setRetrievalQuery] = useState('')
+  const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
+  const [retrievalDebugResult, setRetrievalDebugResult] = useState<RetrievalDebugResponse | null>(null)
+  const [retrievalDebugError, setRetrievalDebugError] = useState('')
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+
+  useEffect(() => {
+    setRetrievalDebugResult(null)
+    setRetrievalDebugError('')
+  }, [selectedKnowledgeBaseId, selectedDocumentId])
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
     onUploadFiles(knowledgeBaseId, event.target.files)
@@ -116,6 +131,26 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     }
   }
 
+  const handleRunRetrievalDebug = async (knowledgeBaseId: string) => {
+    const query = retrievalQuery.trim()
+    if (!query) {
+      setRetrievalDebugError('请输入要调试的问题')
+      return
+    }
+
+    setRetrievalDebugKnowledgeBaseId(knowledgeBaseId)
+    setRetrievalDebugError('')
+    try {
+      const result = await onDebugRetrieval(knowledgeBaseId, query, selectedDocumentId)
+      setRetrievalDebugResult(result)
+    } catch (error) {
+      setRetrievalDebugResult(null)
+      setRetrievalDebugError(error instanceof Error ? error.message : '检索调试失败')
+    } finally {
+      setRetrievalDebugKnowledgeBaseId(null)
+    }
+  }
+
   const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
     directoryInputRefs.current[knowledgeBaseId] = element
     if (element) {
@@ -156,6 +191,13 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     if (kind === 'structured_row') return '数据行'
     return '正文'
   }
+
+  const selectedScopeLabel =
+    selectedDocumentId
+      ? knowledgeBases
+          .flatMap((knowledgeBase) => knowledgeBase.documents)
+          .find((document) => document.id === selectedDocumentId)?.name ?? '当前文档'
+      : '全部文档'
 
   const uploadProgressPercent =
     directoryUploadTask.eligibleFiles > 0
@@ -490,6 +532,77 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                               {doc.name}
                             </button>
                           ))}
+                        </div>
+                      )}
+
+                      {isSelected && (
+                        <div className="kb-retrieval-debug">
+                          <div className="kb-retrieval-debug-head">
+                            <div>
+                              <h3>检索调试台</h3>
+                              <p>当前范围：{selectedScopeLabel}</p>
+                            </div>
+                            <span className="kb-retrieval-mode">
+                              {retrievalDebugResult?.searchMode === 'hybrid' ? '混合检索' : '向量检索'}
+                            </span>
+                          </div>
+                          <div className="kb-retrieval-input-row">
+                            <input
+                              className="kb-retrieval-input"
+                              value={retrievalQuery}
+                              onChange={(event) => setRetrievalQuery(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  void handleRunRetrievalDebug(kb.id)
+                                }
+                              }}
+                              placeholder="输入一个问题，查看实际命中的 chunk"
+                            />
+                            <button
+                              className="kb-retrieval-run"
+                              onClick={() => void handleRunRetrievalDebug(kb.id)}
+                              disabled={retrievalDebugKnowledgeBaseId === kb.id}
+                            >
+                              {retrievalDebugKnowledgeBaseId === kb.id ? '检索中' : '运行'}
+                            </button>
+                          </div>
+
+                          {retrievalDebugError && (
+                            <div className="kb-retrieval-error">{retrievalDebugError}</div>
+                          )}
+
+                          {retrievalDebugResult && (
+                            <div className="kb-retrieval-result">
+                              <div className="kb-retrieval-summary">
+                                <span>{retrievalDebugResult.count} 个命中</span>
+                                <span>{retrievalDebugResult.elapsedMs} ms</span>
+                                <span>{retrievalDebugResult.lowConfidence ? '低置信' : '置信正常'}</span>
+                              </div>
+                              {retrievalDebugResult.contextPreview && (
+                                <details className="kb-retrieval-context">
+                                  <summary>上下文预览</summary>
+                                  <pre>{retrievalDebugResult.contextPreview}</pre>
+                                </details>
+                              )}
+                              <div className="kb-retrieval-hits">
+                                {retrievalDebugResult.items.length === 0 ? (
+                                  <div className="kb-docs-empty">没有命中 chunk</div>
+                                ) : (
+                                  retrievalDebugResult.items.map((item) => (
+                                    <div key={item.id} className="kb-retrieval-hit">
+                                      <div className="kb-retrieval-hit-head">
+                                        <strong>{item.documentName}</strong>
+                                        <span>{chunkKindLabel(item.kind)}</span>
+                                        <span>#{item.index + 1}</span>
+                                        <span>{item.score.toFixed(4)}</span>
+                                      </div>
+                                      <pre>{item.text}</pre>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 

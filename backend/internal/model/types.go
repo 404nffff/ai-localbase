@@ -292,3 +292,34 @@ type GenerateEvalDatasetResponse struct {
 	DocumentCount   int                   `json:"documentCount"`
 	Items           []EvalGroundTruthCase `json:"items"`
 }
+
+type RetrievalDebugRequest struct {
+	Query           string `json:"query"`
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	DocumentID      string `json:"documentId"`
+	TopK            int    `json:"topK"`
+}
+
+type RetrievalDebugChunk struct {
+	ID              string  `json:"id"`
+	KnowledgeBaseID string  `json:"knowledgeBaseId"`
+	DocumentID      string  `json:"documentId"`
+	DocumentName    string  `json:"documentName"`
+	Index           int     `json:"index"`
+	Kind            string  `json:"kind"`
+	Score           float64 `json:"score"`
+	Text            string  `json:"text"`
+}
+
+type RetrievalDebugResponse struct {
+	Query           string                `json:"query"`
+	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string                `json:"documentId,omitempty"`
+	SearchMode      string                `json:"searchMode"`
+	ElapsedMs       int64                 `json:"elapsedMs"`
+	Count           int                   `json:"count"`
+	LowConfidence   bool                  `json:"lowConfidence"`
+	ContextPreview  string                `json:"contextPreview"`
+	Sources         []map[string]string   `json:"sources"`
+	Items           []RetrievalDebugChunk `json:"items"`
+}

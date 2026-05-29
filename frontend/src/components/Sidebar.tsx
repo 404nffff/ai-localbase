@@ -9,7 +9,7 @@ import {
   EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
-import type { DocumentDetailResponse } from '../services/api'
+import type { DocumentDetailResponse, RetrievalDebugResponse } from '../services/api'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
 
@@ -35,6 +35,11 @@ interface SidebarProps {
     documentId: string,
   ) => Promise<DocumentDetailResponse>
   onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
+  onDebugRetrieval: (
+    knowledgeBaseId: string,
+    query: string,
+    documentId: string | null,
+  ) => Promise<RetrievalDebugResponse>
   conversations: Conversation[]
   activeConversationId: string | null
   onSelectConversation: (conversationId: string) => void
@@ -84,6 +89,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onRemoveDocument,
   onFetchDocumentDetail,
   onReindexDocument,
+  onDebugRetrieval,
   conversations,
   activeConversationId,
   onSelectConversation,
@@ -341,6 +347,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onRemoveDocument={onRemoveDocument}
         onFetchDocumentDetail={onFetchDocumentDetail}
         onReindexDocument={onReindexDocument}
+        onDebugRetrieval={onDebugRetrieval}
         onClose={onToggleKnowledgePanel}
       />
     </>

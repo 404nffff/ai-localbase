@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
   createKnowledgeBase,
+  debugKnowledgeBaseRetrieval,
   deleteConversation,
   deleteKnowledgeBase,
   deleteKnowledgeBaseDocument,
@@ -20,7 +21,7 @@ import {
   updateAppConfig,
   uploadKnowledgeBaseFile,
 } from './services/api'
-import type { DocumentDetailResponse } from './services/api'
+import type { DocumentDetailResponse, RetrievalDebugResponse } from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -1046,6 +1047,14 @@ function App() {
     }
   }
 
+  const handleDebugRetrieval = async (
+    knowledgeBaseId: string,
+    query: string,
+    documentId: string | null,
+  ): Promise<RetrievalDebugResponse> => {
+    return debugKnowledgeBaseRetrieval(knowledgeBaseId, query, documentId)
+  }
+
   const handleSendMessage = async (content: string) => {
     if (!activeConversation) {
       return
@@ -1534,6 +1543,7 @@ function App() {
         onRemoveDocument={handleRemoveDocument}
         onFetchDocumentDetail={handleFetchDocumentDetail}
         onReindexDocument={handleReindexDocument}
+        onDebugRetrieval={handleDebugRetrieval}
         conversations={conversations}
         activeConversationId={activeConversation?.id ?? null}
         onSelectConversation={handleSelectConversation}

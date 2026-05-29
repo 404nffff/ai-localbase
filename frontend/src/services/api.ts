@@ -119,6 +119,30 @@ export interface ReindexDocumentResponse {
   document: BackendDocumentItem
 }
 
+export interface RetrievalDebugChunk {
+  id: string
+  knowledgeBaseId: string
+  documentId: string
+  documentName: string
+  index: number
+  kind: string
+  score: number
+  text: string
+}
+
+export interface RetrievalDebugResponse {
+  query: string
+  knowledgeBaseId?: string
+  documentId?: string
+  searchMode: string
+  elapsedMs: number
+  count: number
+  lowConfidence: boolean
+  contextPreview: string
+  sources: Array<Record<string, string>>
+  items: RetrievalDebugChunk[]
+}
+
 export interface GenerateEvalDatasetResponse {
   knowledgeBaseId?: string
   documentId?: string
@@ -351,5 +375,16 @@ export const generateEvalDataset = async (
   requestJson<GenerateEvalDatasetResponse>(
     '/api/eval/datasets/generate',
     jsonRequest({ knowledgeBaseId, maxPerDocument }, { method: 'POST' }),
+  )
+)
+
+export const debugKnowledgeBaseRetrieval = async (
+  knowledgeBaseId: string,
+  query: string,
+  documentId?: string | null,
+): Promise<RetrievalDebugResponse> => (
+  requestJson<RetrievalDebugResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/retrieval/debug`,
+    jsonRequest({ query, documentId: documentId ?? '', topK: 12 }, { method: 'POST' }),
   )
 )

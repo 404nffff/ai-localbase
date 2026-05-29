@@ -1053,6 +1053,188 @@
   border-color: #7c3aed;
 }
 
+.kb-retrieval-debug {
+  margin: 12px 16px 0;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.kb-retrieval-debug-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.kb-retrieval-debug-head h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.kb-retrieval-debug-head p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.kb-retrieval-mode {
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kb-retrieval-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.kb-retrieval-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.kb-retrieval-input:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
+}
+
+.kb-retrieval-run {
+  flex-shrink: 0;
+  padding: 0 16px;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  background: #2563eb;
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kb-retrieval-run:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.kb-retrieval-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.kb-retrieval-result {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kb-retrieval-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-retrieval-summary span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #dbeafe;
+  color: #1e40af;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kb-retrieval-context {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.kb-retrieval-context summary {
+  padding: 9px 12px;
+  cursor: pointer;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kb-retrieval-context pre,
+.kb-retrieval-hit pre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.kb-retrieval-context pre {
+  max-height: 220px;
+  border-top: 1px solid #e2e8f0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.kb-retrieval-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kb-retrieval-hit {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.kb-retrieval-hit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.kb-retrieval-hit-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f172a;
+}
+
+.kb-retrieval-hit-head span {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
 /* Doc list */
 .kb-docs {
   padding: 12px 16px;
