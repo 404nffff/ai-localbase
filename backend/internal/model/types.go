@@ -312,14 +312,18 @@ type RetrievalDebugChunk struct {
 }
 
 type RetrievalDebugResponse struct {
-	Query           string                `json:"query"`
-	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
-	DocumentID      string                `json:"documentId,omitempty"`
-	SearchMode      string                `json:"searchMode"`
-	ElapsedMs       int64                 `json:"elapsedMs"`
-	Count           int                   `json:"count"`
-	LowConfidence   bool                  `json:"lowConfidence"`
-	ContextPreview  string                `json:"contextPreview"`
-	Sources         []map[string]string   `json:"sources"`
-	Items           []RetrievalDebugChunk `json:"items"`
+	Query             string                `json:"query"`
+	KnowledgeBaseID   string                `json:"knowledgeBaseId,omitempty"`
+	DocumentID        string                `json:"documentId,omitempty"`
+	SearchMode        string                `json:"searchMode"`
+	StructuredIntent  string                `json:"structuredIntent,omitempty"`
+	TargetField       string                `json:"targetField,omitempty"`
+	DeterministicUsed bool                  `json:"deterministicUsed"`
+	ElapsedMs         int64                 `json:"elapsedMs"`
+	Count             int                   `json:"count"`
+	LowConfidence     bool                  `json:"lowConfidence"`
+	ContextPreview    string                `json:"contextPreview"`
+	Sources           []map[string]string   `json:"sources"`
+	EvalCandidate     *EvalGroundTruthCase  `json:"evalCandidate,omitempty"`
+	Items             []RetrievalDebugChunk `json:"items"`
 }

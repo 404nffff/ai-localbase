@@ -1092,6 +1092,22 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	}
 
 	query := latestUserMessage(req.Messages)
+	deterministicStartedAt := time.Now()
+	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(req, query)
+	if err != nil {
+		return "", nil, err
+	}
+	if deterministicUsed {
+		chunks = append(deterministicChunks, chunks...)
+	}
+	logRetrievalStageMetrics(req, query, "context_structured_deterministic", deterministicStartedAt, map[string]any{
+		"status":      "ok",
+		"used":        deterministicUsed,
+		"intent":      string(deterministicResult.Plan.Intent),
+		"targetField": deterministicResult.Plan.TargetField,
+		"chunks":      len(deterministicChunks),
+	})
+
 	expandStartedAt := time.Now()
 	chunks = s.expandStructuredSourceRows(req, query, chunks)
 	logRetrievalStageMetrics(req, query, "context_expand_structured_rows", expandStartedAt, map[string]any{
@@ -1222,6 +1238,14 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		return model.RetrievalDebugResponse{}, err
 	}
 
+	retrievalLowConfidence := isLowConfidenceSelection(query, chunks)
+	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(chatReq, query)
+	if err != nil {
+		return model.RetrievalDebugResponse{}, err
+	}
+	if deterministicUsed {
+		chunks = append(deterministicChunks, chunks...)
+	}
 	chunks = s.expandStructuredSourceRows(chatReq, query, chunks)
 	chunks = deduplicateRetrievedChunks(chunks)
 	if req.TopK > 0 && len(chunks) > req.TopK {
@@ -1230,6 +1254,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 
 	contextText, sources := s.rag.BuildContext(chunks)
 	contextText = truncateRunes(strings.TrimSpace(contextText), retrievalDebugContextLimit)
+	evalCandidate := buildRetrievalDebugEvalCandidate(chatReq, query, retrievalLowConfidence, chunks, contextText)
 
 	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -1246,16 +1271,20 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 	}
 
 	return model.RetrievalDebugResponse{
-		Query:           query,
-		KnowledgeBaseID: chatReq.KnowledgeBaseID,
-		DocumentID:      chatReq.DocumentID,
-		SearchMode:      ternaryString(s.serverConfig.EnableHybridSearch, "hybrid", "dense"),
-		ElapsedMs:       time.Since(startedAt).Milliseconds(),
-		Count:           len(items),
-		LowConfidence:   isLowConfidenceSelection(query, chunks),
-		ContextPreview:  contextText,
-		Sources:         sources,
-		Items:           items,
+		Query:             query,
+		KnowledgeBaseID:   chatReq.KnowledgeBaseID,
+		DocumentID:        chatReq.DocumentID,
+		SearchMode:        ternaryString(s.serverConfig.EnableHybridSearch, "hybrid", "dense"),
+		StructuredIntent:  string(deterministicResult.Plan.Intent),
+		TargetField:       deterministicResult.Plan.TargetField,
+		DeterministicUsed: deterministicUsed,
+		ElapsedMs:         time.Since(startedAt).Milliseconds(),
+		Count:             len(items),
+		LowConfidence:     retrievalLowConfidence,
+		ContextPreview:    contextText,
+		Sources:           sources,
+		EvalCandidate:     evalCandidate,
+		Items:             items,
 	}, nil
 }
 
@@ -1927,6 +1956,115 @@ func buildChunkText(chunks []RetrievedChunk) string {
 		lines = append(lines, fmt.Sprintf("[%s#%d] %s", chunk.DocumentName, chunk.Index+1, chunk.Text))
 	}
 	return strings.Join(lines, "\n\n")
+}
+
+func (s *AppService) buildStructuredDeterministicChunks(req model.ChatCompletionRequest, query string) ([]RetrievedChunk, structuredDeterministicResult, bool, error) {
+	result, ok, err := s.buildStructuredDeterministicResult(req, query)
+	if err != nil || !ok {
+		return nil, result, ok, err
+	}
+
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		return nil, result, false, nil
+	}
+
+	chunk := RetrievedChunk{
+		DocumentChunk: DocumentChunk{
+			ID:              structuredDeterministicChunkID(req, query, result),
+			KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
+			DocumentID:      strings.TrimSpace(req.DocumentID),
+			DocumentName:    "结构化确定性查询",
+			Text:            "结构化确定性查询结果（后端直接读取 CSV/XLSX 原始行计算，优先于向量摘要）：\n" + content,
+			Kind:            "structured_deterministic",
+		},
+		Score: 1,
+	}
+
+	if len(result.Sources) > 0 {
+		first := result.Sources[0]
+		chunk.KnowledgeBaseID = first["knowledgeBaseId"]
+		chunk.DocumentID = first["documentId"]
+		if len(result.Sources) == 1 && strings.TrimSpace(first["documentName"]) != "" {
+			chunk.DocumentName = first["documentName"]
+		}
+	}
+
+	return []RetrievedChunk{chunk}, result, true, nil
+}
+
+func structuredDeterministicChunkID(req model.ChatCompletionRequest, query string, result structuredDeterministicResult) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strings.TrimSpace(req.KnowledgeBaseID)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strings.TrimSpace(req.DocumentID)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strings.TrimSpace(query)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(result.Content))
+	return fmt.Sprintf("structured-deterministic-%x", h.Sum64())
+}
+
+func buildRetrievalDebugEvalCandidate(req model.ChatCompletionRequest, query string, lowConfidence bool, chunks []RetrievedChunk, contextText string) *model.EvalGroundTruthCase {
+	if !lowConfidence || strings.TrimSpace(query) == "" {
+		return nil
+	}
+
+	sourceDocuments := make([]model.EvalSourceDocument, 0)
+	seen := map[string]struct{}{}
+	for _, chunk := range chunks {
+		if strings.TrimSpace(chunk.DocumentID) == "" {
+			continue
+		}
+		key := chunk.KnowledgeBaseID + "\x00" + chunk.DocumentID + "\x00" + chunk.ID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		sourceDocuments = append(sourceDocuments, model.EvalSourceDocument{
+			KnowledgeBaseID: chunk.KnowledgeBaseID,
+			DocumentID:      chunk.DocumentID,
+			ChunkID:         chunk.ID,
+		})
+		if len(sourceDocuments) >= 5 {
+			break
+		}
+	}
+
+	answer := clipEvalRunes(normalizeEvalWhitespace(contextText), 800)
+	snippets := make([]string, 0, minInt(3, len(chunks)))
+	for _, chunk := range chunks {
+		text := clipEvalRunes(normalizeEvalWhitespace(chunk.Text), 120)
+		if text == "" {
+			continue
+		}
+		snippets = append(snippets, text)
+		if len(snippets) >= 3 {
+			break
+		}
+	}
+	if len(snippets) == 0 && answer != "" {
+		snippets = []string{clipEvalRunes(answer, 120)}
+	}
+
+	scope := strings.TrimSpace(req.DocumentID)
+	if scope == "" {
+		scope = strings.TrimSpace(req.KnowledgeBaseID)
+	}
+	if scope == "" {
+		scope = "all"
+	}
+
+	return &model.EvalGroundTruthCase{
+		ID:              fmt.Sprintf("debug-low-confidence-%s-%x", sanitizeEvalIDPart(scope), qdrantPointID(query)),
+		Question:        query,
+		Answer:          answer,
+		AnswerSnippets:  snippets,
+		SourceDocuments: sourceDocuments,
+		AnswerType:      "retrieval-debug-candidate",
+		Difficulty:      "hard",
+		Notes:           "auto-generated from retrieval debug low-confidence result; please review before using as ground truth",
+	}
 }
 
 func (s *AppService) expandStructuredSourceRows(req model.ChatCompletionRequest, query string, chunks []RetrievedChunk) []RetrievedChunk {

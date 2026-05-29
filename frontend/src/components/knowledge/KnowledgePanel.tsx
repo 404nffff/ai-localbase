@@ -151,6 +151,26 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     }
   }
 
+  const handleDownloadRetrievalEvalCandidate = () => {
+    if (!retrievalDebugResult?.evalCandidate) {
+      return
+    }
+
+    const blob = new Blob([JSON.stringify([retrievalDebugResult.evalCandidate], null, 2)], {
+      type: 'application/json;charset=utf-8',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    const scope = retrievalDebugResult.documentId || retrievalDebugResult.knowledgeBaseId || 'all'
+    link.href = url
+    link.download = `retrieval_debug_eval_${scope}_${timestamp}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
   const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
     directoryInputRefs.current[knowledgeBaseId] = element
     if (element) {
@@ -187,9 +207,31 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   }
 
   const chunkKindLabel = (kind: string) => {
+    if (kind === 'structured_deterministic') return '确定性'
     if (kind === 'structured_summary') return '摘要'
     if (kind === 'structured_row') return '数据行'
     return '正文'
+  }
+
+  const structuredIntentLabel = (intent?: string) => {
+    switch (intent) {
+      case 'max':
+        return '最大值'
+      case 'min':
+        return '最小值'
+      case 'average':
+        return '平均值'
+      case 'filter':
+        return '筛选'
+      case 'group':
+        return '分布'
+      case 'count':
+        return '计数'
+      case 'preview':
+        return '预览'
+      default:
+        return ''
+    }
   }
 
   const selectedScopeLabel =
@@ -577,7 +619,25 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                 <span>{retrievalDebugResult.count} 个命中</span>
                                 <span>{retrievalDebugResult.elapsedMs} ms</span>
                                 <span>{retrievalDebugResult.lowConfidence ? '低置信' : '置信正常'}</span>
+                                <span>{retrievalDebugResult.deterministicUsed ? '确定性补全' : '向量优先'}</span>
+                                {structuredIntentLabel(retrievalDebugResult.structuredIntent) && (
+                                  <span>
+                                    {structuredIntentLabel(retrievalDebugResult.structuredIntent)}
+                                    {retrievalDebugResult.targetField ? `：${retrievalDebugResult.targetField}` : ''}
+                                  </span>
+                                )}
                               </div>
+                              {retrievalDebugResult.evalCandidate && (
+                                <div className="kb-retrieval-eval">
+                                  <div>
+                                    <strong>低置信评测候选</strong>
+                                    <p>当前问题可沉淀为后续检索评测样本，下载后建议人工复核答案片段。</p>
+                                  </div>
+                                  <button onClick={handleDownloadRetrievalEvalCandidate}>
+                                    下载样本
+                                  </button>
+                                </div>
+                              )}
                               {retrievalDebugResult.contextPreview && (
                                 <details className="kb-retrieval-context">
                                   <summary>上下文预览</summary>

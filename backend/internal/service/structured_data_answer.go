@@ -35,6 +35,12 @@ type structuredQueryPlan struct {
 	TargetField string
 }
 
+type structuredDeterministicResult struct {
+	Plan    structuredQueryPlan
+	Content string
+	Sources []map[string]string
+}
+
 type structuredTableDocument struct {
 	Document model.Document
 	Tables   []util.StructuredTable
@@ -51,16 +57,28 @@ func (s *AppService) TryBuildStructuredDataAnswer(req model.ChatCompletionReques
 		return "", nil, false, nil
 	}
 
+	result, ok, err := s.buildStructuredDeterministicResult(req, query)
+	if err != nil || !ok {
+		return "", nil, ok, err
+	}
+	return result.Content, result.Sources, true, nil
+}
+
+func (s *AppService) buildStructuredDeterministicResult(req model.ChatCompletionRequest, query string) (structuredDeterministicResult, bool, error) {
+	if !looksLikeStructuredDataQuery(query) {
+		return structuredDeterministicResult{}, false, nil
+	}
+
 	documents := s.resolveStructuredTableDocuments(req)
 	if len(documents) == 0 {
-		return "", nil, false, nil
+		return structuredDeterministicResult{}, false, nil
 	}
 
 	tables := make([]structuredTableDocument, 0, len(documents))
 	for _, document := range documents {
 		parsed, err := util.ExtractStructuredTables(document.Path)
 		if err != nil {
-			return "", nil, true, err
+			return structuredDeterministicResult{}, true, err
 		}
 		if len(parsed) == 0 {
 			continue
@@ -68,21 +86,25 @@ func (s *AppService) TryBuildStructuredDataAnswer(req model.ChatCompletionReques
 		tables = append(tables, structuredTableDocument{Document: document, Tables: parsed})
 	}
 	if len(tables) == 0 {
-		return "", nil, false, nil
+		return structuredDeterministicResult{}, false, nil
 	}
 
 	plan := buildStructuredQueryPlan(query, tables)
 	if plan.Intent == "" {
-		return "", nil, false, nil
+		return structuredDeterministicResult{}, false, nil
 	}
 
 	content := renderStructuredQueryAnswer(query, plan, tables)
 	if strings.TrimSpace(content) == "" {
-		return "", nil, false, nil
+		return structuredDeterministicResult{}, false, nil
 	}
 
 	sources := structuredDataSources(tables)
-	return content, sources, true, nil
+	return structuredDeterministicResult{
+		Plan:    plan,
+		Content: content,
+		Sources: sources,
+	}, true, nil
 }
 
 func looksLikeStructuredDataQuery(query string) bool {
@@ -121,11 +143,7 @@ func (s *AppService) resolveStructuredTableDocuments(req model.ChatCompletionReq
 		if !ok {
 			return nil
 		}
-		documents := structuredDocumentsFromKnowledgeBase(kb)
-		if len(documents) == 1 {
-			return documents
-		}
-		return nil
+		return structuredDocumentsFromKnowledgeBase(kb)
 	}
 
 	var documents []model.Document
@@ -237,6 +255,48 @@ func detectStructuredTargetField(query string, documents []structuredTableDocume
 		}
 		if strings.Contains(header, "年龄") && strings.Contains(query, "年纪") {
 			return header
+		}
+		if strings.Contains(header, "教龄") && containsAnyText(query, []string{"教学年限", "任教年限", "工作年限"}) {
+			return header
+		}
+		if strings.Contains(header, "编号") && containsAnyText(query, []string{"工号", "员工号", "教师号"}) {
+			return header
+		}
+		if strings.Contains(header, "姓名") && containsAnyText(query, []string{"名字", "人员", "教师", "老师", "员工"}) {
+			return header
+		}
+	}
+	if inferred := inferNumericStructuredTargetField(query, documents); inferred != "" {
+		return inferred
+	}
+	return ""
+}
+
+func inferNumericStructuredTargetField(query string, documents []structuredTableDocument) string {
+	if containsAnyText(query, []string{"薪资", "工资", "收入", "薪水", "薪酬"}) {
+		return firstHeaderContaining(documents, []string{"薪资", "工资", "收入", "薪水", "薪酬"})
+	}
+	if containsAnyText(query, []string{"年龄", "年纪", "岁数"}) {
+		return firstHeaderContaining(documents, []string{"年龄", "年纪", "岁数"})
+	}
+	if containsAnyText(query, []string{"教龄", "教学年限", "任教年限"}) {
+		return firstHeaderContaining(documents, []string{"教龄", "教学年限", "任教年限"})
+	}
+	if containsAnyText(query, []string{"分数", "成绩", "得分"}) {
+		return firstHeaderContaining(documents, []string{"分数", "成绩", "得分"})
+	}
+	if containsAnyText(query, []string{"价格", "金额", "费用", "成本"}) {
+		return firstHeaderContaining(documents, []string{"价格", "金额", "费用", "成本"})
+	}
+	return ""
+}
+
+func firstHeaderContaining(documents []structuredTableDocument, markers []string) string {
+	for _, header := range allStructuredHeaders(documents) {
+		for _, marker := range markers {
+			if strings.Contains(header, marker) {
+				return header
+			}
 		}
 	}
 	return ""

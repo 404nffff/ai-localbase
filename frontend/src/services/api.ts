@@ -130,16 +130,35 @@ export interface RetrievalDebugChunk {
   text: string
 }
 
+export interface EvalGroundTruthCase {
+  id: string
+  question: string
+  answer: string
+  answer_snippets: string[]
+  source_documents: Array<{
+    knowledge_base_id: string
+    document_id: string
+    chunk_id: string
+  }>
+  answer_type: string
+  difficulty: string
+  notes?: string
+}
+
 export interface RetrievalDebugResponse {
   query: string
   knowledgeBaseId?: string
   documentId?: string
   searchMode: string
+  structuredIntent?: string
+  targetField?: string
+  deterministicUsed: boolean
   elapsedMs: number
   count: number
   lowConfidence: boolean
   contextPreview: string
   sources: Array<Record<string, string>>
+  evalCandidate?: EvalGroundTruthCase
   items: RetrievalDebugChunk[]
 }
 
@@ -148,20 +167,7 @@ export interface GenerateEvalDatasetResponse {
   documentId?: string
   count: number
   documentCount: number
-  items: Array<{
-    id: string
-    question: string
-    answer: string
-    answer_snippets: string[]
-    source_documents: Array<{
-      knowledge_base_id: string
-      document_id: string
-      chunk_id: string
-    }>
-    answer_type: string
-    difficulty: string
-    notes?: string
-  }>
+  items: EvalGroundTruthCase[]
 }
 
 export const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
