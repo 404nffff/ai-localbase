@@ -27,6 +27,8 @@ const (
 	ragSearchTopKKnowledgeBase     = 10
 	ragSearchCandidateTopKAllDocs  = 32
 	ragMaxChunksPerDocument        = 2
+	structuredSourceRowLimit       = 12
+	structuredSourceContextChars   = 1800
 
 	rerankVectorWeight  = 0.72
 	rerankKeywordWeight = 0.28
@@ -971,6 +973,13 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	}
 
 	query := latestUserMessage(req.Messages)
+	expandStartedAt := time.Now()
+	chunks = s.expandStructuredSourceRows(req, query, chunks)
+	logRetrievalStageMetrics(req, query, "context_expand_structured_rows", expandStartedAt, map[string]any{
+		"status":           "ok",
+		"remaining_chunks": len(chunks),
+	})
+
 	dedupStartedAt := time.Now()
 	chunks = deduplicateRetrievedChunks(chunks)
 	logRetrievalStageMetrics(req, query, "context_deduplicate", dedupStartedAt, map[string]any{
@@ -1638,6 +1647,274 @@ func buildChunkText(chunks []RetrievedChunk) string {
 		lines = append(lines, fmt.Sprintf("[%s#%d] %s", chunk.DocumentName, chunk.Index+1, chunk.Text))
 	}
 	return strings.Join(lines, "\n\n")
+}
+
+func (s *AppService) expandStructuredSourceRows(req model.ChatCompletionRequest, query string, chunks []RetrievedChunk) []RetrievedChunk {
+	if s == nil || s.rag == nil || !shouldExpandStructuredSourceRows(req, query, chunks) {
+		return chunks
+	}
+
+	documents := s.resolveStructuredSourceDocuments(req, chunks)
+	if len(documents) == 0 {
+		return chunks
+	}
+
+	rowChunksByDocument := make(map[string][]RetrievedChunk, len(documents))
+	for _, document := range documents {
+		rowChunks := buildStructuredSourceRowChunks(document, query)
+		if len(rowChunks) == 0 {
+			continue
+		}
+		rowChunksByDocument[document.ID] = rowChunks
+	}
+	if len(rowChunksByDocument) == 0 {
+		return chunks
+	}
+
+	return insertStructuredSourceRowChunks(chunks, rowChunksByDocument)
+}
+
+func shouldExpandStructuredSourceRows(req model.ChatCompletionRequest, query string, chunks []RetrievedChunk) bool {
+	if strings.TrimSpace(req.DocumentID) != "" && isStructuredDataDetailQuery(query) {
+		return true
+	}
+
+	hasStructuredSummary := false
+	hasStructuredRow := false
+	for _, chunk := range chunks {
+		if chunk.Kind == "structured_summary" || strings.Contains(chunk.Text, "统计摘要：") {
+			hasStructuredSummary = true
+		}
+		if chunk.Kind == "structured_row" || containsStructuredRowLine(chunk.Text) {
+			hasStructuredRow = true
+		}
+	}
+	return hasStructuredSummary && !hasStructuredRow && isStructuredDataDetailQuery(query)
+}
+
+func isStructuredDataDetailQuery(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"表格", "数据", "明细", "原始", "完整", "全部", "所有", "列出", "展示", "读取",
+		"有哪些", "名单", "每一行", "行数据", "详情",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *AppService) resolveStructuredSourceDocuments(req model.ChatCompletionRequest, chunks []RetrievedChunk) []model.Document {
+	if s == nil || s.state == nil {
+		return nil
+	}
+
+	wanted := make(map[string]struct{})
+	if documentID := strings.TrimSpace(req.DocumentID); documentID != "" {
+		wanted[documentID] = struct{}{}
+	} else {
+		for _, chunk := range chunks {
+			if strings.TrimSpace(chunk.DocumentID) == "" {
+				continue
+			}
+			if chunk.Kind == "structured_summary" || strings.Contains(chunk.Text, "统计摘要：") || strings.Contains(chunk.Text, "数据行数：") {
+				wanted[chunk.DocumentID] = struct{}{}
+			}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+
+	documents := make([]model.Document, 0, len(wanted))
+	for _, kb := range s.state.KnowledgeBases {
+		for _, document := range kb.Documents {
+			if _, ok := wanted[document.ID]; !ok {
+				continue
+			}
+			if strings.TrimSpace(document.Path) == "" {
+				continue
+			}
+			documents = append(documents, document)
+		}
+	}
+	sort.Slice(documents, func(i, j int) bool {
+		return documents[i].ID < documents[j].ID
+	})
+	return documents
+}
+
+func buildStructuredSourceRowChunks(document model.Document, query string) []RetrievedChunk {
+	text, err := util.ExtractDocumentText(document.Path)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	headerLine := ""
+	rowLines := make([]string, 0, structuredSourceRowLimit)
+	totalRows := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if headerLine == "" && strings.HasPrefix(trimmed, "文件：") && strings.Contains(trimmed, "字段：") {
+			headerLine = trimmed
+			continue
+		}
+		if !isStructuredRowLine(trimmed) {
+			continue
+		}
+		totalRows++
+		if len(rowLines) < structuredRowLimitForQuery(query) {
+			rowLines = append(rowLines, trimmed)
+		}
+	}
+	if len(rowLines) == 0 {
+		return nil
+	}
+
+	label := "源文件行数据片段（来自已索引文件）"
+	if totalRows > 0 && totalRows <= len(rowLines) {
+		label = "源文件完整行数据（来自已索引文件）"
+	}
+
+	chunks := make([]RetrievedChunk, 0, 3)
+	current := strings.Builder{}
+	current.WriteString(label)
+	if totalRows > len(rowLines) {
+		fmt.Fprintf(&current, "：共 %d 行，以下为前 %d 行", totalRows, len(rowLines))
+	}
+	current.WriteString("。\n")
+	if headerLine != "" {
+		current.WriteString(headerLine)
+		current.WriteString("\n")
+	}
+
+	flush := func() {
+		text := strings.TrimSpace(current.String())
+		if text == "" {
+			return
+		}
+		chunks = append(chunks, RetrievedChunk{
+			DocumentChunk: DocumentChunk{
+				ID:              fmt.Sprintf("%s-source-rows-%d", document.ID, len(chunks)),
+				KnowledgeBaseID: document.KnowledgeBaseID,
+				DocumentID:      document.ID,
+				DocumentName:    document.Name,
+				Text:            text,
+				Index:           len(chunks),
+				Kind:            "structured_row",
+			},
+			Score: 1,
+		})
+		current.Reset()
+	}
+
+	usedChars := current.Len()
+	for _, line := range rowLines {
+		if usedChars+len(line)+1 > structuredSourceContextChars {
+			break
+		}
+		if current.Len() > 0 && current.Len()+len(line)+1 > defaultChunkSize {
+			flush()
+		}
+		if current.Len() == 0 {
+			current.WriteString(label)
+			current.WriteString("（续）。\n")
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+		usedChars += len(line) + 1
+	}
+	flush()
+	return chunks
+}
+
+func structuredRowLimitForQuery(query string) int {
+	if containsAnyText(query, []string{"完整", "全部", "所有", "每一行"}) {
+		return structuredSourceRowLimit * 2
+	}
+	return structuredSourceRowLimit
+}
+
+func containsAnyText(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func insertStructuredSourceRowChunks(chunks []RetrievedChunk, rowChunksByDocument map[string][]RetrievedChunk) []RetrievedChunk {
+	if len(chunks) == 0 {
+		out := make([]RetrievedChunk, 0)
+		for _, rowChunks := range rowChunksByDocument {
+			out = append(out, rowChunks...)
+		}
+		return out
+	}
+
+	inserted := make(map[string]struct{}, len(rowChunksByDocument))
+	out := make([]RetrievedChunk, 0, len(chunks)+len(rowChunksByDocument))
+	for _, chunk := range chunks {
+		out = append(out, chunk)
+		if _, ok := inserted[chunk.DocumentID]; ok {
+			continue
+		}
+		rowChunks := rowChunksByDocument[chunk.DocumentID]
+		if len(rowChunks) == 0 {
+			continue
+		}
+		out = append(out, rowChunks...)
+		inserted[chunk.DocumentID] = struct{}{}
+	}
+
+	for documentID, rowChunks := range rowChunksByDocument {
+		if _, ok := inserted[documentID]; ok {
+			continue
+		}
+		out = append(out, rowChunks...)
+	}
+	return out
+}
+
+func containsStructuredRowLine(text string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if isStructuredRowLine(strings.TrimSpace(line)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isStructuredRowLine(line string) bool {
+	if !strings.HasPrefix(line, "第") || !strings.Contains(line, "行：") {
+		return false
+	}
+	prefix := strings.TrimPrefix(line, "第")
+	if prefix == line {
+		return false
+	}
+	for _, r := range prefix {
+		if r == '行' {
+			return true
+		}
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return false
 }
 
 func deduplicateRetrievedChunks(chunks []RetrievedChunk) []RetrievedChunk {

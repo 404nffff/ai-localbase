@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -229,5 +231,84 @@ func TestBuildChunkTextDeduplicatesRepeatedChunks(t *testing.T) {
 	}
 	if !strings.Contains(text, "第2行：字段A：值甲。字段B：级别1。") {
 		t.Fatalf("expected row detail to be preserved, got %q", text)
+	}
+}
+
+func TestExpandStructuredSourceRowsAddsIndexedFileRows(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "users.csv")
+	content := strings.Join([]string{
+		"姓名,城市,状态",
+		"张三,上海,启用",
+		"李四,北京,停用",
+		"王五,南京,启用",
+	}, "\n")
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write csv fixture: %v", err)
+	}
+
+	document := model.Document{
+		ID:              "doc-users",
+		KnowledgeBaseID: "kb-1",
+		Name:            "users.csv",
+		Path:            csvPath,
+	}
+	service := &AppService{
+		state: &model.AppState{
+			KnowledgeBases: map[string]model.KnowledgeBase{
+				"kb-1": {
+					ID:        "kb-1",
+					Name:      "测试知识库",
+					Documents: []model.Document{document},
+				},
+			},
+		},
+		rag: NewRagService(),
+	}
+	chunks := []RetrievedChunk{{
+		DocumentChunk: DocumentChunk{
+			ID:              "doc-users-summary-0",
+			KnowledgeBaseID: "kb-1",
+			DocumentID:      "doc-users",
+			DocumentName:    "users.csv",
+			Text:            "统计摘要：文件《users.csv》共有3条数据记录。",
+			Kind:            "structured_summary",
+		},
+		Score: 0.99,
+	}}
+
+	expanded := service.expandStructuredSourceRows(
+		model.ChatCompletionRequest{DocumentID: "doc-users"},
+		"展示当前文档的数据表格",
+		chunks,
+	)
+	text := buildChunkText(expanded)
+	if !strings.Contains(text, "源文件完整行数据") {
+		t.Fatalf("expected source row context label, got %q", text)
+	}
+	if !strings.Contains(text, "第2行：姓名：张三。城市：上海。状态：启用。") {
+		t.Fatalf("expected first source row to be included, got %q", text)
+	}
+	if !strings.Contains(text, "第4行：姓名：王五。城市：南京。状态：启用。") {
+		t.Fatalf("expected later source row to be included, got %q", text)
+	}
+}
+
+func TestShouldExpandStructuredSourceRowsRequiresDetailIntent(t *testing.T) {
+	chunks := []RetrievedChunk{{
+		DocumentChunk: DocumentChunk{
+			DocumentID:   "doc-users",
+			DocumentName: "users.csv",
+			Text:         "统计摘要：文件《users.csv》共有20000条数据记录。",
+			Kind:         "structured_summary",
+		},
+		Score: 0.99,
+	}}
+
+	if shouldExpandStructuredSourceRows(model.ChatCompletionRequest{}, "当前有多少记录", chunks) {
+		t.Fatal("expected pure count question to use summary without source row expansion")
+	}
+	if !shouldExpandStructuredSourceRows(model.ChatCompletionRequest{}, "展示这些数据", chunks) {
+		t.Fatal("expected data display question to expand source rows")
 	}
 }
