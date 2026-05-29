@@ -250,6 +250,10 @@ function normalizeCompressedAnswerBlocks(content: string): string {
     '$1\n\n$2',
   )
   normalized = normalized.replace(
+    /([^\n])\s+(根据提供的文档片段|根据上下文|基于上下文|补充建议|补充说明|注意事项|城市分布统计|薪资最高者分析|职称最高者分析|平均薪资计算)(?=[，,：:（(]|$)/g,
+    '$1\n\n$2',
+  )
+  normalized = normalized.replace(
     /(^|\n)([^\n#>*|`\-，。！？；;:：]{2,28})\n(?=(基本信息|根据|基于|作为|我具备|以下|可以|能够))/g,
     '$1### $2\n\n',
   )
@@ -281,6 +285,507 @@ function unwrapOverbroadStrong(content: string): string {
 
   return normalized.replace(/\*\*([^*\n][^\n]{80,}?)\*\*/g, (match, inner: string) =>
     shouldUnwrap(inner) ? inner : match,
+  )
+}
+
+function normalizeMarkdownArtifacts(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      const strongCount = line.match(/\*\*/g)?.length ?? 0
+      if (strongCount % 2 === 1 && (line.length > 40 || /[-|：:=]/.test(line))) {
+        return line.replace(/\*\*/g, '')
+      }
+      return line
+    })
+    .join('\n')
+    .replace(/\*\*\s*-/g, '\n- ')
+    .replace(/(^|\n|\s)-(?=\*\*[^*\n]{1,30}\*\*[：:])/g, '$1- ')
+    .replace(/\*\*(?=[\s，。；;、,.)）\]-]|$)/g, '')
+    .replace(/(^|[\s(（])\*\*(?![^*\n]{1,40}\*\*)/g, '$1')
+    .replace(/id[:：]\s*(\d)\s+(\d{3})(?=\D|$)/g, 'id:$1$2')
+    .replace(/\((id)[:：]\s*(\d+)\)/gi, '($1: $2)')
+}
+
+function normalizeRecordSummaryBlocks(content: string): string {
+  const lines = content.split('\n')
+  const normalized: string[] = []
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || !/用户记录/.test(trimmed) || !/user[_-]?\d+/i.test(trimmed)) {
+      normalized.push(line)
+      continue
+    }
+
+    const matches = Array.from(trimmed.matchAll(/user[_-]?\d+(?:\s*\*\*)?\s*\(?id[:：]\s*\d+/gi))
+    if (matches.length === 0) {
+      normalized.push(line)
+      continue
+    }
+
+    normalized.push('### 已存在用户记录')
+    normalized.push('')
+    matches.forEach((match) => {
+      const item = match[0]
+        .replace(/\*\*/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/id[:：]\s*([\d\s]+)/i, (_, id: string) => `id: ${id.replace(/\s+/g, '')}`)
+        .trim()
+      normalized.push(`- ${item}`)
+    })
+  }
+
+  return normalized.join('\n')
+}
+
+function repairSplitRecordLines(content: string): string {
+  const lines = content.split('\n')
+  const normalized: string[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = lines[index]
+    const trimmed = current.trim()
+    const idPrefixMatch = trimmed.match(/^(-\s+)?(user[_-]?\d+\(id[:：]\s*)$/i)
+    const nextValue = lines[index + 1]?.trim() ?? ''
+
+    if (idPrefixMatch && /^\d+[.)、]?$/.test(nextValue)) {
+      const bullet = idPrefixMatch[1] ?? ''
+      normalized.push(`${bullet}${idPrefixMatch[2]}${nextValue.replace(/[.)、]$/, '')})`)
+      index += 1
+      continue
+    }
+
+    normalized.push(current)
+  }
+
+  return normalized.join('\n')
+}
+
+function normalizeCompactPipeTables(content: string): string {
+  const lines = content.split('\n')
+  const normalized: string[] = []
+  let index = 0
+
+  const isSeparatorLine = (line: string) => /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(line.trim())
+
+  while (index < lines.length) {
+    const current = lines[index]
+    let previousIndex = index - 1
+    while (previousIndex >= 0 && !lines[previousIndex].trim()) {
+      previousIndex -= 1
+    }
+    const previousIsPipeRow =
+      previousIndex >= 0 &&
+      lines[previousIndex].trim().startsWith('|') &&
+      lines[previousIndex].trim().endsWith('|')
+    const headerCells = splitLoosePipeCells(current)
+    const currentLooksLikeHeader =
+      current.trim().startsWith('|') &&
+      current.trim().endsWith('|') &&
+      headerCells.length >= 2 &&
+      headerCells.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 12)
+
+    if (
+      !currentLooksLikeHeader ||
+      previousIsPipeRow ||
+      isSeparatorLine(current) ||
+      isSeparatorLine(lines[index + 1] ?? '') ||
+      isPartialPersonnelTableHeader(headerCells)
+    ) {
+      normalized.push(current)
+      index += 1
+      continue
+    }
+
+    let cursor = index + 1
+    while (cursor < lines.length && !lines[cursor].trim()) {
+      cursor += 1
+    }
+
+    const rowSource = lines[cursor] ?? ''
+    const rowCells = splitLoosePipeCells(rowSource)
+    if (
+      !rowSource.trim().startsWith('|') ||
+      rowCells.length < headerCells.length ||
+      rowCells.length % headerCells.length !== 0
+    ) {
+      normalized.push(current)
+      index += 1
+      continue
+    }
+
+    normalized.push(`| ${headerCells.join(' | ')} |`)
+    normalized.push(`| ${headerCells.map(() => '---').join(' | ')} |`)
+    for (let offset = 0; offset < rowCells.length; offset += headerCells.length) {
+      normalized.push(`| ${rowCells.slice(offset, offset + headerCells.length).join(' | ')} |`)
+    }
+    index = cursor + 1
+  }
+
+  return normalized.join('\n')
+}
+
+function normalizeAttachedPipeBlocks(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      if (line.trim().startsWith('|')) {
+        return line
+      }
+
+      return line
+        .replace(/([^\n])((?:\|[^\n|]+){4,}\|)/g, '$1\n\n$2')
+        .replace(/(\|[^\n]+\|)\s*(>)/g, '$1\n\n$2')
+    })
+    .join('\n')
+}
+
+function normalizeNonTablePipeSpacing(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      if (line.trim().startsWith('|')) {
+        return line
+      }
+
+      return line
+        .replace(/\|\s*[-:]+[-| :]*\|/g, (match) => `\n${match}\n`)
+        .replace(/([^\n])(\|[^\n]+\|)/g, '$1\n$2')
+        .replace(/(\|[^\n]+\|)([^\n])/g, '$1\n$2')
+    })
+    .join('\n')
+}
+
+const personnelTableHeaders = ['姓名', '性别', '职称', '教师编号', '年龄', '手机号', '薪资', '教龄']
+
+function splitLoosePipeCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/\|\|+/g, '|')
+    .split('|')
+    .map((cell) => cell.trim())
+    .filter(Boolean)
+}
+
+function isPersonnelFieldCell(value: string): boolean {
+  return personnelTableHeaders.includes(value)
+}
+
+function isPersonnelFillerCell(value: string): boolean {
+  return /^-+$/.test(value) || /^:?-{3,}:?$/.test(value) || value === '维度' || value === '数据说明'
+}
+
+function isPartialPersonnelTableHeader(cells: string[]): boolean {
+  const fieldCells = cells.filter((cell) => isPersonnelFieldCell(cell))
+  return fieldCells.length > 0 && fieldCells.length === cells.length && fieldCells.length < personnelTableHeaders.length
+}
+
+function isShortChineseName(value: string): boolean {
+  const trimmed = value.trim()
+  return /^[\u4e00-\u9fa5]{2,4}$/.test(trimmed) && !/(统计|分析|说明|建议|发现|摘要|定义|字段)/.test(trimmed)
+}
+
+function isPersonnelHeaderFragment(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed) {
+    return true
+  }
+  const cells = splitLoosePipeCells(trimmed)
+  if (cells.length === 0) {
+    return false
+  }
+  return cells.every((cell) => isPersonnelFieldCell(cell) || isPersonnelFillerCell(cell))
+}
+
+function isPersonnelLikePipeLine(line: string): boolean {
+  const cells = splitLoosePipeCells(line)
+  const fieldCount = cells.filter((cell) => isPersonnelFieldCell(cell)).length
+  if (fieldCount >= 2) {
+    return true
+  }
+
+  const usefulCells = cells.filter((cell) => !isPersonnelFieldCell(cell) && !isPersonnelFillerCell(cell))
+  if (usefulCells.length < 7) {
+    return false
+  }
+
+  const hasIdentityValue = usefulCells.some((cell) => /^\d{10,}$/.test(cell))
+  const hasNameValue = usefulCells.some((cell) => isShortChineseName(cell))
+  const hasPersonnelRole = usefulCells.some((cell) => /职称|助教|教师|中级|高级|无/.test(cell))
+  return hasIdentityValue && (hasNameValue || hasPersonnelRole)
+}
+
+function isPersonnelSectionTitle(line: string): boolean {
+  return /关键人员信息摘要|人员信息摘要|用户信息摘要/.test(line)
+}
+
+function isPersonnelSectionEnd(line: string): boolean {
+  return /^(#{1,6}\s|核心发现|补充说明|补充建议|注意事项|总结|结论)/.test(line)
+}
+
+function looksLikePersonnelFragmentStart(lines: string[], startIndex: number): boolean {
+  const headerHits = new Set<string>()
+  let hasNameToken = false
+  let hasDataRow = false
+  let checked = 0
+
+  for (let cursor = startIndex; cursor < lines.length && checked < 14; cursor += 1) {
+    const line = lines[cursor].trim()
+    if (!line) {
+      continue
+    }
+    if (cursor > startIndex && isPersonnelSectionEnd(line)) {
+      break
+    }
+
+    checked += 1
+    if (isShortChineseName(line)) {
+      hasNameToken = true
+    }
+
+    const cells = splitLoosePipeCells(line)
+    cells.forEach((cell) => {
+      if (isPersonnelFieldCell(cell)) {
+        headerHits.add(cell)
+      }
+    })
+
+    if (cells.length >= 7 && cells.some((cell) => /^\d{4,}$/.test(cell) || isShortChineseName(cell))) {
+      hasDataRow = true
+    }
+  }
+
+  return headerHits.has('姓名') && headerHits.size >= 4 && (hasNameToken || hasDataRow)
+}
+
+function appendPersonnelRowsFromCells(rows: string[][], cells: string[], pendingName: string): string {
+  const usefulCells = getUsefulPersonnelCells(cells)
+
+  if (pendingName && usefulCells.length >= 7) {
+    rows.push([pendingName, ...usefulCells.slice(0, 7)])
+    const nextName = usefulCells.slice(7).find((cell) => isShortChineseName(cell)) ?? ''
+    return nextName
+  }
+
+  if (usefulCells.length >= personnelTableHeaders.length && isShortChineseName(usefulCells[0])) {
+    let cursor = 0
+    while (cursor + personnelTableHeaders.length <= usefulCells.length && isShortChineseName(usefulCells[cursor])) {
+      rows.push(usefulCells.slice(cursor, cursor + personnelTableHeaders.length))
+      cursor += personnelTableHeaders.length
+    }
+    const nextName = usefulCells.slice(cursor).find((cell) => isShortChineseName(cell)) ?? ''
+    return nextName
+  }
+
+  return pendingName
+}
+
+function getUsefulPersonnelCells(cells: string[]): string[] {
+  return cells.filter((cell) => !isPersonnelFieldCell(cell) && !isPersonnelFillerCell(cell))
+}
+
+function splitPersonnelTailNote(line: string): { tableLine: string; tailNote: string } {
+  const match = line.match(/\|\s*(>?[\s*]*(?:核心发现|补充说明|补充建议|注意事项|总结|结论)[\s\S]*)$/)
+  if (!match || match.index === undefined) {
+    return { tableLine: line, tailNote: '' }
+  }
+
+  return {
+    tableLine: line.slice(0, match.index + 1),
+    tailNote: match[1].trim(),
+  }
+}
+
+function buildPersonnelMarkdownTable(rows: string[][], tailNotes: string[] = []): string[] {
+  const output = [
+    `| ${personnelTableHeaders.join(' | ')} |`,
+    `| ${personnelTableHeaders.map(() => '---').join(' | ')} |`,
+    ...rows.map((row) => `| ${row.join(' | ')} |`),
+  ]
+
+  tailNotes.forEach((tailNote) => {
+    output.push('')
+    output.push(tailNote.startsWith('>') ? tailNote : `> ${tailNote}`)
+  })
+
+  return output
+}
+
+function normalizeCompactPersonnelTableSections(content: string): string {
+  return content.replace(
+    /(^|\n)((?:#{1,6}\s*)?(?:关键人员信息摘要|人员信息摘要|用户信息摘要))\s*(\|姓名\|性别\|职称\|教师编号\|年龄\|手机号\|薪资\|教龄[\s\S]*?)(?=\n#{1,6}\s|$)/g,
+    (match, prefix: string, rawTitle: string, rawTable: string) => {
+      if (!rawTable.includes('||')) {
+        return match
+      }
+
+      const { tableLine, tailNote } = splitPersonnelTailNote(rawTable)
+      const rows: string[][] = []
+      appendPersonnelRowsFromCells(rows, splitLoosePipeCells(tableLine), '')
+      if (rows.length === 0) {
+        return match
+      }
+
+      const title = rawTitle.trim().startsWith('#')
+        ? rawTitle.trim().replace(/^(#{1,6})([^\s#])/, '$1 $2')
+        : `### ${rawTitle.trim()}`
+      const tailNotes = tailNote ? [tailNote] : []
+
+      return `${prefix}${[title, '', ...buildPersonnelMarkdownTable(rows, tailNotes), ''].join('\n')}`
+    },
+  )
+}
+
+function normalizePersonnelTableFragments(content: string): string {
+  const lines = content.split('\n')
+  const normalized: string[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = lines[index]
+    const trimmed = current.trim()
+    const startsFromTitle = isPersonnelSectionTitle(trimmed)
+    const startsFromFragment = !startsFromTitle && looksLikePersonnelFragmentStart(lines, index)
+    const inlineTableLine =
+      startsFromTitle && trimmed.includes('|') ? trimmed.slice(trimmed.indexOf('|')).trim() : ''
+
+    if (!startsFromTitle && !startsFromFragment) {
+      normalized.push(current)
+      continue
+    }
+
+    if (startsFromTitle) {
+      normalized.push(trimmed.startsWith('#') ? current.replace(/\s*\|.*$/, '') : `### ${trimmed.replace(/\s*\|.*$/, '')}`)
+    }
+
+    const rows: string[][] = []
+    const tailNotes: string[] = []
+    let pendingName = ''
+    let pendingCells: string[] = []
+    let cursor = startsFromTitle ? index + 1 : index
+    let shouldReadInlineTableLine = Boolean(inlineTableLine)
+
+    while (cursor < lines.length) {
+      const line = shouldReadInlineTableLine ? inlineTableLine : lines[cursor].trim()
+      const advanceCursor = () => {
+        if (shouldReadInlineTableLine) {
+          shouldReadInlineTableLine = false
+          return
+        }
+        cursor += 1
+      }
+
+      if (!line) {
+        advanceCursor()
+        continue
+      }
+      if (!shouldReadInlineTableLine && cursor > index && isPersonnelSectionEnd(line)) {
+        break
+      }
+      if (isPersonnelHeaderFragment(line)) {
+        advanceCursor()
+        continue
+      }
+      if (isShortChineseName(line)) {
+        pendingName = line
+        pendingCells = []
+        advanceCursor()
+        continue
+      }
+
+      const { tableLine, tailNote } = splitPersonnelTailNote(line)
+      const cells = splitLoosePipeCells(tableLine)
+      const usefulCells = getUsefulPersonnelCells(cells)
+
+      if (pendingName && usefulCells.length > 0) {
+        pendingCells.push(...usefulCells)
+        while (pendingName && pendingCells.length >= 7) {
+          rows.push([pendingName, ...pendingCells.slice(0, 7)])
+          pendingCells = pendingCells.slice(7)
+          if (pendingCells.length > 0 && isShortChineseName(pendingCells[0])) {
+            pendingName = pendingCells[0]
+            pendingCells = pendingCells.slice(1)
+          } else {
+            pendingName = ''
+          }
+        }
+
+        if (tailNote) {
+          tailNotes.push(tailNote.startsWith('>') ? tailNote : `> ${tailNote}`)
+        }
+        advanceCursor()
+        continue
+      }
+
+      const nextPendingName = appendPersonnelRowsFromCells(rows, cells, pendingName)
+      if (nextPendingName !== pendingName || cells.length >= 7) {
+        pendingName = nextPendingName
+        pendingCells = []
+        if (tailNote) {
+          tailNotes.push(tailNote.startsWith('>') ? tailNote : `> ${tailNote}`)
+        }
+        advanceCursor()
+        continue
+      }
+
+      break
+    }
+
+    if (rows.length > 0) {
+      normalized.push('')
+      normalized.push(...buildPersonnelMarkdownTable(rows, tailNotes))
+      normalized.push('')
+      index = cursor - 1
+      continue
+    }
+
+    if (!startsFromTitle) {
+      normalized.push(current)
+    }
+  }
+
+  return normalized.join('\n')
+}
+
+function normalizeReportDashSections(content: string): string {
+  const lines = content.split('\n')
+  const normalized: string[] = []
+  const sectionPattern = /^([^\n#|]{2,36}(?:分析|计算|统计|说明|建议)(?:（[^）]+）)?)\s*[-：:]\s*(.+)$/
+  const splitDetailItems = (value: string) =>
+    value
+      .replace(/\*\*/g, '')
+      .replace(/\s*-\s*(?=[\u4e00-\u9fa5A-Za-z0-9_]{1,18}[：:=])/g, '\n')
+      .replace(/\s*-\s*(?=(?:其他|用户|平均|总|最高|最低|补充|建议|说明))/g, '\n')
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const match = trimmed.match(sectionPattern)
+    if (!match || trimmed.startsWith('|')) {
+      normalized.push(line)
+      continue
+    }
+
+    const [, title, detail] = match
+    const items = splitDetailItems(detail)
+    normalized.push(`### ${title}`)
+    normalized.push('')
+    if (items.length <= 1) {
+      normalized.push(detail.replace(/\*\*/g, '').trim())
+    } else {
+      items.forEach((item) => normalized.push(`- ${item}`))
+    }
+  }
+
+  return normalized.join('\n')
+}
+
+function normalizeShortReportHeadings(content: string): string {
+  return content.replace(
+    /(^|\n)(?!#{1,6}\s)([^\n|#*\-：:]{2,24}(?:统计|分析|计算|说明|建议))\s*(?=\n|$)/g,
+    '$1### $2',
   )
 }
 
@@ -466,6 +971,12 @@ function normalizeHeadingAttachedTable(content: string): string {
   return normalized
 }
 
+function normalizeHeadingAttachedList(content: string): string {
+  return content
+    .replace(/(#{2,6}\s[^\n\-|]{2,48})-\s*(?=(?:\*\*)?[\u4e00-\u9fa5A-Za-z0-9_]{1,24}(?:\*\*)?[：:])/g, '$1\n\n- ')
+    .replace(/([^\n])-\s*(?=(?:\*\*)?[\u4e00-\u9fa5A-Za-z0-9_]{1,24}(?:\*\*)?[：:])/g, '$1\n- ')
+}
+
 const suggestionFieldAliases: Record<string, string[]> = {
   category: ['类别', '分类', '类型', '方向', '主题', '模块', '方案'],
   summary: ['说明', '概述', '结论', '判断', '特点', '核心观点'],
@@ -575,12 +1086,25 @@ function normalizeLooseTableBlocks(content: string): string {
   for (let index = 0; index < lines.length; index += 1) {
     const current = lines[index].trim()
     const next = lines[index + 1]?.trim() ?? ''
+    let previousIndex = index - 1
+    while (previousIndex >= 0 && !lines[previousIndex].trim()) {
+      previousIndex -= 1
+    }
+    const previousIsPipeRow =
+      previousIndex >= 0 &&
+      lines[previousIndex].trim().startsWith('|') &&
+      lines[previousIndex].trim().endsWith('|')
 
     const currentCells = current.split('|').map((cell) => cell.trim()).filter(Boolean)
     const nextCells = next.split('|').map((cell) => cell.trim()).filter(Boolean)
     const looksLikeTableHeader = currentCells.length >= 3 && nextCells.length === currentCells.length && !/^:?-{3,}:?$/.test(nextCells[0])
 
-    if (!looksLikeTableHeader) {
+    if (
+      !looksLikeTableHeader ||
+      previousIsPipeRow ||
+      currentCells.every((cell) => isMarkdownSeparatorCell(cell)) ||
+      isPartialPersonnelTableHeader(currentCells)
+    ) {
       normalized.push(lines[index])
       continue
     }
@@ -650,7 +1174,11 @@ function normalizeInlineMarkdownTables(content: string): string {
     }
 
     const headers = tokens.slice(sepStart-sepCount, sepStart)
-    if (headers.length !== sepCount || !headers.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 20)) {
+    if (
+      headers.length !== sepCount ||
+      isPartialPersonnelTableHeader(headers) ||
+      !headers.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 20)
+    ) {
       return line
     }
 
@@ -703,6 +1231,16 @@ function expandDenseDoublePipeTables(content: string): string {
       return line
     }
 
+    if (isPersonnelLikePipeLine(trimmed)) {
+      return line
+    }
+
+    const compactCells = splitDenseTableCells(trimmed)
+    const separatorCellCount = compactCells.filter((cell) => isMarkdownSeparatorCell(cell)).length
+    if (separatorCellCount >= 2) {
+      return line
+    }
+
     let rebuilt = trimmed.replace(/\|\|+/g, '\n')
     rebuilt = rebuilt.replace(/\n(>.*)$/g, '\n\n$1')
     rebuilt = rebuilt.replace(/\|\*\*说明[:：]\*\*/g, '\n\n**说明：**')
@@ -718,6 +1256,9 @@ function normalizeSingleLineDenseTables(content: string): string {
   const normalized = lines.map((line) => {
     const trimmed = line.trim()
     if (!trimmed.includes('|')) {
+      return line
+    }
+    if (trimmed.startsWith('|') && trimmed.endsWith('|') && !/\|\|+/.test(trimmed)) {
       return line
     }
 
@@ -746,6 +1287,7 @@ function normalizeSingleLineDenseTables(content: string): string {
 
       if (
         bodyRows.length > 0 &&
+        !isPartialPersonnelTableHeader(headers) &&
         headers.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 24)
       ) {
         const rebuilt = [
@@ -790,7 +1332,7 @@ function normalizeSingleLineDenseTables(content: string): string {
       if (columnCount < 2 || headers.length !== columnCount) {
         return line
       }
-      if (!headers.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 24)) {
+      if (isPartialPersonnelTableHeader(headers) || !headers.every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 24)) {
         return line
       }
 
@@ -911,7 +1453,12 @@ function normalizeFragmentedPipeTableBlocks(content: string): string {
       rows.push(flattened.slice(start, start + expectedCols))
     }
 
-    if (rows.length < 2 || !rows[0].every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 24)) {
+    if (
+      rows.length < 2 ||
+      rows[0].every((cell) => isMarkdownSeparatorCell(cell)) ||
+      isPartialPersonnelTableHeader(rows[0]) ||
+      !rows[0].every((cell) => looksLikePseudoTableHeader(cell) || cell.length <= 24)
+    ) {
       normalized.push(lines[index])
       continue
     }
@@ -1199,22 +1746,30 @@ function fixMarkdown(content: string): string {
   fixed = fixed.replace(/<\/?system>/g, '')
 
   fixed = unwrapOverbroadStrong(fixed)
+  fixed = normalizeMarkdownArtifacts(fixed)
+  fixed = normalizeRecordSummaryBlocks(fixed)
 
-  fixed = fixed.replace(/([^\n])(#{1,6})/g, '$1\n\n$2')
+  fixed = fixed.replace(/([^\n#])(#{1,6})(?!#)/g, '$1\n\n$2')
   fixed = fixed.replace(/^(#{1,6})([^\s#])/gm, '$1 $2')
+  fixed = normalizeCompactPersonnelTableSections(fixed)
   fixed = fixed.replace(/(#{1,6}\s[^\n|]+)(\|(?=[^\n|]+\|[^\n|]+\|))/g, '$1\n\n$2')
-  fixed = fixed.replace(/([^\n])((?:\|[^\n|]+){4,}\|)/g, '$1\n\n$2')
-  fixed = fixed.replace(/(\|[^\n]+\|)\s*(>)/g, '$1\n\n$2')
+  fixed = normalizeAttachedPipeBlocks(fixed)
 
+  fixed = normalizePersonnelTableFragments(fixed)
+  fixed = normalizeSingleLineDenseTables(fixed)
+  fixed = normalizeInlineMarkdownTables(fixed)
   fixed = expandDenseDoublePipeTables(fixed)
   fixed = normalizeCompressedAnswerBlocks(fixed)
   fixed = normalizeMermaidSection(fixed)
   fixed = normalizeStepSections(fixed)
   fixed = normalizeSummarySections(fixed)
   fixed = normalizeVisualSeparators(fixed)
+  fixed = normalizeShortReportHeadings(fixed)
+  fixed = normalizeReportDashSections(fixed)
+  fixed = normalizeHeadingAttachedList(fixed)
   fixed = normalizeHeadingAttachedTable(fixed)
-  fixed = normalizeSingleLineDenseTables(fixed)
-  fixed = normalizeInlineMarkdownTables(fixed)
+  fixed = normalizePersonnelTableFragments(fixed)
+  fixed = normalizeCompactPipeTables(fixed)
   fixed = normalizeStructuredSpreadsheetBlocks(fixed)
   fixed = normalizeSuggestionCardBlocks(fixed)
   fixed = normalizeVerticalKeyValueTableBlocks(fixed)
@@ -1223,9 +1778,7 @@ function fixMarkdown(content: string): string {
   fixed = normalizePainSolutionSection(fixed)
   fixed = normalizeDeliverableSection(fixed)
 
-  fixed = fixed.replace(/\|\s*[-:]+[-| :]*\|/g, (match) => `\n${match}\n`)
-  fixed = fixed.replace(/([^\n])(\|[^\n]+\|)/g, '$1\n$2')
-  fixed = fixed.replace(/(\|[^\n]+\|)([^\n])/g, '$1\n$2')
+  fixed = normalizeNonTablePipeSpacing(fixed)
 
   fixed = fixed.replace(
     /(^|\n)((?:[^\n]*[├└│].*(?:\n|$))+)/g,
@@ -1234,7 +1787,7 @@ ${treeBlock.trimEnd()}\n\
 `,
   )
 
-  fixed = fixed.replace(/([^\n])\s+(\d+[.)、]\s*)/g, '$1\n$2')
+  fixed = fixed.replace(/([^\nid:：])\s+(\d+[.)、]\s+)/g, '$1\n$2')
   fixed = fixed.replace(/([^\n])\s+(第[一二三四五六七八九十]+阶段[:：])/g, '$1\n\n$2')
   fixed = fixed.replace(/([^\n])\s+([-*+])\s+/g, '$1\n$2 ')
   fixed = fixed.replace(/([^\n])\s+-\s+(?=[^\n：:]+[：:])/g, '$1\n- ')
@@ -1248,7 +1801,8 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed.replace(/([a-z])([A-Z])/g, '$1 $2')
   fixed = fixed.replace(/([a-zA-Z])([\u4e00-\u9fa5])/g, '$1 $2')
   fixed = fixed.replace(/([\u4e00-\u9fa5])([A-Za-z][a-z])/g, '$1 $2')
-  fixed = fixed.replace(/([.!?])([A-Za-z\u4e00-\u9fa5])/g, '$1 $2')
+  fixed = fixed.replace(/([!?])([A-Za-z\u4e00-\u9fa5])/g, '$1 $2')
+  fixed = fixed.replace(/(^|[^0-9])\.([A-Za-z\u4e00-\u9fa5])/g, '$1. $2')
 
   fixed = fixed.replace(/^[ \t]*:[-]{3,}[ \t]*$/gm, '---')
   fixed = fixed.replace(/^[ \t]*\|?[ :-]{3,}\|?[ \t]*$/gm, '---')
@@ -1256,6 +1810,10 @@ ${treeBlock.trimEnd()}\n\
     .split('\n')
     .map((line) => normalizePseudoStructuredLine(line))
     .join('\n')
+  fixed = normalizeMarkdownArtifacts(fixed)
+  fixed = repairSplitRecordLines(fixed)
+  fixed = normalizePersonnelTableFragments(fixed)
+  fixed = normalizeCompactPipeTables(fixed)
   fixed = normalizeCompressedAnswerBlocks(fixed)
   fixed = renumberOrderedListBlocks(fixed)
   fixed = fixed.replace(/([：:])\s*[-*]\s+/g, '$1 ')

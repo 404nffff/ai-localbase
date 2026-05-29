@@ -2411,11 +2411,11 @@
 .md-table-wrap {
   width: 100%;
   overflow-x: auto;
-  margin: 14px 0;
+  margin: 12px 0;
   border: 1px solid #e6ebf5;
-  border-radius: 16px;
+  border-radius: 10px;
   background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
-  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.05);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.04);
 }
 
 .md-spreadsheet-note {
@@ -2432,13 +2432,13 @@
 /* ── 表格 ── */
 .message-content-markdown table,
 .md-data-table {
-  width: 100%;
-  min-width: 640px;
+  width: max-content;
+  min-width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   margin: 0;
-  font-size: 13px;
-  table-layout: fixed;
+  font-size: 12px;
+  table-layout: auto;
 }
 
 .message-content-markdown th,
@@ -2447,27 +2447,26 @@
   top: 0;
   z-index: 1;
   background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%);
-  padding: 11px 14px;
+  padding: 8px 12px;
   text-align: left;
   font-weight: 800;
   color: #312e81;
   border-bottom: 1px solid #dbe4ff;
   font-size: 12px;
-  letter-spacing: 0.03em;
-  white-space: normal;
-  word-break: break-word;
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .message-content-markdown td,
 .md-data-table-cell {
-  padding: 12px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid #eef2f7;
   color: #334155;
-  vertical-align: top;
-  white-space: normal;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  line-height: 1.7;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.45;
   background: rgba(255, 255, 255, 0.92);
 }
 
@@ -2492,24 +2491,14 @@
   background: linear-gradient(90deg, rgba(99, 102, 241, 0.08) 0%, rgba(255, 255, 255, 0.96) 100%) !important;
 }
 
+.md-data-table th,
+.md-data-table td {
+  min-width: 84px;
+}
+
 .md-data-table th:first-child,
 .md-data-table td:first-child {
-  width: 18%;
-}
-
-.md-data-table th:nth-child(2),
-.md-data-table td:nth-child(2) {
-  width: 28%;
-}
-
-.md-data-table th:nth-child(3),
-.md-data-table td:nth-child(3) {
-  width: 28%;
-}
-
-.md-data-table th:nth-child(4),
-.md-data-table td:nth-child(4) {
-  width: 26%;
+  min-width: 64px;
 }
 
 .md-advice-grid {
