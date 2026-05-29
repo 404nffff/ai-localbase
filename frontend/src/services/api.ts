@@ -1,0 +1,297 @@
+import type {
+  AppConfig,
+  ChatMessage,
+  Conversation,
+  DocumentItem,
+  KnowledgeBase,
+  MCPConfig,
+} from '../App'
+
+export const API_BASE_PATH = ''
+
+export interface ApiErrorResponse {
+  error?: string | {
+    code?: string
+    message?: string
+    requestId?: string
+  }
+}
+
+export interface HealthResponse {
+  status?: string
+}
+
+export interface BackendDocumentItem {
+  id: string
+  name: string
+  sizeLabel: string
+  uploadedAt: string
+  status: 'indexed' | 'ready' | 'processing'
+  contentPreview?: string
+}
+
+export interface BackendKnowledgeBase {
+  id: string
+  name: string
+  description: string
+  documents: BackendDocumentItem[]
+  createdAt: string
+}
+
+export interface KnowledgeBaseListResponse {
+  items: BackendKnowledgeBase[]
+}
+
+export interface ConfigResponse {
+  chat: AppConfig['chat']
+  embedding: AppConfig['embedding']
+  mcp: MCPConfig
+}
+
+export interface BackendConversationListItem {
+  id: string
+  title: string
+  knowledgeBaseId: string
+  documentId: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+}
+
+export interface ConversationListResponse {
+  items: BackendConversationListItem[]
+}
+
+export interface BackendConversation {
+  id: string
+  title: string
+  knowledgeBaseId: string
+  documentId: string
+  createdAt: string
+  updatedAt: string
+  messages: Array<{
+    id: string
+    role: 'assistant' | 'user'
+    content: string
+    createdAt: string
+    metadata?: ChatMessage['metadata']
+  }>
+}
+
+export interface UploadResponse {
+  uploaded: BackendDocumentItem
+}
+
+export interface GenerateEvalDatasetResponse {
+  knowledgeBaseId?: string
+  documentId?: string
+  count: number
+  documentCount: number
+  items: Array<{
+    id: string
+    question: string
+    answer: string
+    answer_snippets: string[]
+    source_documents: Array<{
+      knowledge_base_id: string
+      document_id: string
+      chunk_id: string
+    }>
+    answer_type: string
+    difficulty: string
+    notes?: string
+  }>
+}
+
+export const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
+  id: document.id,
+  name: document.name,
+  sizeLabel: document.sizeLabel,
+  uploadedAt: document.uploadedAt,
+  status: document.status,
+  contentPreview: document.contentPreview,
+})
+
+export const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): KnowledgeBase => ({
+  id: knowledgeBase.id,
+  name: knowledgeBase.name,
+  description: knowledgeBase.description,
+  documents: (knowledgeBase.documents ?? []).map(normalizeDocument),
+  createdAt: knowledgeBase.createdAt,
+})
+
+export const normalizeConversation = (conversation: BackendConversation): Conversation => ({
+  id: conversation.id,
+  title: conversation.title,
+  createdAt: conversation.createdAt,
+  updatedAt: conversation.updatedAt,
+  messages: (conversation.messages ?? []).map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    timestamp: message.createdAt,
+    metadata: message.metadata,
+  })),
+})
+
+export const extractErrorMessage = async (response: Response) => {
+  try {
+    const errorBody = (await response.json()) as ApiErrorResponse
+    if (typeof errorBody.error === 'string') {
+      return errorBody.error || '请求失败'
+    }
+    return errorBody.error?.message || '请求失败'
+  } catch {
+    return '请求失败'
+  }
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_PATH}${path}`, init)
+  if (!response.ok) {
+    throw new Error(await extractErrorMessage(response))
+  }
+
+  return (await response.json()) as T
+}
+
+async function requestOk(path: string, init?: RequestInit): Promise<void> {
+  const response = await fetch(`${API_BASE_PATH}${path}`, init)
+  if (!response.ok) {
+    throw new Error(await extractErrorMessage(response))
+  }
+}
+
+const jsonRequest = (body: unknown, init: RequestInit = {}): RequestInit => ({
+  ...init,
+  headers: {
+    'Content-Type': 'application/json',
+    ...init.headers,
+  },
+  body: JSON.stringify(body),
+})
+
+const serializeConversation = (conversation: Conversation, title = conversation.title) => ({
+  id: conversation.id,
+  title,
+  knowledgeBaseId: '',
+  documentId: '',
+  messages: conversation.messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.timestamp,
+    metadata: message.metadata,
+  })),
+})
+
+export const fetchBackendHealth = async (): Promise<HealthResponse | null> => {
+  try {
+    const response = await fetch(`${API_BASE_PATH}/health`)
+    if (!response.ok) {
+      return null
+    }
+
+    return (await response.json()) as HealthResponse
+  } catch {
+    return null
+  }
+}
+
+export const fetchInitialAppData = async () => {
+  const [knowledgeBaseData, configData, conversationsData] = await Promise.all([
+    requestJson<KnowledgeBaseListResponse>('/api/knowledge-bases'),
+    requestJson<ConfigResponse>('/api/config'),
+    requestJson<ConversationListResponse>('/api/conversations'),
+  ])
+
+  return {
+    knowledgeBases: knowledgeBaseData.items.map(normalizeKnowledgeBase),
+    config: configData,
+    conversations: conversationsData.items ?? [],
+  }
+}
+
+export const updateAppConfig = async (nextConfig: AppConfig): Promise<AppConfig> => (
+  requestJson<ConfigResponse>('/api/config', jsonRequest(nextConfig, { method: 'PUT' }))
+)
+
+export const resetMcpToken = async (): Promise<MCPConfig> => {
+  const payload = await requestJson<{ mcp: MCPConfig }>('/api/config/mcp/reset-token', {
+    method: 'POST',
+  })
+  return payload.mcp
+}
+
+export const fetchConversationDetail = async (conversationId: string): Promise<Conversation> => (
+  normalizeConversation(await requestJson<BackendConversation>(`/api/conversations/${conversationId}`))
+)
+
+export const saveConversation = async (
+  conversation: Conversation,
+  title = conversation.title,
+): Promise<Conversation> => (
+  normalizeConversation(
+    await requestJson<BackendConversation>(
+      `/api/conversations/${conversation.id}`,
+      jsonRequest(serializeConversation(conversation, title), { method: 'PUT' }),
+    ),
+  )
+)
+
+export const deleteConversation = async (conversationId: string): Promise<void> => {
+  await requestOk(`/api/conversations/${conversationId}`, { method: 'DELETE' })
+}
+
+export const createKnowledgeBase = async (
+  name: string,
+  description: string,
+): Promise<KnowledgeBase> => (
+  normalizeKnowledgeBase(
+    await requestJson<BackendKnowledgeBase>(
+      '/api/knowledge-bases',
+      jsonRequest({ name, description }, { method: 'POST' }),
+    ),
+  )
+)
+
+export const deleteKnowledgeBase = async (knowledgeBaseId: string): Promise<void> => {
+  await requestOk(`/api/knowledge-bases/${knowledgeBaseId}`, { method: 'DELETE' })
+}
+
+export const uploadKnowledgeBaseFile = async (
+  knowledgeBaseId: string,
+  file: File,
+): Promise<DocumentItem> => {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const data = await requestJson<UploadResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/documents`,
+    {
+      method: 'POST',
+      body: formData,
+    },
+  )
+
+  return normalizeDocument(data.uploaded)
+}
+
+export const deleteKnowledgeBaseDocument = async (
+  knowledgeBaseId: string,
+  documentId: string,
+): Promise<void> => {
+  await requestOk(`/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`, {
+    method: 'DELETE',
+  })
+}
+
+export const generateEvalDataset = async (
+  knowledgeBaseId: string,
+  maxPerDocument = 5,
+): Promise<GenerateEvalDatasetResponse> => (
+  requestJson<GenerateEvalDatasetResponse>(
+    '/api/eval/datasets/generate',
+    jsonRequest({ knowledgeBaseId, maxPerDocument }, { method: 'POST' }),
+  )
+)

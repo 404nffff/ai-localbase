@@ -2,6 +2,22 @@ import './App.css'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  API_BASE_PATH,
+  createKnowledgeBase,
+  deleteConversation,
+  deleteKnowledgeBase,
+  deleteKnowledgeBaseDocument,
+  extractErrorMessage,
+  fetchBackendHealth,
+  fetchConversationDetail,
+  fetchInitialAppData,
+  generateEvalDataset,
+  resetMcpToken,
+  saveConversation,
+  updateAppConfig,
+  uploadKnowledgeBaseFile,
+} from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -77,6 +93,12 @@ export interface ChatModeSettings {
   thinkModel: string
 }
 
+const AI_CONFIG_STORAGE_KEY = 'ai-localbase-config'
+const THINK_MODEL_STORAGE_KEY = 'ai-localbase-think-model'
+const FALLBACK_REQUEST_TIMEOUT_MS = 90_000
+const STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000
+const STREAM_REQUEST_TIMEOUT_MS = 180_000
+
 interface ChatCompletionResponse {
   id: string
   object: string
@@ -114,114 +136,10 @@ interface ChatRequestBody {
   }>
 }
 
-interface ApiErrorResponse {
-  error?: string | {
-    code?: string
-    message?: string
-    requestId?: string
-  }
-}
-
 interface StreamEventPayload {
   content?: string
   error?: string
   metadata?: ChatMessageMetadata
-}
-
-interface HealthResponse {
-  status?: string
-}
-
-const API_BASE_PATH = ''
-const AI_CONFIG_STORAGE_KEY = 'ai-localbase:app-config'
-const THINK_MODEL_STORAGE_KEY = 'ai-localbase:think-model'
-const STREAM_FIRST_CHUNK_TIMEOUT_MS = 60000
-const STREAM_REQUEST_TIMEOUT_MS = 150000
-const FALLBACK_REQUEST_TIMEOUT_MS = 90000
-
-const createId = () =>
-  `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-
-interface BackendDocumentItem {
-  id: string
-  name: string
-  sizeLabel: string
-  uploadedAt: string
-  status: 'indexed' | 'ready' | 'processing'
-  contentPreview?: string
-}
-
-interface BackendKnowledgeBase {
-  id: string
-  name: string
-  description: string
-  documents: BackendDocumentItem[]
-  createdAt: string
-}
-
-interface KnowledgeBaseListResponse {
-  items: BackendKnowledgeBase[]
-}
-
-interface ConfigResponse {
-  chat: ChatConfig
-  embedding: EmbeddingConfig
-  mcp: MCPConfig
-}
-
-interface BackendConversationListItem {
-  id: string
-  title: string
-  knowledgeBaseId: string
-  documentId: string
-  createdAt: string
-  updatedAt: string
-  messageCount: number
-}
-
-interface ConversationListResponse {
-  items: BackendConversationListItem[]
-}
-
-interface BackendConversation {
-  id: string
-  title: string
-  knowledgeBaseId: string
-  documentId: string
-  createdAt: string
-  updatedAt: string
-  messages: Array<{
-    id: string
-    role: 'assistant' | 'user'
-    content: string
-    createdAt: string
-    metadata?: ChatMessageMetadata
-  }>
-}
-
-interface UploadResponse {
-  uploaded: BackendDocumentItem
-}
-
-interface GenerateEvalDatasetResponse {
-  knowledgeBaseId?: string
-  documentId?: string
-  count: number
-  documentCount: number
-  items: Array<{
-    id: string
-    question: string
-    answer: string
-    answer_snippets: string[]
-    source_documents: Array<{
-      knowledge_base_id: string
-      document_id: string
-      chunk_id: string
-    }>
-    answer_type: string
-    difficulty: string
-    notes?: string
-  }>
 }
 
 interface UploadQueueItem {
@@ -292,45 +210,16 @@ const getFileExtension = (fileName: string) => {
   return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ''
 }
 
-const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
-  id: document.id,
-  name: document.name,
-  sizeLabel: document.sizeLabel,
-  uploadedAt: document.uploadedAt,
-  status: document.status,
-  contentPreview: document.contentPreview,
-})
+const createId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
 
-const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): KnowledgeBase => ({
-  id: knowledgeBase.id,
-  name: knowledgeBase.name,
-  description: knowledgeBase.description,
-  documents: (knowledgeBase.documents ?? []).map(normalizeDocument),
-  createdAt: knowledgeBase.createdAt,
-})
-
-const isDegradedFallbackContent = (content: string): boolean => {
-  const normalized = content.trim()
-  return (
-    normalized.startsWith('⚠️ AI 模型调用失败') ||
-    normalized.startsWith('⚠ 当前回答为降级回复') ||
-    normalized.includes('模型或检索链路出现异常')
-  )
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-const normalizeConversation = (conversation: BackendConversation): Conversation => ({
-  id: conversation.id,
-  title: conversation.title,
-  createdAt: conversation.createdAt,
-  updatedAt: conversation.updatedAt,
-  messages: (conversation.messages ?? []).map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    timestamp: message.createdAt,
-    metadata: message.metadata,
-  })),
-})
+const isDegradedFallbackContent = (content: string) =>
+  /降级|fallback|无法完成流式|已切换|上游错误|模型服务暂不可用/.test(content)
 
 const createWelcomeConversation = (): Conversation => {
   const now = new Date().toISOString()
@@ -349,18 +238,6 @@ const createWelcomeConversation = (): Conversation => {
         timestamp: now,
       },
     ],
-  }
-}
-
-const extractErrorMessage = async (response: Response) => {
-  try {
-    const errorBody = (await response.json()) as ApiErrorResponse
-    if (typeof errorBody.error === 'string') {
-      return errorBody.error || '请求失败'
-    }
-    return errorBody.error?.message || '请求失败'
-  } catch {
-    return '请求失败'
   }
 }
 
@@ -408,29 +285,13 @@ function App() {
   const chatAbortControllerRef = useRef<AbortController | null>(null)
   const activeChatRequestRef = useRef<{ requestId: string; conversationId: string } | null>(null)
 
-  const loadConversationDetail = async (conversationId: string): Promise<Conversation> => {
-    const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`)
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    return normalizeConversation((await response.json()) as BackendConversation)
-  }
-
   const waitForBackendReady = async (attempts = 12, delayMs = 1500) => {
     for (let index = 0; index < attempts; index += 1) {
-      try {
-        const response = await fetch(`${API_BASE_PATH}/health`)
-        if (response.ok) {
-          const health = (await response.json()) as HealthResponse
-          if ((health.status ?? '').toLowerCase() === 'ok') {
-            setBackendReady(true)
-            setBackendWarmupRequired(true)
-            return true
-          }
-        }
-      } catch {
-        // 忽略启动阶段探活错误，交给下一轮重试
+      const health = await fetchBackendHealth()
+      if ((health?.status ?? '').toLowerCase() === 'ok') {
+        setBackendReady(true)
+        setBackendWarmupRequired(true)
+        return true
       }
 
       if (index < attempts - 1) {
@@ -500,19 +361,7 @@ function App() {
   )
 
   const persistConfigToBackend = async (nextConfig: AppConfig) => {
-    const response = await fetch(`${API_BASE_PATH}/api/config`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(nextConfig),
-    })
-
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    const savedConfig = (await response.json()) as ConfigResponse
+    const savedConfig = await updateAppConfig(nextConfig)
     setConfig(savedConfig)
     setBackendReady(true)
   }
@@ -526,18 +375,10 @@ function App() {
   }
 
   const handleResetMcpToken = async () => {
-    const response = await fetch(`${API_BASE_PATH}/api/config/mcp/reset-token`, {
-      method: 'POST',
-    })
-
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    const payload = (await response.json()) as { mcp: MCPConfig }
+    const mcp = await resetMcpToken()
     setConfig((prev) => ({
       ...prev,
-      mcp: payload.mcp,
+      mcp,
     }))
     setBackendReady(true)
   }
@@ -582,52 +423,22 @@ function App() {
             throw new Error('backend is not ready')
           }
 
-          const [knowledgeBaseResponse, configResponse, conversationsResponse] = await Promise.all([
-            fetch(`${API_BASE_PATH}/api/knowledge-bases`),
-            fetch(`${API_BASE_PATH}/api/config`),
-            fetch(`${API_BASE_PATH}/api/conversations`),
-          ])
-
-          if (!knowledgeBaseResponse.ok) {
-            throw new Error(await extractErrorMessage(knowledgeBaseResponse))
-          }
-
-          if (!configResponse.ok) {
-            throw new Error(await extractErrorMessage(configResponse))
-          }
-
-          if (!conversationsResponse.ok) {
-            throw new Error(await extractErrorMessage(conversationsResponse))
-          }
-
-          const knowledgeBaseData =
-            (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
-          const configData = (await configResponse.json()) as ConfigResponse
-          const conversationsData =
-            (await conversationsResponse.json()) as ConversationListResponse
+          const initialData = await fetchInitialAppData()
 
           if (canceled) {
             return
           }
 
-          const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
+          const nextKnowledgeBases = initialData.knowledgeBases
           setKnowledgeBases(nextKnowledgeBases)
-          setConfig(configData)
+          setConfig(initialData.config)
           setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
           setSelectedDocumentId(null)
 
-          const conversationItems = conversationsData.items ?? []
+          const conversationItems = initialData.conversations
           if (conversationItems.length > 0) {
             const firstConversationId = conversationItems[0].id
-            const firstConversationResponse = await fetch(
-              `${API_BASE_PATH}/api/conversations/${firstConversationId}`,
-            )
-            if (!firstConversationResponse.ok) {
-              throw new Error(await extractErrorMessage(firstConversationResponse))
-            }
-            const firstConversation = normalizeConversation(
-              (await firstConversationResponse.json()) as BackendConversation,
-            )
+            const firstConversation = await fetchConversationDetail(firstConversationId)
             const restConversations = conversationItems.slice(1).map((conversation) => ({
               id: conversation.id,
               title: conversation.title,
@@ -680,31 +491,7 @@ function App() {
     conversations.find((conversation) => conversation.id === streamingConversationId)?.title ?? '当前会话'
 
   const persistConversation = async (conversation: Conversation) => {
-    const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversation.id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        id: conversation.id,
-        title: conversation.title,
-        knowledgeBaseId: '',
-        documentId: '',
-        messages: conversation.messages.map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          createdAt: message.timestamp,
-          metadata: message.metadata,
-        })),
-      }),
-    })
-
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    return normalizeConversation((await response.json()) as BackendConversation)
+    return saveConversation(conversation)
   }
 
   const handleCreateConversation = async () => {
@@ -733,7 +520,7 @@ function App() {
     }
 
     try {
-      const loadedConversation = await loadConversationDetail(conversationId)
+      const loadedConversation = await fetchConversationDetail(conversationId)
       setConversations((prev) =>
         prev.map((conversation) =>
           conversation.id === conversationId ? loadedConversation : conversation,
@@ -779,33 +566,9 @@ function App() {
       const fullConversation =
         targetConversation.messages.length > 0
           ? targetConversation
-          : await loadConversationDetail(conversationId)
+          : await fetchConversationDetail(conversationId)
 
-      const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: fullConversation.id,
-          title: nextTitle,
-          knowledgeBaseId: '',
-          documentId: '',
-          messages: fullConversation.messages.map((message) => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            createdAt: message.timestamp,
-            metadata: message.metadata,
-          })),
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response))
-      }
-
-      const updatedConversation = normalizeConversation((await response.json()) as BackendConversation)
+      const updatedConversation = await saveConversation(fullConversation, nextTitle)
       setConversations((prev) =>
         prev.map((conversation) =>
           conversation.id === conversationId
@@ -832,13 +595,7 @@ function App() {
 
     try {
       if (!isLocalOnly) {
-        const response = await fetch(`${API_BASE_PATH}/api/conversations/${conversationId}`, {
-          method: 'DELETE',
-        })
-
-        if (!response.ok) {
-          throw new Error(await extractErrorMessage(response))
-        }
+        await deleteConversation(conversationId)
       }
 
       const remainingConversations = conversations.filter(
@@ -898,21 +655,7 @@ function App() {
 
   const handleCreateKnowledgeBase = async (name: string, description: string) => {
     try {
-      const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name, description }),
-      })
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response))
-      }
-
-      const createdKnowledgeBase = normalizeKnowledgeBase(
-        (await response.json()) as BackendKnowledgeBase,
-      )
+      const createdKnowledgeBase = await createKnowledgeBase(name, description)
 
       setKnowledgeBases((prev) => [createdKnowledgeBase, ...prev])
       setSelectedKnowledgeBaseId(createdKnowledgeBase.id)
@@ -926,13 +669,7 @@ function App() {
 
   const handleDeleteKnowledgeBase = async (knowledgeBaseId: string) => {
     try {
-      const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}`, {
-        method: 'DELETE',
-      })
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response))
-      }
+      await deleteKnowledgeBase(knowledgeBaseId)
 
       setKnowledgeBases((prev) => {
         const nextKnowledgeBases = prev.filter(
@@ -967,20 +704,7 @@ function App() {
   }
 
   const uploadSingleKnowledgeBaseFile = async (knowledgeBaseId: string, file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await fetch(`${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    const data = (await response.json()) as UploadResponse
-    return normalizeDocument(data.uploaded)
+    return uploadKnowledgeBaseFile(knowledgeBaseId, file)
   }
 
   const appendUploadedDocument = (knowledgeBaseId: string, document: DocumentItem) => {
@@ -998,22 +722,7 @@ function App() {
 
   const handleGenerateEvalDataset = async (knowledgeBaseId: string) => {
     try {
-      const response = await fetch(`${API_BASE_PATH}/api/eval/datasets/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          knowledgeBaseId,
-          maxPerDocument: 5,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response))
-      }
-
-      const data = (await response.json()) as GenerateEvalDatasetResponse
+      const data = await generateEvalDataset(knowledgeBaseId)
       const blob = new Blob([JSON.stringify(data.items, null, 2)], {
         type: 'application/json;charset=utf-8',
       })
@@ -1277,16 +986,7 @@ function App() {
 
   const handleRemoveDocument = async (knowledgeBaseId: string, documentId: string) => {
     try {
-      const response = await fetch(
-        `${API_BASE_PATH}/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`,
-        {
-          method: 'DELETE',
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response))
-      }
+      await deleteKnowledgeBaseDocument(knowledgeBaseId, documentId)
 
       setKnowledgeBases((prev) =>
         prev.map((knowledgeBase) =>
