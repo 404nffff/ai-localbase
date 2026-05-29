@@ -123,7 +123,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-常用运行配置已集中在 `.env.example`。其中 `QDRANT_VECTOR_SIZE` 必须与 Embedding 模型维度一致；如果你更换了不同维度的 Embedding 模型，需要换新的 `QDRANT_COLLECTION_PREFIX` 或重建旧集合。
+常用运行配置已集中在 `.env.example`。其中 `QDRANT_VECTOR_SIZE` 必须与 Embedding 模型维度一致；如果你更换了不同维度的 Embedding 模型，需要换新的 `QDRANT_COLLECTION_PREFIX` 或重建旧集合。开启 `ENABLE_HYBRID_SEARCH` 前也建议换新前缀并重建索引，以便 Qdrant collection 使用 named dense/sparse vectors。
 
 默认服务地址：
 

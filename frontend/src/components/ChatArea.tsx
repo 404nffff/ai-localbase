@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import mermaid from 'mermaid'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -317,7 +316,7 @@ function rebuildCompressedMermaid(lines: string[]): string[] {
     return []
   }
 
-  let rebuilt = source
+  const rebuilt = source
     .replace(/^```mermaid\s*/i, '')
     .replace(/```$/i, '')
     .replace(/mermaidflowchart\s*TD/gi, 'flowchart TD\n')
@@ -1282,6 +1281,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 
     const renderChart = async () => {
       try {
+        const { default: mermaid } = await import('mermaid')
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'loose',

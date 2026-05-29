@@ -1353,7 +1353,7 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 		}
 		points = append(points, QdrantPoint{
 			ID:     qdrantPointID(chunk.ID),
-			Vector: vector,
+			Vector: qdrantPointVectors(vector, BuildSparseVector(chunk.Text)),
 			Payload: map[string]any{
 				"knowledge_base_id": chunk.KnowledgeBaseID,
 				"document_id":       chunk.DocumentID,

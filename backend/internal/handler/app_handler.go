@@ -242,6 +242,23 @@ func (h *AppHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
+	if content, ok := buildIdentityAnswer(req); ok {
+		metadata := localResponseMetadata("identity-template")
+		response := buildLocalChatResponse(req, content, metadata)
+		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              req.ConversationID,
+			Title:           "",
+			KnowledgeBaseID: req.KnowledgeBaseID,
+			DocumentID:      req.DocumentID,
+			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
+		}); saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
 	preparedReq, sources, err := h.prepareChatRequest(c.Request.Context(), req)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -283,6 +300,33 @@ func (h *AppHandler) ChatCompletionsStream(c *gin.Context) {
 	var req model.ChatCompletionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "invalid chat request body")
+		return
+	}
+
+	if content, ok := buildIdentityAnswer(req); ok {
+		metadata := localResponseMetadata("identity-template")
+		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              req.ConversationID,
+			Title:           "",
+			KnowledgeBaseID: req.KnowledgeBaseID,
+			DocumentID:      req.DocumentID,
+			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
+		}); saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Status(http.StatusOK)
+		c.SSEvent("meta", metadata)
+		c.SSEvent("chunk", gin.H{"content": content})
+		c.SSEvent("done", gin.H{"content": content, "metadata": metadata})
+		if flusher, ok := c.Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		return
 	}
 
@@ -489,6 +533,82 @@ func latestUserQuestion(messages []model.ChatMessage) string {
 		}
 	}
 	return ""
+}
+
+func buildIdentityAnswer(req model.ChatCompletionRequest) (string, bool) {
+	question := strings.TrimSpace(latestUserQuestion(req.Messages))
+	if !isIdentityQuestion(question) {
+		return "", false
+	}
+
+	return strings.TrimSpace(`## AI LocalBase 助手
+
+### 基本信息
+
+我是 **AI LocalBase 知识库助手**，用于帮助你围绕本地知识库、文档和检索结果进行问答与分析。
+
+### 我能做什么
+
+1. 基于当前知识库或指定文档检索相关内容。
+2. 总结、对比和解释文档中的关键信息。
+3. 协助排查 RAG 检索、Docker 启动、配置和评估数据集问题。
+
+### 使用边界
+
+- 我会优先依据你上传或选择的本地知识库回答。
+- 如果没有命中可靠上下文，我会明确说明不确定性。`), true
+}
+
+func isIdentityQuestion(question string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	if normalized == "" || len([]rune(normalized)) > 24 {
+		return false
+	}
+	identityQuestions := []string{
+		"你是谁",
+		"你是什么",
+		"介绍一下你",
+		"自我介绍",
+		"who are you",
+		"what are you",
+	}
+	for _, item := range identityQuestions {
+		if normalized == item {
+			return true
+		}
+	}
+	return false
+}
+
+func localResponseMetadata(strategy string) map[string]any {
+	return map[string]any{
+		"sources":          []map[string]string{},
+		"toolUse":          []model.ToolUseMetadata{},
+		"localTemplate":    true,
+		"fallbackStrategy": strategy,
+	}
+}
+
+func buildLocalChatResponse(req model.ChatCompletionRequest, content string, metadata map[string]any) model.ChatCompletionResponse {
+	now := time.Now().UTC()
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		modelName = "local-template"
+	}
+	return model.ChatCompletionResponse{
+		ID:      fmt.Sprintf("chatcmpl-local-%d", now.UnixNano()),
+		Object:  "chat.completion",
+		Created: now.Unix(),
+		Model:   modelName,
+		Choices: []model.ChatCompletionChoice{{
+			Index: 0,
+			Message: model.ChatMessage{
+				Role:    "assistant",
+				Content: content,
+			},
+		}},
+		Metadata: metadata,
+	}
 }
 
 func detectTableQuestionType(question, retrievalContext, contextSummary string) string {

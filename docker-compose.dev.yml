@@ -56,7 +56,7 @@ services:
       - ./backend:/app
 
   frontend:
-    image: node:20-alpine
+    image: node:20.19-alpine
     container_name: ai-localbase-frontend-dev
     restart: unless-stopped
     working_dir: /app

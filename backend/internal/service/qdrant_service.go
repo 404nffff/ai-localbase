@@ -28,7 +28,7 @@ type QdrantService struct {
 
 type QdrantPoint struct {
 	ID      any            `json:"id"`
-	Vector  []float64      `json:"vector"`
+	Vector  any            `json:"vector"`
 	Payload map[string]any `json:"payload"`
 }
 
@@ -52,7 +52,8 @@ type HybridSearchParams struct {
 }
 
 type qdrantCollectionRequest struct {
-	Vectors qdrantVectorConfig `json:"vectors"`
+	Vectors       any                                 `json:"vectors"`
+	SparseVectors map[string]qdrantSparseVectorConfig `json:"sparse_vectors,omitempty"`
 }
 
 type qdrantVectorConfig struct {
@@ -60,12 +61,22 @@ type qdrantVectorConfig struct {
 	Distance string `json:"distance"`
 }
 
+type qdrantSparseVectorConfig struct{}
+
 type qdrantPointUpsertRequest struct {
 	Points []QdrantPoint `json:"points"`
 }
 
 type qdrantSearchRequest struct {
-	Vector      []float64      `json:"vector"`
+	Vector      any            `json:"vector"`
+	Limit       int            `json:"limit"`
+	Filter      map[string]any `json:"filter,omitempty"`
+	WithPayload bool           `json:"with_payload"`
+}
+
+type qdrantQueryRequest struct {
+	Query       any            `json:"query"`
+	Using       string         `json:"using,omitempty"`
 	Limit       int            `json:"limit"`
 	Filter      map[string]any `json:"filter,omitempty"`
 	WithPayload bool           `json:"with_payload"`
@@ -133,9 +144,14 @@ func (s *QdrantService) EnsureCollection(ctx context.Context, knowledgeBaseID st
 	}
 
 	body := qdrantCollectionRequest{
-		Vectors: qdrantVectorConfig{
-			Size:     s.vectorSize,
-			Distance: s.distance,
+		Vectors: map[string]qdrantVectorConfig{
+			qdrantDenseVectorName: {
+				Size:     s.vectorSize,
+				Distance: s.distance,
+			},
+		},
+		SparseVectors: map[string]qdrantSparseVectorConfig{
+			qdrantSparseVectorName: {},
 		},
 	}
 
@@ -171,11 +187,22 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 		}
 		batch := points[i:end]
 		if _, err := s.doJSON(ctx, http.MethodPut, collPath, qdrantPointUpsertRequest{Points: batch}); err != nil {
-			return fmt.Errorf("upsert batch [%d:%d]: %w", i, end, err)
+			legacyBatch := legacyDensePoints(batch)
+			if len(legacyBatch) == 0 {
+				return fmt.Errorf("upsert batch [%d:%d]: %w", i, end, err)
+			}
+			if _, legacyErr := s.doJSON(ctx, http.MethodPut, collPath, qdrantPointUpsertRequest{Points: legacyBatch}); legacyErr != nil {
+				return fmt.Errorf("upsert batch [%d:%d]: %w", i, end, err)
+			}
 		}
 	}
 	return nil
 }
+
+const (
+	qdrantDenseVectorName  = "dense"
+	qdrantSparseVectorName = "sparse"
+)
 
 func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vector []float64, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
 	if !s.IsEnabled() || len(vector) == 0 {
@@ -185,13 +212,52 @@ func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vect
 		limit = 5
 	}
 
+	results, err := s.queryDense(ctx, knowledgeBaseID, vector, limit, filter)
+	if err == nil {
+		return results, nil
+	}
+	return s.searchLegacyDense(ctx, knowledgeBaseID, vector, limit, filter)
+}
+
+func (s *QdrantService) searchLegacyDense(ctx context.Context, knowledgeBaseID string, vector []float64, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
 	body := qdrantSearchRequest{
 		Vector:      vector,
 		Limit:       limit,
 		Filter:      filter,
 		WithPayload: true,
 	}
+	return s.searchWithBody(ctx, knowledgeBaseID, body)
+}
 
+func (s *QdrantService) queryDense(ctx context.Context, knowledgeBaseID string, vector []float64, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
+	body := qdrantQueryRequest{
+		Query:       vector,
+		Using:       qdrantDenseVectorName,
+		Limit:       limit,
+		Filter:      filter,
+		WithPayload: true,
+	}
+	return s.queryWithBody(ctx, knowledgeBaseID, body)
+}
+
+func (s *QdrantService) querySparse(ctx context.Context, knowledgeBaseID string, vector SparseVector, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
+	if len(vector.Indices) == 0 || len(vector.Values) == 0 {
+		return nil, nil
+	}
+	body := qdrantQueryRequest{
+		Query: map[string]any{
+			"indices": vector.Indices,
+			"values":  vector.Values,
+		},
+		Using:       qdrantSparseVectorName,
+		Limit:       limit,
+		Filter:      filter,
+		WithPayload: true,
+	}
+	return s.queryWithBody(ctx, knowledgeBaseID, body)
+}
+
+func (s *QdrantService) searchWithBody(ctx context.Context, knowledgeBaseID string, body qdrantSearchRequest) ([]QdrantSearchResult, error) {
 	var responseBody []byte
 	err := retryWithBackoff(ctx, 3, 200*time.Millisecond, func() error {
 		var err error
@@ -205,6 +271,34 @@ func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vect
 	var response qdrantSearchResponse
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, fmt.Errorf("decode qdrant search response: %w", err)
+	}
+
+	results := make([]QdrantSearchResult, 0, len(response.Result))
+	for _, item := range response.Result {
+		results = append(results, QdrantSearchResult{
+			ID:      fmt.Sprint(item.ID),
+			Score:   item.Score,
+			Payload: item.Payload,
+		})
+	}
+
+	return results, nil
+}
+
+func (s *QdrantService) queryWithBody(ctx context.Context, knowledgeBaseID string, body qdrantQueryRequest) ([]QdrantSearchResult, error) {
+	var responseBody []byte
+	err := retryWithBackoff(ctx, 3, 200*time.Millisecond, func() error {
+		var err error
+		responseBody, err = s.doJSON(ctx, http.MethodPost, "/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID))+"/points/query", body)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var response qdrantSearchResponse
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return nil, fmt.Errorf("decode qdrant query response: %w", err)
 	}
 
 	results := make([]QdrantSearchResult, 0, len(response.Result))
@@ -239,7 +333,6 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 	}
 
 	denseVector := float32ToFloat64(params.DenseVector)
-	sparseDenseFallback := sparseFallbackVector(params.SparseVector, len(denseVector))
 	searchLimit := maxInt(topK, minInt(topK*2, 64))
 
 	var denseResults []SearchResult
@@ -259,12 +352,11 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 		denseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
 	}()
 
-	if len(sparseDenseFallback) > 0 {
+	if len(params.SparseVector.Indices) > 0 && len(params.SparseVector.Values) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// TODO: 升级 Qdrant SDK 后替换为真实 sparse vector search
-			results, err := s.Search(ctx, params.CollectionName, sparseDenseFallback, searchLimit, filter)
+			results, err := s.querySparse(ctx, params.CollectionName, params.SparseVector, searchLimit, filter)
 			if err != nil {
 				sparseErr = err
 				return
@@ -355,20 +447,45 @@ func float32ToFloat64(input []float32) []float64 {
 	return output
 }
 
-func sparseFallbackVector(vector SparseVector, vectorSize int) []float64 {
-	if vectorSize <= 0 || len(vector.Indices) == 0 || len(vector.Values) == 0 {
-		return nil
-	}
-	fallback := make([]float64, vectorSize)
-	for i, idx := range vector.Indices {
-		if i >= len(vector.Values) {
-			break
+func qdrantPointVectors(dense []float64, sparse SparseVector) any {
+	if len(sparse.Indices) == 0 || len(sparse.Values) == 0 {
+		return map[string]any{
+			qdrantDenseVectorName: dense,
 		}
-		pos := int(idx % uint32(vectorSize))
-		fallback[pos] += float64(vector.Values[i])
 	}
-	normalizeVector(fallback)
-	return fallback
+	return map[string]any{
+		qdrantDenseVectorName: dense,
+		qdrantSparseVectorName: map[string]any{
+			"indices": sparse.Indices,
+			"values":  sparse.Values,
+		},
+	}
+}
+
+func legacyDensePoints(points []QdrantPoint) []QdrantPoint {
+	legacy := make([]QdrantPoint, 0, len(points))
+	for _, point := range points {
+		dense := extractDenseVector(point.Vector)
+		if len(dense) == 0 {
+			continue
+		}
+		next := point
+		next.Vector = dense
+		legacy = append(legacy, next)
+	}
+	return legacy
+}
+
+func extractDenseVector(vector any) []float64 {
+	switch typed := vector.(type) {
+	case []float64:
+		return typed
+	case map[string]any:
+		if dense, ok := typed[qdrantDenseVectorName].([]float64); ok {
+			return dense
+		}
+	}
+	return nil
 }
 
 func (s *QdrantService) doJSON(ctx context.Context, method, requestPath string, payload any) ([]byte, error) {

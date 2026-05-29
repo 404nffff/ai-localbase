@@ -306,8 +306,73 @@ func TestSearchHybridFallsBackToDenseResults(t *testing.T) {
 	if results[0].ID != "chunk-dense-1" {
 		t.Fatalf("expected first dense result, got %s", results[0].ID)
 	}
-	if atomic.LoadInt32(&calls) < 2 {
-		t.Fatalf("expected at least dense and sparse fallback search attempts, got %d", calls)
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("expected one legacy dense search attempt, got %d", calls)
+	}
+}
+
+func TestSearchHybridUsesSparseQuery(t *testing.T) {
+	var denseQueries int32
+	var sparseQueries int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/points/query") {
+			http.NotFound(w, r)
+			return
+		}
+		var req qdrantQueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode query request: %v", err)
+		}
+		resultID := "chunk-dense"
+		if req.Using == qdrantSparseVectorName {
+			atomic.AddInt32(&sparseQueries, 1)
+			resultID = "chunk-sparse"
+		} else if req.Using == qdrantDenseVectorName {
+			atomic.AddInt32(&denseQueries, 1)
+		}
+
+		resp := qdrantSearchResponse{
+			Result: []struct {
+				ID      any            `json:"id"`
+				Score   float64        `json:"score"`
+				Payload map[string]any `json:"payload"`
+			}{
+				{
+					ID:    resultID,
+					Score: 0.91,
+					Payload: map[string]any{
+						"chunk_id":          resultID,
+						"text":              resultID + " result",
+						"document_id":       "doc-1",
+						"document_name":     "Doc 1",
+						"knowledge_base_id": "kb-1",
+						"chunk_index":       0,
+					},
+				},
+			},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode qdrant response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	rag := NewRagService()
+	qdrant := NewQdrantService(model.ServerConfig{
+		QdrantURL:        server.URL,
+		QdrantVectorSize: 4,
+		QdrantDistance:   "cosine",
+	})
+
+	results, err := rag.SearchHybrid(t.Context(), qdrant, "kb-1", []float64{0.2, 0.4, 0.1, 0.3}, BuildSparseVector("示例机构 人员"), 2, nil)
+	if err != nil {
+		t.Fatalf("search hybrid: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected dense and sparse results, got %d", len(results))
+	}
+	if atomic.LoadInt32(&denseQueries) == 0 || atomic.LoadInt32(&sparseQueries) == 0 {
+		t.Fatalf("expected dense and sparse query attempts, got dense=%d sparse=%d", denseQueries, sparseQueries)
 	}
 }
 

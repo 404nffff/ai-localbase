@@ -66,6 +66,7 @@ docker compose -f docker-compose.prod.yml up -d
 - `OLLAMA_BASE_URL`：Ollama 地址，macOS Docker Desktop 通常为 `http://host.docker.internal:11434`
 - `QDRANT_VECTOR_SIZE`：嵌入模型向量维度，例如 `nomic-embed-text=768`，`bge-m3=1024`
 - `QDRANT_COLLECTION_PREFIX`：Qdrant 集合名前缀，切换向量维度时可改前缀避免复用旧集合
+- `ENABLE_HYBRID_SEARCH`：开启 dense + sparse 混合检索。开启前建议切换新的 `QDRANT_COLLECTION_PREFIX` 并重建索引，让 Qdrant collection 使用 named dense/sparse vectors。
 - `QDRANT_API_KEY`：Qdrant API 密钥，可选
 
 ### 验证连接

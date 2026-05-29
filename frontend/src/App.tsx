@@ -673,13 +673,6 @@ function App() {
     window.localStorage.setItem(AI_CONFIG_STORAGE_KEY, JSON.stringify(config))
   }, [config])
 
-  const cancelActiveChatRequest = () => {
-    chatAbortControllerRef.current?.abort()
-    chatAbortControllerRef.current = null
-    activeChatRequestRef.current = null
-    setStreamingConversationId(null)
-  }
-
   const isOllamaSingleFlightMode =
     config.chat.provider === 'ollama' || config.embedding.provider === 'ollama'
 
@@ -1564,10 +1557,10 @@ function App() {
       let buffer = ''
       let streamCompleted = false
       let receivedFirstChunk = false
-      let firstChunkTimer = window.setTimeout(() => {
+      const firstChunkTimer = window.setTimeout(() => {
         streamAbortController.abort()
       }, STREAM_FIRST_CHUNK_TIMEOUT_MS)
-      let requestTimer = window.setTimeout(() => {
+      const requestTimer = window.setTimeout(() => {
         streamAbortController.abort()
       }, STREAM_REQUEST_TIMEOUT_MS)
 
@@ -1632,7 +1625,7 @@ function App() {
       }
 
       try {
-        while (true) {
+        for (;;) {
           const { done, value } = await reader.read()
           buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
           const normalizedBuffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
