@@ -235,6 +235,30 @@ func (h *AppHandler) DeleteDocument(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) GetDocumentDetail(c *gin.Context) {
+	detail, err := h.appService.GetDocumentDetail(c.Param("id"), c.Param("documentId"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, detail)
+}
+
+func (h *AppHandler) ReindexDocument(c *gin.Context) {
+	document, err := h.appService.ReindexDocument(c.Param("id"), c.Param("documentId"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":         "document reindexed",
+		"knowledgeBaseId": c.Param("id"),
+		"document":        document,
+	})
+}
+
 func (h *AppHandler) ChatCompletions(c *gin.Context) {
 	var req model.ChatCompletionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

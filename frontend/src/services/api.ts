@@ -28,6 +28,9 @@ export interface BackendDocumentItem {
   uploadedAt: string
   status: 'indexed' | 'ready' | 'processing'
   contentPreview?: string
+  chunkCount?: number
+  indexedAt?: string
+  indexError?: string
 }
 
 export interface BackendKnowledgeBase {
@@ -82,6 +85,40 @@ export interface UploadResponse {
   uploaded: BackendDocumentItem
 }
 
+export interface DocumentChunkPreview {
+  id: string
+  index: number
+  kind: string
+  text: string
+}
+
+export interface DocumentIndexDiagnostics {
+  rawContentChars: number
+  chunkCount: number
+  vectorCount: number
+  summaryChunkCount: number
+  structuredRowCount: number
+  rawContentAvailable: boolean
+  qdrantEnabled: boolean
+  rawContentTruncated: boolean
+  chunkPreviewTruncated: boolean
+}
+
+export interface DocumentDetailResponse {
+  knowledgeBaseId: string
+  document: BackendDocumentItem
+  diagnostics: DocumentIndexDiagnostics
+  rawContent: string
+  summary: string
+  chunks: DocumentChunkPreview[]
+}
+
+export interface ReindexDocumentResponse {
+  message: string
+  knowledgeBaseId: string
+  document: BackendDocumentItem
+}
+
 export interface GenerateEvalDatasetResponse {
   knowledgeBaseId?: string
   documentId?: string
@@ -110,6 +147,9 @@ export const normalizeDocument = (document: BackendDocumentItem): DocumentItem =
   uploadedAt: document.uploadedAt,
   status: document.status,
   contentPreview: document.contentPreview,
+  chunkCount: document.chunkCount,
+  indexedAt: document.indexedAt,
+  indexError: document.indexError,
 })
 
 export const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): KnowledgeBase => ({
@@ -284,6 +324,24 @@ export const deleteKnowledgeBaseDocument = async (
   await requestOk(`/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`, {
     method: 'DELETE',
   })
+}
+
+export const fetchKnowledgeBaseDocumentDetail = async (
+  knowledgeBaseId: string,
+  documentId: string,
+): Promise<DocumentDetailResponse> => (
+  requestJson<DocumentDetailResponse>(`/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`)
+)
+
+export const reindexKnowledgeBaseDocument = async (
+  knowledgeBaseId: string,
+  documentId: string,
+): Promise<DocumentItem> => {
+  const response = await requestJson<ReindexDocumentResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/reindex`,
+    { method: 'POST' },
+  )
+  return normalizeDocument(response.document)
 }
 
 export const generateEvalDataset = async (

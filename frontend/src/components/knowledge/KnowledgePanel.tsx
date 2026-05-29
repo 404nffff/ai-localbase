@@ -1,5 +1,6 @@
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { DirectoryUploadTask, KnowledgeBase } from '../../App'
+import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
+import type { DocumentDetailResponse } from '../../services/api'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -19,6 +20,11 @@ interface KnowledgePanelProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchDocumentDetail: (
+    knowledgeBaseId: string,
+    documentId: string,
+  ) => Promise<DocumentDetailResponse>
+  onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   onClose: () => void
 }
 
@@ -40,6 +46,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchDocumentDetail,
+  onReindexDocument,
   onClose,
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -50,6 +58,10 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showFailedItems, setShowFailedItems] = useState(false)
   const [showSkippedItems, setShowSkippedItems] = useState(false)
   const [generatingEvalKnowledgeBaseId, setGeneratingEvalKnowledgeBaseId] = useState<string | null>(null)
+  const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
+  const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
+  const [documentDetailError, setDocumentDetailError] = useState('')
+  const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
@@ -68,6 +80,39 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       await onGenerateEvalDataset(knowledgeBaseId)
     } finally {
       setGeneratingEvalKnowledgeBaseId(null)
+    }
+  }
+
+  const handleOpenDocumentDetail = async (knowledgeBaseId: string, documentId: string) => {
+    setDocumentDetail(null)
+    setDocumentDetailError('')
+    setDocumentDetailLoadingId(documentId)
+    try {
+      const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId)
+      setDocumentDetail(detail)
+    } catch (error) {
+      setDocumentDetailError(error instanceof Error ? error.message : '加载文档详情失败')
+    } finally {
+      setDocumentDetailLoadingId(null)
+    }
+  }
+
+  const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
+    setReindexingDocumentId(documentId)
+    try {
+      const updatedDocument = await onReindexDocument(knowledgeBaseId, documentId)
+      if (documentDetail?.document.id === documentId) {
+        const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId)
+        setDocumentDetail({
+          ...detail,
+          document: {
+            ...detail.document,
+            ...updatedDocument,
+          },
+        })
+      }
+    } finally {
+      setReindexingDocumentId(null)
     }
   }
 
@@ -104,6 +149,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     if (status === 'indexed') return { text: '已索引', color: '#16a34a', bg: '#dcfce7' }
     if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
     return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
+  }
+
+  const chunkKindLabel = (kind: string) => {
+    if (kind === 'structured_summary') return '摘要'
+    if (kind === 'structured_row') return '数据行'
+    return '正文'
   }
 
   const uploadProgressPercent =
@@ -477,17 +528,41 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                     )}
                                     <div className="kb-doc-meta">
                                       <span>{doc.sizeLabel}</span>
+                                      {typeof doc.chunkCount === 'number' && (
+                                        <>
+                                          <span>·</span>
+                                          <span>{doc.chunkCount} chunks</span>
+                                        </>
+                                      )}
                                       <span>·</span>
                                       <span>{new Date(doc.uploadedAt).toLocaleDateString('zh-CN')}</span>
                                     </div>
                                   </button>
-                                  <button
-                                    className="kb-doc-remove"
-                                    onClick={() => onRemoveDocument(kb.id, doc.id)}
-                                    title="删除文档"
-                                  >
-                                    ✕
-                                  </button>
+                                  <div className="kb-doc-actions">
+                                    <button
+                                      className="kb-doc-action"
+                                      onClick={() => handleOpenDocumentDetail(kb.id, doc.id)}
+                                      disabled={documentDetailLoadingId === doc.id}
+                                      title="查看索引详情"
+                                    >
+                                      {documentDetailLoadingId === doc.id ? '加载' : '详情'}
+                                    </button>
+                                    <button
+                                      className="kb-doc-action"
+                                      onClick={() => handleReindexDocument(kb.id, doc.id)}
+                                      disabled={reindexingDocumentId === doc.id}
+                                      title="重新解析并重建索引"
+                                    >
+                                      {reindexingDocumentId === doc.id ? '重建中' : '重建'}
+                                    </button>
+                                    <button
+                                      className="kb-doc-remove"
+                                      onClick={() => onRemoveDocument(kb.id, doc.id)}
+                                      title="删除文档"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
                                 </div>
                               )
                             })
@@ -547,6 +622,111 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 创建知识库
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {(documentDetail || documentDetailError) && (
+        <div className="kb-detail-backdrop" onClick={() => {
+          setDocumentDetail(null)
+          setDocumentDetailError('')
+        }}>
+          <div className="kb-detail-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-detail-header">
+              <div>
+                <h3>{documentDetail?.document.name ?? '文档详情'}</h3>
+                {documentDetail?.document.indexedAt && (
+                  <p>最近索引：{new Date(documentDetail.document.indexedAt).toLocaleString('zh-CN')}</p>
+                )}
+              </div>
+              <button
+                className="kb-close-btn"
+                onClick={() => {
+                  setDocumentDetail(null)
+                  setDocumentDetailError('')
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {documentDetailError ? (
+              <div className="kb-detail-error">{documentDetailError}</div>
+            ) : documentDetail && (
+              <div className="kb-detail-body">
+                <section className="kb-detail-section">
+                  <div className="kb-detail-stats">
+                    <div>
+                      <span>原文字符</span>
+                      <strong>{documentDetail.diagnostics.rawContentChars}</strong>
+                    </div>
+                    <div>
+                      <span>分块数量</span>
+                      <strong>{documentDetail.diagnostics.chunkCount}</strong>
+                    </div>
+                    <div>
+                      <span>向量数量</span>
+                      <strong>{documentDetail.diagnostics.vectorCount}</strong>
+                    </div>
+                    <div>
+                      <span>摘要块</span>
+                      <strong>{documentDetail.diagnostics.summaryChunkCount}</strong>
+                    </div>
+                    <div>
+                      <span>数据行块</span>
+                      <strong>{documentDetail.diagnostics.structuredRowCount}</strong>
+                    </div>
+                    <div>
+                      <span>Qdrant</span>
+                      <strong>{documentDetail.diagnostics.qdrantEnabled ? '启用' : '未启用'}</strong>
+                    </div>
+                  </div>
+                  {documentDetail.document.indexError && (
+                    <div className="kb-detail-error">索引错误：{documentDetail.document.indexError}</div>
+                  )}
+                </section>
+
+                <section className="kb-detail-section">
+                  <h4>摘要预览</h4>
+                  <pre className="kb-detail-pre">{documentDetail.summary || '暂无摘要'}</pre>
+                </section>
+
+                <section className="kb-detail-section">
+                  <h4>
+                    原文预览
+                    {documentDetail.diagnostics.rawContentTruncated && (
+                      <span className="kb-detail-muted">已截断</span>
+                    )}
+                  </h4>
+                  <pre className="kb-detail-pre">{documentDetail.rawContent || '暂无可读取原文'}</pre>
+                </section>
+
+                <section className="kb-detail-section">
+                  <h4>
+                    Chunk 预览
+                    {documentDetail.diagnostics.chunkPreviewTruncated && (
+                      <span className="kb-detail-muted">仅显示前 {documentDetail.chunks.length} 个</span>
+                    )}
+                  </h4>
+                  <div className="kb-detail-chunks">
+                    {documentDetail.chunks.length === 0 ? (
+                      <div className="kb-docs-empty">暂无 chunk</div>
+                    ) : (
+                      documentDetail.chunks.map((chunk) => (
+                        <div key={chunk.id} className="kb-detail-chunk">
+                          <div className="kb-detail-chunk-head">
+                            <span>#{chunk.index + 1}</span>
+                            <span>{chunkKindLabel(chunk.kind)}</span>
+                            <code>{chunk.id}</code>
+                          </div>
+                          <pre>{chunk.text}</pre>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
           </div>
         </div>
       )}

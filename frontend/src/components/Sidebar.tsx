@@ -4,10 +4,12 @@ import {
   ChatConfig,
   ChatModeSettings,
   Conversation,
+  DocumentItem,
   DirectoryUploadTask,
   EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
+import type { DocumentDetailResponse } from '../services/api'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
 
@@ -28,6 +30,11 @@ interface SidebarProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchDocumentDetail: (
+    knowledgeBaseId: string,
+    documentId: string,
+  ) => Promise<DocumentDetailResponse>
+  onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   conversations: Conversation[]
   activeConversationId: string | null
   onSelectConversation: (conversationId: string) => void
@@ -75,6 +82,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchDocumentDetail,
+  onReindexDocument,
   conversations,
   activeConversationId,
   onSelectConversation,
@@ -330,6 +339,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}
+        onFetchDocumentDetail={onFetchDocumentDetail}
+        onReindexDocument={onReindexDocument}
         onClose={onToggleKnowledgePanel}
       />
     </>

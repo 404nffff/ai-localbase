@@ -96,6 +96,37 @@ type Document struct {
 	Status          string `json:"status"`
 	Path            string `json:"path"`
 	ContentPreview  string `json:"contentPreview"`
+	ChunkCount      int    `json:"chunkCount,omitempty"`
+	IndexedAt       string `json:"indexedAt,omitempty"`
+	IndexError      string `json:"indexError,omitempty"`
+}
+
+type DocumentChunkPreview struct {
+	ID    string `json:"id"`
+	Index int    `json:"index"`
+	Kind  string `json:"kind"`
+	Text  string `json:"text"`
+}
+
+type DocumentIndexDiagnostics struct {
+	RawContentChars       int  `json:"rawContentChars"`
+	ChunkCount            int  `json:"chunkCount"`
+	VectorCount           int  `json:"vectorCount"`
+	SummaryChunkCount     int  `json:"summaryChunkCount"`
+	StructuredRowCount    int  `json:"structuredRowCount"`
+	RawContentAvailable   bool `json:"rawContentAvailable"`
+	QdrantEnabled         bool `json:"qdrantEnabled"`
+	RawContentTruncated   bool `json:"rawContentTruncated"`
+	ChunkPreviewTruncated bool `json:"chunkPreviewTruncated"`
+}
+
+type DocumentDetailResponse struct {
+	KnowledgeBaseID string                   `json:"knowledgeBaseId"`
+	Document        Document                 `json:"document"`
+	Diagnostics     DocumentIndexDiagnostics `json:"diagnostics"`
+	RawContent      string                   `json:"rawContent"`
+	Summary         string                   `json:"summary"`
+	Chunks          []DocumentChunkPreview   `json:"chunks"`
 }
 
 type UploadResponse struct {

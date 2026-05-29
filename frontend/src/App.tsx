@@ -9,15 +9,18 @@ import {
   deleteKnowledgeBase,
   deleteKnowledgeBaseDocument,
   extractErrorMessage,
+  fetchKnowledgeBaseDocumentDetail,
   fetchBackendHealth,
   fetchConversationDetail,
   fetchInitialAppData,
   generateEvalDataset,
+  reindexKnowledgeBaseDocument,
   resetMcpToken,
   saveConversation,
   updateAppConfig,
   uploadKnowledgeBaseFile,
 } from './services/api'
+import type { DocumentDetailResponse } from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -48,6 +51,9 @@ export interface DocumentItem {
   uploadedAt: string
   status: 'indexed' | 'ready' | 'processing'
   contentPreview?: string
+  chunkCount?: number
+  indexedAt?: string
+  indexError?: string
 }
 
 export interface KnowledgeBase {
@@ -1009,6 +1015,37 @@ function App() {
     }
   }
 
+  const handleFetchDocumentDetail = async (
+    knowledgeBaseId: string,
+    documentId: string,
+  ): Promise<DocumentDetailResponse> => {
+    return fetchKnowledgeBaseDocumentDetail(knowledgeBaseId, documentId)
+  }
+
+  const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
+    try {
+      const updatedDocument = await reindexKnowledgeBaseDocument(knowledgeBaseId, documentId)
+      setKnowledgeBases((prev) =>
+        prev.map((knowledgeBase) =>
+          knowledgeBase.id === knowledgeBaseId
+            ? {
+                ...knowledgeBase,
+                documents: knowledgeBase.documents.map((document) =>
+                  document.id === documentId ? updatedDocument : document,
+                ),
+              }
+            : knowledgeBase,
+        ),
+      )
+      return updatedDocument
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '重建索引失败，请稍后重试。'
+      window.alert(`重建索引失败：${message}`)
+      throw error
+    }
+  }
+
   const handleSendMessage = async (content: string) => {
     if (!activeConversation) {
       return
@@ -1495,6 +1532,8 @@ function App() {
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
+        onFetchDocumentDetail={handleFetchDocumentDetail}
+        onReindexDocument={handleReindexDocument}
         conversations={conversations}
         activeConversationId={activeConversation?.id ?? null}
         onSelectConversation={handleSelectConversation}

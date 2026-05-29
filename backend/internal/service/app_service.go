@@ -36,6 +36,10 @@ const (
 
 	lowConfidenceTopScoreThreshold = 0.22
 	lowConfidenceAvgScoreThreshold = 0.18
+
+	documentDetailRawContentLimit = 20000
+	documentDetailChunkLimit      = 30
+	documentDetailChunkTextLimit  = 1200
 )
 
 type AppService struct {
@@ -783,6 +787,45 @@ func (s *AppService) GetKnowledgeBaseDocuments(id string) ([]model.Document, err
 	return kb.Documents, nil
 }
 
+func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID string) (model.DocumentDetailResponse, error) {
+	document, err := s.findDocument(knowledgeBaseID, documentID)
+	if err != nil {
+		return model.DocumentDetailResponse{}, err
+	}
+
+	content, err := util.ExtractDocumentText(document.Path)
+	if err != nil {
+		return model.DocumentDetailResponse{}, fmt.Errorf("extract document text: %w", err)
+	}
+
+	chunks := s.rag.BuildDocumentChunks(document, content)
+	return buildDocumentDetailResponse(s, document, content, chunks), nil
+}
+
+func (s *AppService) findDocument(knowledgeBaseID, documentID string) (model.Document, error) {
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	documentID = strings.TrimSpace(documentID)
+	if knowledgeBaseID == "" {
+		return model.Document{}, fmt.Errorf("knowledge base id is required")
+	}
+	if documentID == "" {
+		return model.Document{}, fmt.Errorf("document id is required")
+	}
+
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		return model.Document{}, fmt.Errorf("knowledge base not found")
+	}
+	for _, document := range kb.Documents {
+		if document.ID == documentID {
+			return document, nil
+		}
+	}
+	return model.Document{}, fmt.Errorf("document not found")
+}
+
 func (s *AppService) ResolveKnowledgeBaseID(candidate string) (string, error) {
 	s.state.Mu.RLock()
 	defer s.state.Mu.RUnlock()
@@ -812,6 +855,9 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
+		document.ChunkCount = 0
+		document.IndexedAt = util.NowRFC3339()
+		document.IndexError = ""
 		return s.AddDocument(document.KnowledgeBaseID, document), nil
 	}
 
@@ -826,7 +872,45 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
+	document.ChunkCount = len(chunks)
+	document.IndexedAt = util.NowRFC3339()
+	document.IndexError = ""
 	return s.AddDocument(document.KnowledgeBaseID, document), nil
+}
+
+func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.Document, error) {
+	if s == nil {
+		return model.Document{}, fmt.Errorf("app service is nil")
+	}
+
+	document, err := s.findDocument(knowledgeBaseID, documentID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	if strings.TrimSpace(document.Path) == "" {
+		return model.Document{}, fmt.Errorf("document path is empty")
+	}
+
+	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+		return model.Document{}, err
+	}
+
+	s.state.Mu.RLock()
+	config := s.state.Config
+	s.state.Mu.RUnlock()
+
+	indexed, err := reindexDocumentWithConfig(s, config, document)
+	if err != nil {
+		document.Status = "ready"
+		document.IndexError = err.Error()
+		document.IndexedAt = util.NowRFC3339()
+		_ = s.updateDocument(knowledgeBaseID, document)
+		return model.Document{}, err
+	}
+	if err := s.updateDocument(knowledgeBaseID, indexed); err != nil {
+		return model.Document{}, err
+	}
+	return indexed, nil
 }
 
 func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Document, error) {
@@ -891,6 +975,9 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
+		document.ChunkCount = 0
+		document.IndexedAt = util.NowRFC3339()
+		document.IndexError = ""
 		return document, nil
 	}
 
@@ -910,6 +997,9 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
+	document.ChunkCount = len(chunks)
+	document.IndexedAt = util.NowRFC3339()
+	document.IndexError = ""
 	return document, nil
 }
 
@@ -923,6 +1013,30 @@ func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document
 		log.Printf("failed to persist document state: %v", err)
 	}
 	return document
+}
+
+func (s *AppService) updateDocument(knowledgeBaseID string, nextDocument model.Document) error {
+	s.state.Mu.Lock()
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		s.state.Mu.Unlock()
+		return fmt.Errorf("knowledge base not found")
+	}
+	updated := false
+	for index, document := range kb.Documents {
+		if document.ID == nextDocument.ID {
+			kb.Documents[index] = nextDocument
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		s.state.Mu.Unlock()
+		return fmt.Errorf("document not found")
+	}
+	s.state.KnowledgeBases[knowledgeBaseID] = kb
+	s.state.Mu.Unlock()
+	return s.saveState()
 }
 
 func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.Document, error) {
@@ -961,6 +1075,9 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 		s.state.KnowledgeBases[knowledgeBaseID] = kb
 		s.state.Mu.Unlock()
 		return model.Document{}, err
+	}
+	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+		log.Printf("failed to delete qdrant points for document %s: %v", documentID, err)
 	}
 	return removedDocument, nil
 }
@@ -1628,6 +1745,103 @@ func chunkTexts(chunks []DocumentChunk) []string {
 		texts = append(texts, chunk.Text)
 	}
 	return texts
+}
+
+func (s *AppService) deleteDocumentChunks(knowledgeBaseID, documentID string) error {
+	if s == nil || s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := s.qdrant.DeletePointsByFilter(ctx, knowledgeBaseID, documentFilter(documentID)); err != nil {
+		return fmt.Errorf("delete qdrant points for document %s: %w", documentID, err)
+	}
+	return nil
+}
+
+func documentFilter(documentID string) map[string]any {
+	return map[string]any{
+		"must": []map[string]any{
+			{
+				"key": "document_id",
+				"match": map[string]any{
+					"value": documentID,
+				},
+			},
+		},
+	}
+}
+
+func buildDocumentDetailResponse(s *AppService, document model.Document, content string, chunks []DocumentChunk) model.DocumentDetailResponse {
+	rawContent := strings.TrimSpace(content)
+	rawContentTruncated := false
+	if len([]rune(rawContent)) > documentDetailRawContentLimit {
+		rawContent = truncateRunes(rawContent, documentDetailRawContentLimit)
+		rawContentTruncated = true
+	}
+
+	chunkPreviews := make([]model.DocumentChunkPreview, 0, minInt(len(chunks), documentDetailChunkLimit))
+	summaryParts := make([]string, 0)
+	summaryChunkCount := 0
+	structuredRowCount := 0
+	for index, chunk := range chunks {
+		if chunk.Kind == "structured_summary" {
+			summaryChunkCount++
+			summaryParts = append(summaryParts, chunk.Text)
+		}
+		if chunk.Kind == "structured_row" {
+			structuredRowCount++
+		}
+		if index >= documentDetailChunkLimit {
+			continue
+		}
+		chunkPreviews = append(chunkPreviews, model.DocumentChunkPreview{
+			ID:    chunk.ID,
+			Index: chunk.Index,
+			Kind:  chunk.Kind,
+			Text:  truncateRunes(strings.TrimSpace(chunk.Text), documentDetailChunkTextLimit),
+		})
+	}
+
+	summary := strings.TrimSpace(strings.Join(summaryParts, "\n\n"))
+	if summary == "" {
+		summary = document.ContentPreview
+	}
+
+	vectorCount := 0
+	if s != nil && s.qdrant != nil && s.qdrant.IsEnabled() && document.Status == "indexed" {
+		vectorCount = len(chunks)
+	}
+
+	return model.DocumentDetailResponse{
+		KnowledgeBaseID: document.KnowledgeBaseID,
+		Document:        document,
+		Diagnostics: model.DocumentIndexDiagnostics{
+			RawContentChars:       len([]rune(content)),
+			ChunkCount:            len(chunks),
+			VectorCount:           vectorCount,
+			SummaryChunkCount:     summaryChunkCount,
+			StructuredRowCount:    structuredRowCount,
+			RawContentAvailable:   strings.TrimSpace(content) != "",
+			QdrantEnabled:         s != nil && s.qdrant != nil && s.qdrant.IsEnabled(),
+			RawContentTruncated:   rawContentTruncated,
+			ChunkPreviewTruncated: len(chunks) > documentDetailChunkLimit,
+		},
+		RawContent: rawContent,
+		Summary:    summary,
+		Chunks:     chunkPreviews,
+	}
+}
+
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func previewFromChunks(chunks []DocumentChunk) string {

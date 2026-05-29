@@ -67,6 +67,10 @@ type qdrantPointUpsertRequest struct {
 	Points []QdrantPoint `json:"points"`
 }
 
+type qdrantPointDeleteRequest struct {
+	Filter map[string]any `json:"filter"`
+}
+
 type qdrantSearchRequest struct {
 	Vector      any            `json:"vector"`
 	Limit       int            `json:"limit"`
@@ -156,6 +160,9 @@ func (s *QdrantService) EnsureCollection(ctx context.Context, knowledgeBaseID st
 	}
 
 	_, err := s.doJSON(ctx, http.MethodPut, "/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID)), body)
+	if err != nil && isQdrantAlreadyExists(err) {
+		return nil
+	}
 	return err
 }
 
@@ -197,6 +204,23 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 		}
 	}
 	return nil
+}
+
+func (s *QdrantService) DeletePointsByFilter(ctx context.Context, knowledgeBaseID string, filter map[string]any) error {
+	if !s.IsEnabled() || len(filter) == 0 {
+		return nil
+	}
+
+	_, err := s.doJSON(
+		ctx,
+		http.MethodPost,
+		"/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID))+"/points/delete",
+		qdrantPointDeleteRequest{Filter: filter},
+	)
+	if err != nil && isQdrantNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 const (
@@ -557,6 +581,11 @@ func normalizeQdrantDistance(distance string) string {
 func isQdrantNotFound(err error) bool {
 	requestErr, ok := err.(*qdrantRequestError)
 	return ok && requestErr.StatusCode == http.StatusNotFound
+}
+
+func isQdrantAlreadyExists(err error) bool {
+	requestErr, ok := err.(*qdrantRequestError)
+	return ok && requestErr.StatusCode == http.StatusConflict
 }
 
 type qdrantRequestError struct {
