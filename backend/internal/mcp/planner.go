@@ -47,7 +47,13 @@ func (p *ToolUsePlanner) Plan(req model.ChatCompletionRequest) []PlannedToolCall
 	lowerQuestion := strings.ToLower(question)
 	plans := make([]PlannedToolCall, 0, 1)
 
-	if req.DocumentID == "" && req.KnowledgeBaseID != "" && shouldUseKnowledgeSearch(lowerQuestion) {
+	if req.DocumentID != "" && shouldUseKnowledgeSearch(lowerQuestion) {
+		plans = append(plans, PlannedToolCall{
+			ToolName:  "search_document",
+			Arguments: map[string]any{"documentId": req.DocumentID, "query": question},
+			Reason:    "用户正在针对单个文档提问，优先通过 MCP 单文档检索工具补充上下文。",
+		})
+	} else if req.KnowledgeBaseID != "" && shouldUseKnowledgeSearch(lowerQuestion) {
 		plans = append(plans, PlannedToolCall{
 			ToolName:  "search_knowledge_base",
 			Arguments: map[string]any{"knowledgeBaseId": req.KnowledgeBaseID, "query": question},
@@ -117,9 +123,61 @@ func BuildToolUseContext(executions []ToolUseExecution) (string, []map[string]st
 			"permissionLevel": string(execution.PermissionLevel),
 			"status":          "ok",
 		})
+		sources = append(sources, toolDataSources(execution)...)
 	}
 
 	return strings.Join(sections, "\n\n"), sources
+}
+
+func toolDataSources(execution ToolUseExecution) []map[string]string {
+	rawSources, ok := execution.Data["sources"]
+	if !ok || rawSources == nil {
+		return nil
+	}
+
+	output := make([]map[string]string, 0)
+	appendSource := func(source map[string]string) {
+		if len(source) == 0 {
+			return
+		}
+		item := make(map[string]string, len(source)+3)
+		for key, value := range source {
+			item[key] = value
+		}
+		item["toolName"] = execution.ToolName
+		item["permissionLevel"] = string(execution.PermissionLevel)
+		item["status"] = "ok"
+		output = append(output, item)
+	}
+
+	switch typed := rawSources.(type) {
+	case []map[string]string:
+		for _, source := range typed {
+			appendSource(source)
+		}
+	case []map[string]any:
+		for _, source := range typed {
+			appendSource(stringMapFromAny(source))
+		}
+	case []any:
+		for _, item := range typed {
+			if source, ok := item.(map[string]any); ok {
+				appendSource(stringMapFromAny(source))
+			}
+		}
+	}
+	return output
+}
+
+func stringMapFromAny(input map[string]any) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = fmt.Sprint(value)
+	}
+	return output
 }
 
 func (p *ToolUsePlanner) attachPermissionLevels(plans []PlannedToolCall) []PlannedToolCall {

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,8 +28,6 @@ type AppServiceReader interface {
 	DeleteDocument(knowledgeBaseID, documentID string) (model.Document, error)
 	SaveConversation(req model.SaveConversationRequest) (*model.Conversation, error)
 	DeleteConversation(id string) error
-	ResolveKnowledgeBaseID(candidate string) (string, error)
-	IndexDocument(document model.Document) (model.Document, error)
 	StageInlineUpload(fileName string, content []byte, source string) (model.StagedUpload, error)
 	RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error)
 }
@@ -501,40 +498,20 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				resolvedKnowledgeBaseID, err := appService.ResolveKnowledgeBaseID(knowledgeBaseID)
+				if err := validateTextUploadFileName(fileName, appService.GetConfig()); err != nil {
+					return ToolCallResult{}, err
+				}
+				staged, err := appService.StageInlineUpload(fileName, []byte(content), "mcp-text")
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				if err := validateTextUploadFileName(fileName); err != nil {
-					return ToolCallResult{}, err
-				}
-				storedName := fmt.Sprintf("%d_%s", util.NowUnixNano(), util.SanitizeFilename(fileName))
-				destination := filepath.Join("data/uploads", storedName)
-				if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-					return ToolCallResult{}, fmt.Errorf("create upload directory: %w", err)
-				}
-				if err := os.WriteFile(destination, []byte(content), 0o644); err != nil {
-					return ToolCallResult{}, fmt.Errorf("write uploaded file: %w", err)
-				}
-				document := model.Document{
-					ID:              util.NextID("doc"),
-					KnowledgeBaseID: resolvedKnowledgeBaseID,
-					Name:            fileName,
-					Size:            int64(len([]byte(content))),
-					SizeLabel:       util.FormatFileSize(int64(len([]byte(content)))),
-					UploadedAt:      util.NowRFC3339(),
-					Status:          "processing",
-					Path:            destination,
-					ContentPreview:  util.BuildContentPreviewFromText(content),
-				}
-				uploaded, err := appService.IndexDocument(document)
+				uploaded, err := appService.RegisterStagedUpload(staged.ID, knowledgeBaseID, fileName)
 				if err != nil {
-					_ = os.Remove(destination)
 					return ToolCallResult{}, err
 				}
 				return NewTextResult(
 					fmt.Sprintf("文本文档《%s》上传成功。", uploaded.Name),
-					map[string]any{"uploaded": uploaded, "knowledgeBaseId": resolvedKnowledgeBaseID},
+					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
 				), nil
 			},
 		},
@@ -703,7 +680,7 @@ func validateUploadFileName(fileName string, cfg model.AppConfig) error {
 	return nil
 }
 
-func validateTextUploadFileName(fileName string) error {
+func validateTextUploadFileName(fileName string, cfg model.AppConfig) error {
 	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
 	allowed := map[string]struct{}{
 		".txt": {},
@@ -715,6 +692,9 @@ func validateTextUploadFileName(fileName string) error {
 			return fmt.Errorf("unsupported text upload type: missing extension, allowed types are .txt, .md, .csv")
 		}
 		return fmt.Errorf("unsupported text upload type: %s, allowed types are .txt, .md, .csv", ext)
+	}
+	if service.IsSensitiveStructuredFileExtension(ext) && !service.IsLocalOllamaConfig(cfg.Chat, cfg.Embedding) {
+		return fmt.Errorf("sensitive structured file type %s requires local ollama for both chat and embedding", ext)
 	}
 	return nil
 }
