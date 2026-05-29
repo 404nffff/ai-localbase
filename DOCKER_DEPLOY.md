@@ -49,24 +49,24 @@ docker compose -f docker-compose.prod.yml up -d
 
 ### 环境变量配置
 
-创建 `.env` 文件配置：
+复制示例配置并按需修改：
 
 ```bash
-# Ollama 地址 (macOS Docker Desktop 用户)
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-
-# Qdrant 向量维度 (根据嵌入模型调整)
-QDRANT_VECTOR_SIZE=768
-
-# Qdrant API 密钥 (可选)
-QDRANT_API_KEY=
+cp .env.example .env
 ```
 
 然后启动：
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
+
+关键项：
+
+- `OLLAMA_BASE_URL`：Ollama 地址，macOS Docker Desktop 通常为 `http://host.docker.internal:11434`
+- `QDRANT_VECTOR_SIZE`：嵌入模型向量维度，例如 `nomic-embed-text=768`，`bge-m3=1024`
+- `QDRANT_COLLECTION_PREFIX`：Qdrant 集合名前缀，切换向量维度时可改前缀避免复用旧集合
+- `QDRANT_API_KEY`：Qdrant API 密钥，可选
 
 ### 验证连接
 
@@ -221,6 +221,12 @@ docker compose -f docker-compose.prod.yml up -d
 # 或自定义维度
 QDRANT_VECTOR_SIZE=1024 docker compose -f docker-compose.prod.yml up -d
 ```
+
+如果已经创建过知识库集合，Qdrant 不允许同一个集合混用不同向量维度。出现 `Vector dimension error: expected dim: 1024, got 768` 时，选择其中一种处理方式：
+
+1. 将 `.env` 中的 `QDRANT_VECTOR_SIZE` 改回旧集合维度，并使用同维度 embedding 模型。
+2. 修改 `.env` 中的 `QDRANT_COLLECTION_PREFIX`，让新索引写入新集合。
+3. 确认不需要旧数据后，删除 `qdrant_storage` 或删除对应 Qdrant collection，再重新上传/重建索引。
 
 ---
 

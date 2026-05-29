@@ -93,21 +93,25 @@ docker compose exec backend sh -c "apk add --no-cache curl && curl -v http://hos
 1. **确认 Embedding 模型的向量维度**：
    ```bash
    ollama list
-   # 查看 embedding 模型名称，比如 nomic-embed-text（通常 1024）
+   # 查看 embedding 模型名称，比如 nomic-embed-text（通常 768）、bge-m3（通常 1024）
    ```
 
-2. **修改 `docker-compose.yml` 的 `QDRANT_VECTOR_SIZE`**：
-   ```yaml
-   services:
-     backend:
-       environment:
-         QDRANT_VECTOR_SIZE: "1024"  # 或 "768"，取决于 embedding 模型
-   ```
-
-3. **清理旧数据并重启**（重要，必须删除旧 collection）：
+2. **修改 `.env` 的 `QDRANT_VECTOR_SIZE`**：
    ```bash
+   cp .env.example .env
+   # 根据 embedding 模型维度修改
+   QDRANT_VECTOR_SIZE=768
+   ```
+
+3. **清理旧数据或切换集合前缀并重启**（重要，同一个 collection 不能混用不同向量维度）：
+   ```bash
+   # 方案 A：确认不需要旧数据后清理
    docker compose down
    rm -rf qdrant_storage backend/data/app-state.json
+   docker compose up -d --build
+
+   # 方案 B：保留旧数据，使用新集合前缀
+   # 在 .env 中设置：QDRANT_COLLECTION_PREFIX=kb_768_
    docker compose up -d --build
    ```
 

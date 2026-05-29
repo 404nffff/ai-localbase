@@ -173,6 +173,22 @@ func (h *AppHandler) ListDocuments(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) GenerateEvalDataset(c *gin.Context) {
+	var req model.GenerateEvalDatasetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid eval dataset request body")
+		return
+	}
+
+	response, err := h.appService.GenerateEvalDataset(req)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *AppHandler) UploadToKnowledgeBase(c *gin.Context) {
 	h.handleUpload(c, c.Param("id"))
 }

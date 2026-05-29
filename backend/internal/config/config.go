@@ -17,7 +17,7 @@ func LoadServerConfig() model.ServerConfig {
 		QdrantURL:                      getEnv("QDRANT_URL", "http://localhost:6333"),
 		QdrantAPIKey:                   getEnv("QDRANT_API_KEY", ""),
 		QdrantCollectionPrefix:         getEnv("QDRANT_COLLECTION_PREFIX", "kb_"),
-		QdrantVectorSize:               getEnvAsInt("QDRANT_VECTOR_SIZE", 1024),
+		QdrantVectorSize:               getEnvAsInt("QDRANT_VECTOR_SIZE", 768),
 		QdrantDistance:                 getEnv("QDRANT_DISTANCE", "Cosine"),
 		QdrantTimeoutSeconds:           getEnvAsInt("QDRANT_TIMEOUT_SECONDS", 5),
 		EnableHybridSearch:             getEnvAsBool("ENABLE_HYBRID_SEARCH", false),

@@ -1,14 +1,12 @@
-version: '3.8'
-
 services:
   qdrant:
     image: qdrant/qdrant:v1.13.4
     restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
-      - ./qdrant_storage:/qdrant/storage
+      - ${QDRANT_STORAGE_PATH:-./qdrant_storage}:/qdrant/storage
 
   backend:
     build:
@@ -20,16 +18,35 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      PORT: "8080"
-      UPLOAD_DIR: data/uploads
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION_PREFIX: kb_
-      QDRANT_VECTOR_SIZE: "768"
-      QDRANT_DISTANCE: Cosine
-      QDRANT_TIMEOUT_SECONDS: "5"
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      PORT: ${PORT:-8080}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/app/data/uploads}
+      STATE_FILE: ${STATE_FILE:-/app/data/app-state.json}
+      CHAT_HISTORY_FILE: ${CHAT_HISTORY_FILE:-/app/data/chat-history.db}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION_PREFIX: ${QDRANT_COLLECTION_PREFIX:-kb_}
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-768}
+      QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
+      QDRANT_TIMEOUT_SECONDS: ${QDRANT_TIMEOUT_SECONDS:-5}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ENABLE_HYBRID_SEARCH: ${ENABLE_HYBRID_SEARCH:-false}
+      ENABLE_SEMANTIC_RERANKER: ${ENABLE_SEMANTIC_RERANKER:-false}
+      ENABLE_QUERY_REWRITE: ${ENABLE_QUERY_REWRITE:-false}
+      ENABLE_SEMANTIC_CACHE: ${ENABLE_SEMANTIC_CACHE:-false}
+      ENABLE_CONTEXT_COMPRESSION: ${ENABLE_CONTEXT_COMPRESSION:-false}
+      RETRIEVAL_TOPK_DOCUMENT: ${RETRIEVAL_TOPK_DOCUMENT:-6}
+      RETRIEVAL_CANDIDATE_TOPK_DOCUMENT: ${RETRIEVAL_CANDIDATE_TOPK_DOCUMENT:-12}
+      RETRIEVAL_TOPK_KNOWLEDGE_BASE: ${RETRIEVAL_TOPK_KNOWLEDGE_BASE:-10}
+      RETRIEVAL_CANDIDATE_TOPK_ALL_DOCS: ${RETRIEVAL_CANDIDATE_TOPK_ALL_DOCS:-32}
+      RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT: ${RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT:-2}
+      RETRIEVAL_MAX_CONTEXT_CHARS: ${RETRIEVAL_MAX_CONTEXT_CHARS:-2400}
+      RETRIEVAL_ENABLE_AUTO_EXPAND: ${RETRIEVAL_ENABLE_AUTO_EXPAND:-false}
+      ENABLE_MCP: ${ENABLE_MCP:-true}
+      MCP_BASE_PATH: ${MCP_BASE_PATH:-/mcp}
+      MCP_REQUEST_TIMEOUT_SECONDS: ${MCP_REQUEST_TIMEOUT_SECONDS:-15}
+      MCP_REQUESTS_PER_MINUTE: ${MCP_REQUESTS_PER_MINUTE:-120}
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     volumes:
       - ./backend/data:/app/data
 
@@ -41,6 +58,6 @@ services:
     depends_on:
       - backend
     environment:
-      VITE_API_BASE_URL: http://localhost:8080
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
     ports:
-      - "4173:4173"
+      - "${FRONTEND_PORT:-4173}:4173"

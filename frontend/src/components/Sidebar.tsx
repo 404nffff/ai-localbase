@@ -23,6 +23,7 @@ interface SidebarProps {
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
+  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<void>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -69,6 +70,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onDeleteKnowledgeBase,
   onUploadFiles,
   onUploadDirectory,
+  onGenerateEvalDataset,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -323,6 +325,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onDeleteKnowledgeBase={onDeleteKnowledgeBase}
         onUploadFiles={onUploadFiles}
         onUploadDirectory={onUploadDirectory}
+        onGenerateEvalDataset={onGenerateEvalDataset}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}

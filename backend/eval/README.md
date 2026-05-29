@@ -104,6 +104,18 @@ go run ./eval/cmd/ \
   -mock=true
 ```
 
+### 从现有知识库生成评估集
+
+开源版本支持直接从已上传并索引的知识库文档生成小型 Ground Truth 数据集。可以在前端知识库面板点击“评估集”下载 JSON，也可以通过 API 调用：
+
+```bash
+curl -X POST http://localhost:8080/api/eval/datasets/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"knowledgeBaseId":"kb-xxx","maxPerDocument":5}'
+```
+
+响应中的 `items` 字段即为可直接保存到 `eval/data/*.json` 的数据集数组。
+
 ### 运行评估（真实模式）
 
 ```bash

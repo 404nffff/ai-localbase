@@ -203,6 +203,27 @@ interface UploadResponse {
   uploaded: BackendDocumentItem
 }
 
+interface GenerateEvalDatasetResponse {
+  knowledgeBaseId?: string
+  documentId?: string
+  count: number
+  documentCount: number
+  items: Array<{
+    id: string
+    question: string
+    answer: string
+    answer_snippets: string[]
+    source_documents: Array<{
+      knowledge_base_id: string
+      document_id: string
+      chunk_id: string
+    }>
+    answer_type: string
+    difficulty: string
+    notes?: string
+  }>
+}
+
 interface UploadQueueItem {
   file: File
   name: string
@@ -359,6 +380,11 @@ const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
   return parts.join(' · ')
 }
 
+const sleep = (delayMs: number) =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs)
+  })
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
@@ -408,9 +434,7 @@ function App() {
       }
 
       if (index < attempts - 1) {
-        await new Promise((resolve) => {
-          window.setTimeout(resolve, delayMs)
-        })
+        await sleep(delayMs)
       }
     }
 
@@ -548,91 +572,97 @@ function App() {
   }, [selectedDocumentId, selectedKnowledgeBase])
 
   useEffect(() => {
+    let canceled = false
+
     const bootstrapApp = async () => {
-      try {
-        const isReady = await waitForBackendReady()
-        if (!isReady) {
-          throw new Error('后端服务尚未就绪，请稍后刷新页面重试。')
-        }
-
-        const [knowledgeBaseResponse, configResponse, conversationsResponse] = await Promise.all([
-          fetch(`${API_BASE_PATH}/api/knowledge-bases`),
-          fetch(`${API_BASE_PATH}/api/config`),
-          fetch(`${API_BASE_PATH}/api/conversations`),
-        ])
-
-        if (!knowledgeBaseResponse.ok) {
-          throw new Error(await extractErrorMessage(knowledgeBaseResponse))
-        }
-
-        if (!configResponse.ok) {
-          throw new Error(await extractErrorMessage(configResponse))
-        }
-
-        if (!conversationsResponse.ok) {
-          throw new Error(await extractErrorMessage(conversationsResponse))
-        }
-
-        const knowledgeBaseData =
-          (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
-        const configData = (await configResponse.json()) as ConfigResponse
-        const conversationsData =
-          (await conversationsResponse.json()) as ConversationListResponse
-        const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
-        setKnowledgeBases(nextKnowledgeBases)
-        setConfig(configData)
-        setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
-        setSelectedDocumentId(null)
-
-        const conversationItems = conversationsData.items ?? []
-        if (conversationItems.length > 0) {
-          const firstConversationId = conversationItems[0].id
-          const firstConversationResponse = await fetch(
-            `${API_BASE_PATH}/api/conversations/${firstConversationId}`,
-          )
-          if (!firstConversationResponse.ok) {
-            throw new Error(await extractErrorMessage(firstConversationResponse))
+      while (!canceled) {
+        try {
+          const isReady = await waitForBackendReady()
+          if (!isReady) {
+            throw new Error('backend is not ready')
           }
-          const firstConversation = normalizeConversation(
-            (await firstConversationResponse.json()) as BackendConversation,
-          )
-          const restConversations = conversationItems.slice(1).map((conversation) => ({
-            id: conversation.id,
-            title: conversation.title,
-            createdAt: conversation.createdAt,
-            updatedAt: conversation.updatedAt,
-            messages: [],
-          }))
-          setConversations([firstConversation, ...restConversations])
-          setActiveConversationId(firstConversation.id)
-        }
-      } catch (error) {
-        setBackendReady(false)
-        const message =
-          error instanceof Error ? error.message : '初始化知识库失败，请检查后端服务。'
 
-        setConversations((prev) =>
-          prev.map((conversation, index) =>
-            index === 0
-              ? {
-                  ...conversation,
-                  messages: [
-                    ...conversation.messages,
-                    {
-                      id: createId(),
-                      role: 'assistant',
-                      content: `知识库初始化失败：${message}`,
-                      timestamp: new Date().toISOString(),
-                    },
-                  ],
-                }
-              : conversation,
-          ),
-        )
+          const [knowledgeBaseResponse, configResponse, conversationsResponse] = await Promise.all([
+            fetch(`${API_BASE_PATH}/api/knowledge-bases`),
+            fetch(`${API_BASE_PATH}/api/config`),
+            fetch(`${API_BASE_PATH}/api/conversations`),
+          ])
+
+          if (!knowledgeBaseResponse.ok) {
+            throw new Error(await extractErrorMessage(knowledgeBaseResponse))
+          }
+
+          if (!configResponse.ok) {
+            throw new Error(await extractErrorMessage(configResponse))
+          }
+
+          if (!conversationsResponse.ok) {
+            throw new Error(await extractErrorMessage(conversationsResponse))
+          }
+
+          const knowledgeBaseData =
+            (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
+          const configData = (await configResponse.json()) as ConfigResponse
+          const conversationsData =
+            (await conversationsResponse.json()) as ConversationListResponse
+
+          if (canceled) {
+            return
+          }
+
+          const nextKnowledgeBases = knowledgeBaseData.items.map(normalizeKnowledgeBase)
+          setKnowledgeBases(nextKnowledgeBases)
+          setConfig(configData)
+          setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
+          setSelectedDocumentId(null)
+
+          const conversationItems = conversationsData.items ?? []
+          if (conversationItems.length > 0) {
+            const firstConversationId = conversationItems[0].id
+            const firstConversationResponse = await fetch(
+              `${API_BASE_PATH}/api/conversations/${firstConversationId}`,
+            )
+            if (!firstConversationResponse.ok) {
+              throw new Error(await extractErrorMessage(firstConversationResponse))
+            }
+            const firstConversation = normalizeConversation(
+              (await firstConversationResponse.json()) as BackendConversation,
+            )
+            const restConversations = conversationItems.slice(1).map((conversation) => ({
+              id: conversation.id,
+              title: conversation.title,
+              createdAt: conversation.createdAt,
+              updatedAt: conversation.updatedAt,
+              messages: [],
+            }))
+
+            if (canceled) {
+              return
+            }
+
+            setConversations([firstConversation, ...restConversations])
+            setActiveConversationId(firstConversation.id)
+          }
+
+          setBackendReady(true)
+          return
+        } catch (error) {
+          if (canceled) {
+            return
+          }
+
+          setBackendReady(false)
+          console.warn('bootstrap app failed, retrying after backend warmup', error)
+          await sleep(2000)
+        }
       }
     }
 
     void bootstrapApp()
+
+    return () => {
+      canceled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -973,6 +1003,45 @@ function App() {
     )
   }
 
+  const handleGenerateEvalDataset = async (knowledgeBaseId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_PATH}/api/eval/datasets/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          knowledgeBaseId,
+          maxPerDocument: 5,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(await extractErrorMessage(response))
+      }
+
+      const data = (await response.json()) as GenerateEvalDatasetResponse
+      const blob = new Blob([JSON.stringify(data.items, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+      link.href = url
+      link.download = `ground_truth_${knowledgeBaseId}_${timestamp}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+
+      window.alert(`已生成 ${data.count} 条评估用例，覆盖 ${data.documentCount} 份文档。`)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '生成评估集失败，请稍后重试。'
+      window.alert(`生成评估集失败：${message}`)
+    }
+  }
+
   const processDirectoryUploadQueue = async (
     knowledgeBaseId: string,
     queue: UploadQueueItem[],
@@ -1279,29 +1348,11 @@ function App() {
     }
 
     if (!backendReady) {
-      setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== activeConversation.id) {
-            return conversation
-          }
-
-          const now = new Date().toISOString()
-          return {
-            ...conversation,
-            messages: [
-              ...conversation.messages,
-              {
-                id: createId(),
-                role: 'assistant',
-                content: '后端服务正在启动或尚未就绪，请稍后再试。若刚刚重启服务，建议等待健康检查完成后再发送问题。',
-                timestamp: now,
-              },
-            ],
-            updatedAt: now,
-          }
-        }),
-      )
-      return
+      const isReady = await waitForBackendReady(20, 1000)
+      if (!isReady) {
+        window.alert('后端服务正在启动或尚未就绪，请稍后再发送问题。')
+        return
+      }
     }
 
     const streamAbortController = new AbortController()
@@ -1746,6 +1797,7 @@ function App() {
         onDeleteKnowledgeBase={handleDeleteKnowledgeBase}
         onUploadFiles={handleUploadFiles}
         onUploadDirectory={handleUploadDirectory}
+        onGenerateEvalDataset={handleGenerateEvalDataset}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}

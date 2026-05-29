@@ -74,7 +74,7 @@ docker compose up --build
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant 地址 |
 | `QDRANT_API_KEY` | 空 | Qdrant API Key |
 | `QDRANT_COLLECTION_PREFIX` | `kb_` | 知识库集合名前缀 |
-| `QDRANT_VECTOR_SIZE` | `1024` | 向量维度 |
+| `QDRANT_VECTOR_SIZE` | `768` | 向量维度 |
 | `QDRANT_DISTANCE` | `Cosine` | 距离算法 |
 | `QDRANT_TIMEOUT_SECONDS` | `5` | Qdrant 超时秒数 |
 | `ENABLE_HYBRID_SEARCH` | `false` | 启用 Hybrid Search |
@@ -84,7 +84,7 @@ docker compose up --build
 | `ENABLE_CONTEXT_COMPRESSION` | `false` | 启用上下文压缩 |
 |
 
-> 注意：`QDRANT_VECTOR_SIZE` 必须与嵌入模型输出维度一致。切换嵌入模型时，如果维度变化，建议清理旧集合或创建新的知识库。
+> 注意：`QDRANT_VECTOR_SIZE` 必须与嵌入模型输出维度一致。切换嵌入模型时，如果维度变化，旧 Qdrant 集合不能直接复用；请清理旧集合、使用新的 `QDRANT_COLLECTION_PREFIX`，或重新创建知识库后重建索引。
 
 ---
 

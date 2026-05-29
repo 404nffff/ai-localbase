@@ -649,6 +649,33 @@
   border-color: #c4b5fd;
 }
 
+.kb-eval-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid #a7f3d0;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.kb-eval-btn:hover:not(:disabled) {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+}
+
+.kb-eval-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .hidden-input {
   display: none;
 }

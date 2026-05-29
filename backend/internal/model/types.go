@@ -230,3 +230,34 @@ type ErrorDetail struct {
 type APIError struct {
 	Error ErrorDetail `json:"error"`
 }
+
+type EvalSourceDocument struct {
+	KnowledgeBaseID string `json:"knowledge_base_id"`
+	DocumentID      string `json:"document_id"`
+	ChunkID         string `json:"chunk_id"`
+}
+
+type EvalGroundTruthCase struct {
+	ID              string               `json:"id"`
+	Question        string               `json:"question"`
+	Answer          string               `json:"answer"`
+	AnswerSnippets  []string             `json:"answer_snippets"`
+	SourceDocuments []EvalSourceDocument `json:"source_documents"`
+	AnswerType      string               `json:"answer_type"`
+	Difficulty      string               `json:"difficulty"`
+	Notes           string               `json:"notes,omitempty"`
+}
+
+type GenerateEvalDatasetRequest struct {
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	DocumentID      string `json:"documentId"`
+	MaxPerDocument  int    `json:"maxPerDocument"`
+}
+
+type GenerateEvalDatasetResponse struct {
+	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string                `json:"documentId,omitempty"`
+	Count           int                   `json:"count"`
+	DocumentCount   int                   `json:"documentCount"`
+	Items           []EvalGroundTruthCase `json:"items"`
+}

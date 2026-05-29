@@ -14,6 +14,7 @@ interface KnowledgePanelProps {
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
+  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<void>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -34,6 +35,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onDeleteKnowledgeBase,
   onUploadFiles,
   onUploadDirectory,
+  onGenerateEvalDataset,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -47,6 +49,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
   const [showFailedItems, setShowFailedItems] = useState(false)
   const [showSkippedItems, setShowSkippedItems] = useState(false)
+  const [generatingEvalKnowledgeBaseId, setGeneratingEvalKnowledgeBaseId] = useState<string | null>(null)
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
@@ -57,6 +60,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const handleDirectoryChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
     onUploadDirectory(knowledgeBaseId, event.target.files)
     event.target.value = ''
+  }
+
+  const handleGenerateEvalDataset = async (knowledgeBaseId: string) => {
+    setGeneratingEvalKnowledgeBaseId(knowledgeBaseId)
+    try {
+      await onGenerateEvalDataset(knowledgeBaseId)
+    } finally {
+      setGeneratingEvalKnowledgeBaseId(null)
+    }
   }
 
   const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
@@ -172,6 +184,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 {knowledgeBases.map((kb) => {
                   const isSelected = selectedKnowledgeBaseId === kb.id
                   const isCollapsed = collapsedKnowledgeBases[kb.id]
+                  const isGeneratingEval = generatingEvalKnowledgeBaseId === kb.id
                   return (
                     <div key={kb.id} className={`kb-card${isSelected ? ' kb-card--active' : ''}`}>
                       {/* 知识库卡片头部 */}
@@ -212,6 +225,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                               onChange={(e) => handleDirectoryChange(kb.id, e)}
                             />
                           </label>
+                          <button
+                            className="kb-eval-btn"
+                            onClick={() => handleGenerateEvalDataset(kb.id)}
+                            disabled={kb.documents.length === 0 || isGeneratingEval}
+                            title="生成评估集"
+                          >
+                            <span>⤓</span> {isGeneratingEval ? '生成中' : '评估集'}
+                          </button>
                           <button
                             className="kb-collapse-btn"
                             onClick={() => onToggleCollapse(kb.id)}
