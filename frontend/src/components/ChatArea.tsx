@@ -36,6 +36,7 @@ function renumberOrderedListBlocks(content: string): string {
     .map((line) => {
       const trimmed = line.trim()
       if (!trimmed) {
+        counter = 0
         return line
       }
 
@@ -227,6 +228,61 @@ function normalizeStepSections(content: string): string {
   normalized = normalized.replace(/(^|\n)([^\n：]{2,20})\s*(☆☆☆|★★★)\s*(?=\n|$)/g, '$1- $2：$3')
 
   return normalized
+}
+
+function normalizeCompressedAnswerBlocks(content: string): string {
+  let normalized = content
+
+  normalized = normalized.replace(/([^\n])\s*[>＞]\s*(?=\S)/g, '$1\n\n')
+  normalized = normalized.replace(/(^|\n)\s*[>＞]\s*(?=\S)/g, '$1')
+  normalized = normalized.replace(
+    /(^|\n)#{1,6}\s*(基本信息|核心能力|能力范围|回答依据|注意事项|总结)\s*[：:]?\s*(作为[^\n]*)/g,
+    '$1### $2\n\n$3',
+  )
+  normalized = normalized.replace(
+    /(^|\n)\s*(?:\*{1,3}\s*)?(基本信息|核心能力|能力范围|回答依据|注意事项|总结)\s*[：:]?\s*(?:\*{1,3})?\s*(?=(作为|我|可以|能够|具备|基于|以下))/g,
+    '$1### $2\n\n',
+  )
+  normalized = normalized.replace(/([：:])\s*(\d+[.)、]\s+)/g, '$1\n\n$2')
+  normalized = normalized.replace(/([。！？；;])\s*(\d+[.)、]\s+)/g, '$1\n$2')
+  normalized = normalized.replace(/(\d+[.)、]\s[^\n。！？；;]*[。！？；;])\s*(?=\d+[.)、]\s)/g, '$1\n')
+  normalized = normalized.replace(
+    /([。！？；;])\s*(根据上下文|基于上下文|综上|因此|另外|同时)(?=[，,：:])/g,
+    '$1\n\n$2',
+  )
+  normalized = normalized.replace(
+    /(^|\n)([^\n#>*|`\-，。！？；;:：]{2,28})\n(?=(基本信息|根据|基于|作为|我具备|以下|可以|能够))/g,
+    '$1### $2\n\n',
+  )
+
+  return normalized
+}
+
+function unwrapOverbroadStrong(content: string): string {
+  const shouldUnwrap = (value: string) => {
+    const normalized = value.trim()
+    return (
+      normalized.length > 80 ||
+      /\d+[.)、]\s/.test(normalized) ||
+      />\s*\S/.test(normalized) ||
+      /(?:基本信息|核心能力|能力范围|回答依据|注意事项|总结)\s*(?:作为|我|可以|能够|具备|基于|以下)/.test(
+        normalized,
+      )
+    )
+  }
+
+  let normalized = content.trim()
+
+  if (/^\*\*[\s\S]+\*\*$/.test(normalized)) {
+    const inner = normalized.slice(2, -2).trim()
+    if (shouldUnwrap(inner)) {
+      normalized = inner
+    }
+  }
+
+  return normalized.replace(/\*\*([^*\n][^\n]{80,}?)\*\*/g, (match, inner: string) =>
+    shouldUnwrap(inner) ? inner : match,
+  )
 }
 
 function sanitizeMermaidLine(line: string): string {
@@ -1143,6 +1199,8 @@ function fixMarkdown(content: string): string {
   fixed = fixed.replace(/<\/?user>/g, '')
   fixed = fixed.replace(/<\/?system>/g, '')
 
+  fixed = unwrapOverbroadStrong(fixed)
+
   fixed = fixed.replace(/([^\n])(#{1,6})/g, '$1\n\n$2')
   fixed = fixed.replace(/^(#{1,6})([^\s#])/gm, '$1 $2')
   fixed = fixed.replace(/(#{1,6}\s[^\n|]+)(\|(?=[^\n|]+\|[^\n|]+\|))/g, '$1\n\n$2')
@@ -1150,6 +1208,7 @@ function fixMarkdown(content: string): string {
   fixed = fixed.replace(/(\|[^\n]+\|)\s*(>)/g, '$1\n\n$2')
 
   fixed = expandDenseDoublePipeTables(fixed)
+  fixed = normalizeCompressedAnswerBlocks(fixed)
   fixed = normalizeMermaidSection(fixed)
   fixed = normalizeStepSections(fixed)
   fixed = normalizeSummarySections(fixed)
@@ -1197,8 +1256,8 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed
     .split('\n')
     .map((line) => normalizePseudoStructuredLine(line))
-    .filter(Boolean)
     .join('\n')
+  fixed = normalizeCompressedAnswerBlocks(fixed)
   fixed = renumberOrderedListBlocks(fixed)
   fixed = fixed.replace(/([：:])\s*[-*]\s+/g, '$1 ')
   fixed = fixed.replace(/\n{3,}/g, '\n\n')
@@ -1554,6 +1613,20 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                             >
                               {children}
                             </a>
+                          )
+                        },
+                        strong({ children, ...props }) {
+                          const text = React.Children.toArray(children)
+                            .map((child) => (typeof child === 'string' ? child : ''))
+                            .join('')
+                            .trim()
+                          return (
+                            <strong
+                              className={text.length > 48 ? 'md-strong-plain' : undefined}
+                              {...props}
+                            >
+                              {children}
+                            </strong>
                           )
                         },
                         table({ children, ...props }) {
