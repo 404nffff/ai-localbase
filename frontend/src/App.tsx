@@ -22,7 +22,12 @@ import {
   updateAppConfig,
   uploadKnowledgeBaseFile,
 } from './services/api'
-import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from './services/api'
+import type {
+  DocumentDetailResponse,
+  GenerateEvalDatasetResponse,
+  KnowledgeBaseHealthResponse,
+  RetrievalDebugResponse,
+} from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -728,27 +733,15 @@ function App() {
     )
   }
 
-  const handleGenerateEvalDataset = async (knowledgeBaseId: string) => {
+  const handleGenerateEvalDataset = async (
+    knowledgeBaseId: string,
+  ): Promise<GenerateEvalDatasetResponse> => {
     try {
-      const data = await generateEvalDataset(knowledgeBaseId)
-      const blob = new Blob([JSON.stringify(data.items, null, 2)], {
-        type: 'application/json;charset=utf-8',
-      })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-      link.href = url
-      link.download = `ground_truth_${knowledgeBaseId}_${timestamp}.json`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-
-      window.alert(`已生成 ${data.count} 条评估用例，覆盖 ${data.documentCount} 份文档。`)
+      return await generateEvalDataset(knowledgeBaseId)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '生成评估集失败，请稍后重试。'
-      window.alert(`生成评估集失败：${message}`)
+      throw new Error(message)
     }
   }
 

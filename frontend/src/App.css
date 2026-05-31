@@ -1926,6 +1926,209 @@
   font-size: 13px;
 }
 
+.kb-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(6px);
+}
+
+.kb-eval-dialog {
+  width: min(960px, 100%);
+  max-height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.32);
+}
+
+.kb-eval-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.kb-eval-dialog-head span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.kb-eval-dialog-head h3 {
+  margin: 4px 0 0;
+  color: #0f172a;
+  font-size: 18px;
+  word-break: break-word;
+}
+
+.kb-eval-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 22px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.kb-eval-summary-grid div {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.kb-eval-summary-grid strong {
+  display: block;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-eval-summary-grid span {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.kb-eval-preview-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kb-eval-preview-item {
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.kb-eval-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.kb-eval-preview-head span {
+  padding: 3px 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kb-eval-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+}
+
+.kb-eval-preview-question {
+  display: block;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.kb-eval-preview-answer {
+  display: block;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.kb-eval-preview-evidence {
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.kb-eval-preview-evidence span {
+  display: block;
+  padding: 8px 10px;
+  border-bottom: 1px solid #dbeafe;
+  color: #1e40af;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.kb-eval-preview-evidence pre {
+  max-height: 150px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  background: #ffffff;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.kb-eval-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.kb-eval-dialog-actions span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.kb-eval-dialog-actions button {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 14px;
+  background: #2563eb;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kb-eval-dialog-actions button:hover {
+  background: #1d4ed8;
+}
+
 .kb-modal--workspace {
   width: min(1280px, calc(100vw - 36px));
   height: min(90vh, 900px);
@@ -2286,8 +2489,23 @@
 
   .kb-health-stats,
   .kb-upload-stats-grid,
-  .kb-detail-stats {
+  .kb-detail-stats,
+  .kb-eval-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kb-dialog-backdrop {
+    padding: 10px;
+  }
+
+  .kb-eval-dialog {
+    max-height: calc(100vh - 20px);
+    border-radius: 14px;
+  }
+
+  .kb-eval-dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .kb-doc-actions {

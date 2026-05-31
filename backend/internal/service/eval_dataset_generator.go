@@ -44,29 +44,25 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 			return model.GenerateEvalDatasetResponse{}, fmt.Errorf("extract document %s: %w", document.ID, err)
 		}
 		chunks := s.rag.BuildDocumentChunks(document, text)
-		selected := selectEvalChunkCandidates(chunks, maxPerDocument)
+		selected := selectEvalChunkCandidates(chunks, len(chunks))
 		for _, chunk := range selected {
-			caseID := fmt.Sprintf("auto-%s-%03d", sanitizeEvalIDPart(document.ID), len(cases)+1)
-			answer := clipEvalRunes(normalizeEvalWhitespace(chunk.Text), 260)
-			snippets := evalAnswerSnippets(chunk.Text)
-			if len(snippets) == 0 && answer != "" {
-				snippets = []string{clipEvalRunes(answer, 80)}
+			generated := buildEvalCasesFromChunk(document, chunk, maxPerDocument)
+			for _, item := range generated {
+				if len(cases) >= len(documents)*maxPerDocument {
+					break
+				}
+				if !validateEvalCase(item, document.Name, chunk.Text) {
+					continue
+				}
+				item.ID = fmt.Sprintf("auto-%s-%03d", sanitizeEvalIDPart(document.ID), len(cases)+1)
+				cases = append(cases, item)
+				if countEvalCasesForDocument(cases, document.ID) >= maxPerDocument {
+					break
+				}
 			}
-
-			cases = append(cases, model.EvalGroundTruthCase{
-				ID:             caseID,
-				Question:       buildEvalQuestion(document, chunk),
-				Answer:         answer,
-				AnswerSnippets: snippets,
-				SourceDocuments: []model.EvalSourceDocument{{
-					KnowledgeBaseID: document.KnowledgeBaseID,
-					DocumentID:      document.ID,
-					ChunkID:         chunk.ID,
-				}},
-				AnswerType: classifyEvalAnswerType(chunk.Text),
-				Difficulty: classifyEvalDifficulty(chunk.Text),
-				Notes:      fmt.Sprintf("auto-generated from %s", document.Name),
-			})
+			if countEvalCasesForDocument(cases, document.ID) >= maxPerDocument {
+				break
+			}
 		}
 	}
 
@@ -132,7 +128,7 @@ func selectEvalChunkCandidates(chunks []DocumentChunk, maxCount int) []DocumentC
 	candidates := make([]DocumentChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		text := normalizeEvalWhitespace(chunk.Text)
-		if utf8.RuneCountInString(text) < 40 {
+		if utf8.RuneCountInString(text) < 40 && !isStructuredEvalChunkKind(chunk.Kind) {
 			continue
 		}
 		if isLowValueEvalChunk(text) {
@@ -153,9 +149,6 @@ func selectEvalChunkCandidates(chunks []DocumentChunk, maxCount int) []DocumentC
 	if len(candidates) > maxCount {
 		candidates = candidates[:maxCount]
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].Index < candidates[j].Index
-	})
 	return candidates
 }
 
@@ -164,6 +157,9 @@ func evalChunkScore(chunk DocumentChunk) int {
 	score := 0
 	if chunk.Kind == "structured_summary" {
 		score += 5
+	}
+	if chunk.Kind == "structured_row" {
+		score += 4
 	}
 	if regexp.MustCompile(`什么是|是指|指的是|简介|概述|介绍`).MatchString(text) {
 		score += 4
@@ -183,83 +179,150 @@ func evalChunkScore(chunk DocumentChunk) int {
 	return score
 }
 
-func buildEvalQuestion(document model.Document, chunk DocumentChunk) string {
-	text := normalizeEvalWhitespace(chunk.Text)
-	subject := evalQuestionSubject(document.Name, text)
-	if subject == "" {
-		subject = strings.TrimSuffix(document.Name, filepathExt(document.Name))
+func buildEvalCasesFromChunk(document model.Document, chunk DocumentChunk, limit int) []model.EvalGroundTruthCase {
+	if limit <= 0 {
+		return nil
 	}
 
-	switch {
-	case regexp.MustCompile(`什么是|是指|指的是|简介|概述|介绍`).MatchString(text):
-		return fmt.Sprintf("什么是%s？", subject)
-	case regexp.MustCompile(`流程|步骤`).MatchString(text):
-		return fmt.Sprintf("%s的流程是什么？", subject)
-	case regexp.MustCompile(`配置|安装|启动|部署`).MatchString(text):
-		return fmt.Sprintf("%s如何配置或使用？", subject)
-	case regexp.MustCompile(`包括|支持|提供|具有|涵盖`).MatchString(text):
-		return fmt.Sprintf("%s包括哪些要点？", subject)
-	case regexp.MustCompile(`区别|对比`).MatchString(text):
-		return fmt.Sprintf("%s中提到的区别是什么？", subject)
+	var cases []model.EvalGroundTruthCase
+	switch chunk.Kind {
+	case "structured_summary":
+		cases = append(cases, buildStructuredSummaryEvalCases(document, chunk)...)
+	case "structured_row":
+		cases = append(cases, buildStructuredRowEvalCases(document, chunk)...)
 	default:
-		return fmt.Sprintf("%s主要讲了什么？", subject)
+		cases = append(cases, buildStructuredHeaderEvalCases(document, chunk)...)
+		cases = append(cases, buildHeadingTextEvalCases(document, chunk)...)
 	}
+
+	if len(cases) > limit {
+		cases = cases[:limit]
+	}
+	return cases
 }
 
-func evalQuestionSubject(documentName, text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+func buildStructuredSummaryEvalCases(document model.Document, chunk DocumentChunk) []model.EvalGroundTruthCase {
+	lines := evalEvidenceLines(chunk.Text)
+	cases := make([]model.EvalGroundTruthCase, 0, len(lines))
+	fileName := document.Name
+
+	rowCountPattern := regexp.MustCompile(`^统计摘要：文件《([^》]+)》(?:工作表《([^》]+)》)?共有(\d+)条数据记录。?$`)
+	numberPattern := regexp.MustCompile(`^统计摘要：字段“([^”]+)”为数值列，非空值(\d+)个，最小值([^，。]+)，最大值([^，。]+)，平均值([^，。]+)。?$`)
+	categoryPattern := regexp.MustCompile(`^统计摘要：字段“([^”]+)”为类别列，共(\d+)个非空值，主要分布为：(.+?)。?$`)
+
+	for _, line := range lines {
+		if match := rowCountPattern.FindStringSubmatch(line); len(match) == 4 {
+			fileName = strings.TrimSpace(match[1])
+			scope := evalFileScope(fileName, match[2])
+			cases = append(cases, newEvalCase(document, chunk, fmt.Sprintf("%s共有多少条数据记录？", scope), fmt.Sprintf("共有%s条数据记录。", match[3]), []string{line}, "numeric", "easy", "structured summary row count"))
 			continue
 		}
-		line = regexp.MustCompile(`^[#*\-\d.\s]+`).ReplaceAllString(line, "")
-		line = strings.Trim(line, "：:。；，、[]（）()")
-		line = normalizeEvalWhitespace(line)
-		if line == "" {
+
+		if match := numberPattern.FindStringSubmatch(line); len(match) == 6 {
+			field := strings.TrimSpace(match[1])
+			scope := evalFileScope(fileName, "")
+			cases = append(cases,
+				newEvalCase(document, chunk, fmt.Sprintf("%s中“%s”的最大值是多少？", scope, field), fmt.Sprintf("“%s”的最大值是%s。", field, strings.TrimSpace(match[4])), []string{line}, "numeric", "easy", "structured summary max"),
+				newEvalCase(document, chunk, fmt.Sprintf("%s中“%s”的最小值是多少？", scope, field), fmt.Sprintf("“%s”的最小值是%s。", field, strings.TrimSpace(match[3])), []string{line}, "numeric", "easy", "structured summary min"),
+				newEvalCase(document, chunk, fmt.Sprintf("%s中“%s”的平均值是多少？", scope, field), fmt.Sprintf("“%s”的平均值是%s。", field, strings.TrimSpace(match[5])), []string{line}, "numeric", "medium", "structured summary average"),
+			)
 			continue
 		}
-		if utf8.RuneCountInString(line) <= 28 {
-			return line
+
+		if match := categoryPattern.FindStringSubmatch(line); len(match) == 4 {
+			field := strings.TrimSpace(match[1])
+			distribution := strings.TrimSpace(match[3])
+			scope := evalFileScope(fileName, "")
+			cases = append(cases, newEvalCase(document, chunk, fmt.Sprintf("%s中“%s”的主要分布是什么？", scope, field), fmt.Sprintf("“%s”的主要分布为：%s。", field, distribution), []string{line}, "listing", "medium", "structured summary distribution"))
 		}
-		if idx := strings.IndexAny(line, "：:，。；;（("); idx > 0 {
-			candidate := strings.TrimSpace(line[:idx])
-			if utf8.RuneCountInString(candidate) >= 2 && utf8.RuneCountInString(candidate) <= 28 {
-				return candidate
-			}
+	}
+
+	return cases
+}
+
+func buildStructuredHeaderEvalCases(document model.Document, chunk DocumentChunk) []model.EvalGroundTruthCase {
+	lines := evalEvidenceLines(chunk.Text)
+	headerPattern := regexp.MustCompile(`^文件：(.+?)。(?:工作表：(.+?)。)?字段：(.+?)。数据行数：(\d+)。?$`)
+	cases := make([]model.EvalGroundTruthCase, 0, 2)
+	for _, line := range lines {
+		match := headerPattern.FindStringSubmatch(line)
+		if len(match) != 5 {
+			continue
 		}
+		fileName := strings.TrimSpace(match[1])
+		sheetName := strings.TrimSpace(match[2])
+		fields := strings.TrimSpace(match[3])
+		rowCount := strings.TrimSpace(match[4])
+		scope := evalFileScope(fileName, sheetName)
+		cases = append(cases,
+			newEvalCase(document, chunk, fmt.Sprintf("%s包含哪些字段？", scope), fmt.Sprintf("字段包括：%s。", fields), []string{line}, "listing", "easy", "structured header fields"),
+			newEvalCase(document, chunk, fmt.Sprintf("%s的数据行数是多少？", scope), fmt.Sprintf("数据行数是%s。", rowCount), []string{line}, "numeric", "easy", "structured header row count"),
+		)
 		break
 	}
-
-	base := strings.TrimSuffix(documentName, filepathExt(documentName))
-	base = strings.TrimSpace(base)
-	if base != "" {
-		return base
-	}
-	return "该文档"
+	return cases
 }
 
-func evalAnswerSnippets(text string) []string {
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	snippets := make([]string, 0, 2)
-	seen := map[string]struct{}{}
+func buildStructuredRowEvalCases(document model.Document, chunk DocumentChunk) []model.EvalGroundTruthCase {
+	lines := evalEvidenceLines(chunk.Text)
+	cases := make([]model.EvalGroundTruthCase, 0, 6)
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		line = strings.Trim(line, "#*-• \t")
-		line = normalizeEvalWhitespace(line)
-		if utf8.RuneCountInString(line) < 12 {
+		rowNumber, fields, ok := parseStructuredEvalRow(line)
+		if !ok {
 			continue
 		}
-		snippet := clipEvalRunes(line, 90)
-		if _, ok := seen[snippet]; ok {
-			continue
+		for _, field := range selectStructuredEvalRowFields(fields, 2) {
+			question := fmt.Sprintf("《%s》第%s行的“%s”是什么？", document.Name, rowNumber, field.name)
+			answer := strings.TrimSpace(field.value)
+			cases = append(cases, newEvalCase(document, chunk, question, answer, []string{line}, classifyEvalAnswerType(answer), "easy", "structured row field"))
 		}
-		seen[snippet] = struct{}{}
-		snippets = append(snippets, snippet)
-		if len(snippets) >= 2 {
+		if len(cases) >= 6 {
 			break
 		}
 	}
-	return snippets
+	return cases
+}
+
+func buildHeadingTextEvalCases(document model.Document, chunk DocumentChunk) []model.EvalGroundTruthCase {
+	lines := strings.Split(strings.ReplaceAll(chunk.Text, "\r\n", "\n"), "\n")
+	for index, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		heading := strings.TrimSpace(regexp.MustCompile(`^#+\s*`).ReplaceAllString(line, ""))
+		heading = strings.Trim(heading, "：:。；，、[]（）()")
+		if utf8.RuneCountInString(heading) < 2 || utf8.RuneCountInString(heading) > 40 {
+			continue
+		}
+		answerParts := make([]string, 0, 3)
+		for next := index + 1; next < len(lines); next++ {
+			part := strings.TrimSpace(lines[next])
+			if part == "" {
+				if len(answerParts) > 0 {
+					break
+				}
+				continue
+			}
+			if strings.HasPrefix(part, "#") {
+				break
+			}
+			part = strings.Trim(part, "-*• \t")
+			if part != "" {
+				answerParts = append(answerParts, part)
+			}
+			if len(answerParts) >= 3 {
+				break
+			}
+		}
+		answer := clipEvalRunes(normalizeEvalWhitespace(strings.Join(answerParts, "\n")), 260)
+		if utf8.RuneCountInString(answer) < 24 {
+			continue
+		}
+		question := fmt.Sprintf("文档《%s》中“%s”部分说明了什么？", document.Name, heading)
+		return []model.EvalGroundTruthCase{newEvalCase(document, chunk, question, answer, []string{answer}, classifyEvalAnswerType(answer), classifyEvalDifficulty(answer), "heading section extract")}
+	}
+	return nil
 }
 
 func classifyEvalAnswerType(text string) string {
@@ -292,6 +355,242 @@ func isLowValueEvalChunk(text string) bool {
 		return true
 	}
 	return regexp.MustCompile(`^(目录|参考|附录|版权|免责声明)$`).MatchString(text)
+}
+
+func isStructuredEvalChunkKind(kind string) bool {
+	return kind == "structured_summary" || kind == "structured_row"
+}
+
+func newEvalCase(document model.Document, chunk DocumentChunk, question, answer string, snippets []string, answerType, difficulty, note string) model.EvalGroundTruthCase {
+	cleanSnippets := make([]string, 0, len(snippets))
+	seen := map[string]struct{}{}
+	for _, snippet := range snippets {
+		snippet = clipEvalRunes(normalizeEvalWhitespace(snippet), 220)
+		if snippet == "" {
+			continue
+		}
+		if _, ok := seen[snippet]; ok {
+			continue
+		}
+		seen[snippet] = struct{}{}
+		cleanSnippets = append(cleanSnippets, snippet)
+	}
+	return model.EvalGroundTruthCase{
+		Question:       strings.TrimSpace(question),
+		Answer:         strings.TrimSpace(answer),
+		AnswerSnippets: cleanSnippets,
+		SourceDocuments: []model.EvalSourceDocument{{
+			KnowledgeBaseID: document.KnowledgeBaseID,
+			DocumentID:      document.ID,
+			ChunkID:         chunk.ID,
+		}},
+		AnswerType: strings.TrimSpace(answerType),
+		Difficulty: strings.TrimSpace(difficulty),
+		Notes:      fmt.Sprintf("auto-generated from %s; %s", document.Name, note),
+	}
+}
+
+func validateEvalCase(item model.EvalGroundTruthCase, documentName, sourceText string) bool {
+	if strings.TrimSpace(item.Question) == "" || strings.TrimSpace(item.Answer) == "" {
+		return false
+	}
+	if len(item.AnswerSnippets) == 0 || len(item.SourceDocuments) == 0 {
+		return false
+	}
+	if regexp.MustCompile(`主要讲了什么|包括哪些要点|有哪些内容`).MatchString(item.Question) {
+		return false
+	}
+
+	evidence := normalizeEvalComparable(sourceText + "\n" + documentName)
+	for _, snippet := range item.AnswerSnippets {
+		normalizedSnippet := normalizeEvalComparable(snippet)
+		if normalizedSnippet == "" || (!strings.Contains(evidence, normalizedSnippet) && !strings.Contains(normalizeEvalComparable(item.Answer), normalizedSnippet)) {
+			return false
+		}
+	}
+	if !evalAnswerSupportedByEvidence(item.Answer, evidence) {
+		return false
+	}
+	for _, term := range evalQuotedTerms(item.Question) {
+		if !strings.Contains(evidence, normalizeEvalComparable(term)) {
+			return false
+		}
+	}
+	return true
+}
+
+func evalAnswerSupportedByEvidence(answer, evidence string) bool {
+	normalizedAnswer := normalizeEvalComparable(answer)
+	if normalizedAnswer == "" {
+		return false
+	}
+	if strings.Contains(evidence, normalizedAnswer) {
+		return true
+	}
+
+	terms := evalCriticalAnswerTerms(answer)
+	if len(terms) == 0 {
+		return false
+	}
+	for _, term := range terms {
+		if !strings.Contains(evidence, normalizeEvalComparable(term)) {
+			return false
+		}
+	}
+	return true
+}
+
+func evalCriticalAnswerTerms(answer string) []string {
+	terms := make([]string, 0)
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		key := normalizeEvalComparable(value)
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		terms = append(terms, value)
+	}
+	for _, term := range evalQuotedTerms(answer) {
+		add(term)
+	}
+	for _, match := range regexp.MustCompile(`\d+(?:\.\d+)?`).FindAllString(answer, -1) {
+		add(match)
+	}
+	if len(terms) == 0 && utf8.RuneCountInString(strings.TrimSpace(answer)) <= 30 {
+		add(answer)
+	}
+	return terms
+}
+
+func evalQuotedTerms(text string) []string {
+	matches := regexp.MustCompile(`[《“]([^》”]{1,60})[》”]`).FindAllStringSubmatch(text, -1)
+	terms := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 2 {
+			terms = append(terms, strings.TrimSpace(match[1]))
+		}
+	}
+	return terms
+}
+
+func evalEvidenceLines(text string) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = normalizeEvalWhitespace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func evalFileScope(fileName, sheetName string) string {
+	fileName = strings.TrimSpace(fileName)
+	sheetName = strings.TrimSpace(sheetName)
+	if fileName == "" {
+		fileName = "该文件"
+	}
+	if sheetName != "" {
+		return fmt.Sprintf("《%s》工作表《%s》", fileName, sheetName)
+	}
+	return fmt.Sprintf("《%s》", fileName)
+}
+
+type structuredEvalRowField struct {
+	name  string
+	value string
+}
+
+func parseStructuredEvalRow(line string) (string, []structuredEvalRowField, bool) {
+	match := regexp.MustCompile(`^第(\d+)行：(.+)$`).FindStringSubmatch(strings.TrimSpace(line))
+	if len(match) != 3 {
+		return "", nil, false
+	}
+	rowNumber := strings.TrimSpace(match[1])
+	body := strings.TrimSpace(match[2])
+	parts := regexp.MustCompile(`[。；;]\s*`).Split(body, -1)
+	fields := make([]structuredEvalRowField, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		pair := strings.SplitN(part, "：", 2)
+		if len(pair) != 2 {
+			pair = strings.SplitN(part, ":", 2)
+		}
+		if len(pair) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(pair[0])
+		value := strings.TrimSpace(pair[1])
+		if name == "" || value == "" || name == "工作表" {
+			continue
+		}
+		fields = append(fields, structuredEvalRowField{name: name, value: value})
+	}
+	return rowNumber, fields, len(fields) > 0
+}
+
+func selectStructuredEvalRowFields(fields []structuredEvalRowField, limit int) []structuredEvalRowField {
+	if len(fields) == 0 || limit <= 0 {
+		return nil
+	}
+	preferredNames := []string{"姓名", "名称", "标题", "职称", "编号", "教师编号", "手机号", "薪资", "年龄", "教龄", "状态", "类别"}
+	selected := make([]structuredEvalRowField, 0, limit)
+	used := map[int]struct{}{}
+	for _, preferred := range preferredNames {
+		for index, field := range fields {
+			if _, ok := used[index]; ok {
+				continue
+			}
+			if strings.Contains(field.name, preferred) {
+				selected = append(selected, field)
+				used[index] = struct{}{}
+				if len(selected) >= limit {
+					return selected
+				}
+			}
+		}
+	}
+	for index, field := range fields {
+		if _, ok := used[index]; ok {
+			continue
+		}
+		selected = append(selected, field)
+		if len(selected) >= limit {
+			break
+		}
+	}
+	return selected
+}
+
+func countEvalCasesForDocument(cases []model.EvalGroundTruthCase, documentID string) int {
+	count := 0
+	for _, item := range cases {
+		for _, source := range item.SourceDocuments {
+			if source.DocumentID == documentID {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+func normalizeEvalComparable(text string) string {
+	text = normalizeEvalWhitespace(text)
+	text = strings.ReplaceAll(text, " ", "")
+	return text
 }
 
 func normalizeEvalWhitespace(text string) string {
@@ -336,12 +635,4 @@ func sanitizeEvalIDPart(value string) string {
 		return "case"
 	}
 	return out
-}
-
-func filepathExt(name string) string {
-	index := strings.LastIndex(name, ".")
-	if index < 0 {
-		return ""
-	}
-	return name[index:]
 }

@@ -9,7 +9,12 @@ import {
   EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
-import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from '../services/api'
+import type {
+  DocumentDetailResponse,
+  GenerateEvalDatasetResponse,
+  KnowledgeBaseHealthResponse,
+  RetrievalDebugResponse,
+} from '../services/api'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
 
@@ -25,7 +30,7 @@ interface SidebarProps {
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
-  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<void>
+  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<GenerateEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void

@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
-import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from '../../services/api'
+import type {
+  DocumentDetailResponse,
+  GenerateEvalDatasetResponse,
+  KnowledgeBaseHealthResponse,
+  RetrievalDebugResponse,
+} from '../../services/api'
 import CreateKnowledgeBaseDialog from './CreateKnowledgeBaseDialog'
 import DirectoryUploadTaskPanel from './DirectoryUploadTaskPanel'
 import DocumentDetailDialog from './DocumentDetailDialog'
 import DocumentList from './DocumentList'
+import EvalDatasetDialog from './EvalDatasetDialog'
 import KnowledgeBaseRail from './KnowledgeBaseRail'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
 import RetrievalDebugPanel from './RetrievalDebugPanel'
@@ -22,7 +28,7 @@ interface KnowledgePanelProps {
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
-  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<void>
+  onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<GenerateEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -72,6 +78,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showSkippedItems, setShowSkippedItems] = useState(false)
   const [generatingEvalKnowledgeBaseId, setGeneratingEvalKnowledgeBaseId] = useState<string | null>(null)
   const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
+  const [evalDataset, setEvalDataset] = useState<GenerateEvalDatasetResponse | null>(null)
+  const [evalDatasetScopeName, setEvalDatasetScopeName] = useState('')
   const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
   const [documentDetailError, setDocumentDetailError] = useState('')
   const [healthByKnowledgeBase, setHealthByKnowledgeBase] = useState<Record<string, KnowledgeBaseHealthResponse>>({})
@@ -158,7 +166,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const handleGenerateEvalDataset = async (knowledgeBaseId: string) => {
     setGeneratingEvalKnowledgeBaseId(knowledgeBaseId)
     try {
-      await onGenerateEvalDataset(knowledgeBaseId)
+      const dataset = await onGenerateEvalDataset(knowledgeBaseId)
+      setEvalDataset(dataset)
+      setEvalDatasetScopeName(
+        knowledgeBases.find((knowledgeBase) => knowledgeBase.id === knowledgeBaseId)?.name ?? knowledgeBaseId,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成评估集失败，请稍后重试。'
+      window.alert(`生成评估集失败：${message}`)
     } finally {
       setGeneratingEvalKnowledgeBaseId(null)
     }
@@ -470,6 +485,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           detail={documentDetail}
           error={documentDetailError}
           onClose={closeDocumentDetail}
+        />
+      )}
+
+      {evalDataset && (
+        <EvalDatasetDialog
+          dataset={evalDataset}
+          scopeName={evalDatasetScopeName}
+          onClose={() => setEvalDataset(null)}
         />
       )}
     </>
