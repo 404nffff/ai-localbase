@@ -86,12 +86,42 @@ type qdrantQueryRequest struct {
 	WithPayload bool           `json:"with_payload"`
 }
 
+type qdrantScoredPoint struct {
+	ID      any            `json:"id"`
+	Score   float64        `json:"score"`
+	Payload map[string]any `json:"payload"`
+}
+
 type qdrantSearchResponse struct {
-	Result []struct {
-		ID      any            `json:"id"`
-		Score   float64        `json:"score"`
-		Payload map[string]any `json:"payload"`
-	} `json:"result"`
+	Result []qdrantScoredPoint `json:"result"`
+}
+
+func (r *qdrantSearchResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Result) == 0 || string(raw.Result) == "null" {
+		r.Result = nil
+		return nil
+	}
+
+	var points []qdrantScoredPoint
+	if err := json.Unmarshal(raw.Result, &points); err == nil {
+		r.Result = points
+		return nil
+	}
+
+	var queryResult struct {
+		Points []qdrantScoredPoint `json:"points"`
+	}
+	if err := json.Unmarshal(raw.Result, &queryResult); err != nil {
+		return err
+	}
+	r.Result = queryResult.Points
+	return nil
 }
 
 func NewQdrantService(cfg model.ServerConfig) *QdrantService {
