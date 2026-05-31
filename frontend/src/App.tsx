@@ -1,7 +1,7 @@
 import './App.css'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
   createKnowledgeBase,
@@ -10,6 +10,7 @@ import {
   deleteKnowledgeBase,
   deleteKnowledgeBaseDocument,
   extractErrorMessage,
+  fetchKnowledgeBaseHealth,
   fetchKnowledgeBaseDocumentDetail,
   fetchBackendHealth,
   fetchConversationDetail,
@@ -21,7 +22,7 @@ import {
   updateAppConfig,
   uploadKnowledgeBaseFile,
 } from './services/api'
-import type { DocumentDetailResponse, RetrievalDebugResponse } from './services/api'
+import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
@@ -50,7 +51,7 @@ export interface DocumentItem {
   name: string
   sizeLabel: string
   uploadedAt: string
-  status: 'indexed' | 'ready' | 'processing'
+  status: 'indexed' | 'ready' | 'processing' | 'failed'
   contentPreview?: string
   chunkCount?: number
   indexedAt?: string
@@ -1023,6 +1024,12 @@ function App() {
     return fetchKnowledgeBaseDocumentDetail(knowledgeBaseId, documentId)
   }
 
+  const handleFetchKnowledgeBaseHealth = useCallback(async (
+    knowledgeBaseId: string,
+  ): Promise<KnowledgeBaseHealthResponse> => {
+    return fetchKnowledgeBaseHealth(knowledgeBaseId)
+  }, [])
+
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
     try {
       const updatedDocument = await reindexKnowledgeBaseDocument(knowledgeBaseId, documentId)
@@ -1541,6 +1548,7 @@ function App() {
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
+        onFetchKnowledgeBaseHealth={handleFetchKnowledgeBaseHealth}
         onFetchDocumentDetail={handleFetchDocumentDetail}
         onReindexDocument={handleReindexDocument}
         onDebugRetrieval={handleDebugRetrieval}

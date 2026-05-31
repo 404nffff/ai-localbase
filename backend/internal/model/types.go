@@ -129,6 +129,47 @@ type DocumentDetailResponse struct {
 	Chunks          []DocumentChunkPreview   `json:"chunks"`
 }
 
+type KnowledgeBaseHealthMetrics struct {
+	DocumentCount      int    `json:"documentCount"`
+	IndexedCount       int    `json:"indexedCount"`
+	ProcessingCount    int    `json:"processingCount"`
+	FailedCount        int    `json:"failedCount"`
+	EmptyContentCount  int    `json:"emptyContentCount"`
+	ChunkCount         int    `json:"chunkCount"`
+	VectorCount        int    `json:"vectorCount"`
+	SummaryChunkCount  int    `json:"summaryChunkCount"`
+	StructuredRowCount int    `json:"structuredRowCount"`
+	RawContentChars    int    `json:"rawContentChars"`
+	QdrantEnabled      bool   `json:"qdrantEnabled"`
+	LastIndexedAt      string `json:"lastIndexedAt,omitempty"`
+}
+
+type KnowledgeBaseDocumentHealth struct {
+	DocumentID          string `json:"documentId"`
+	DocumentName        string `json:"documentName"`
+	Status              string `json:"status"`
+	IndexedAt           string `json:"indexedAt,omitempty"`
+	IndexError          string `json:"indexError,omitempty"`
+	ChunkCount          int    `json:"chunkCount"`
+	VectorCount         int    `json:"vectorCount"`
+	SummaryChunkCount   int    `json:"summaryChunkCount"`
+	StructuredRowCount  int    `json:"structuredRowCount"`
+	RawContentChars     int    `json:"rawContentChars"`
+	RawContentAvailable bool   `json:"rawContentAvailable"`
+	NeedsReindex        bool   `json:"needsReindex"`
+	Recommendation      string `json:"recommendation,omitempty"`
+}
+
+type KnowledgeBaseHealthResponse struct {
+	KnowledgeBaseID string                        `json:"knowledgeBaseId"`
+	Name            string                        `json:"name"`
+	Status          string                        `json:"status"`
+	Score           int                           `json:"score"`
+	Metrics         KnowledgeBaseHealthMetrics    `json:"metrics"`
+	Recommendations []string                      `json:"recommendations"`
+	Documents       []KnowledgeBaseDocumentHealth `json:"documents"`
+}
+
 type UploadResponse struct {
 	Message       string   `json:"message"`
 	KnowledgeBase string   `json:"knowledgeBaseId"`

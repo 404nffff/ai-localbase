@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ai-localbase/internal/model"
 )
@@ -231,6 +232,70 @@ func TestBuildChunkTextDeduplicatesRepeatedChunks(t *testing.T) {
 	}
 	if !strings.Contains(text, "第2行：字段A：值甲。字段B：级别1。") {
 		t.Fatalf("expected row detail to be preserved, got %q", text)
+	}
+}
+
+func TestGetKnowledgeBaseHealthReportsStructuredMetrics(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "users.csv")
+	content := strings.Join([]string{
+		"姓名,城市,薪资",
+		"张三,上海,24000",
+		"李四,北京,18000",
+		"王五,上海,7000",
+	}, "\n")
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write csv fixture: %v", err)
+	}
+
+	indexedAt := time.Now().UTC().Format(time.RFC3339)
+	service := &AppService{
+		state: &model.AppState{
+			KnowledgeBases: map[string]model.KnowledgeBase{
+				"kb-1": {
+					ID:   "kb-1",
+					Name: "测试知识库",
+					Documents: []model.Document{{
+						ID:              "doc-users",
+						KnowledgeBaseID: "kb-1",
+						Name:            "users.csv",
+						Path:            csvPath,
+						Status:          "indexed",
+						IndexedAt:       indexedAt,
+					}},
+				},
+			},
+		},
+		rag: NewRagService(),
+	}
+
+	health, err := service.GetKnowledgeBaseHealth("kb-1")
+	if err != nil {
+		t.Fatalf("get knowledge base health: %v", err)
+	}
+	if health.Status != "healthy" {
+		t.Fatalf("expected healthy status, got %s", health.Status)
+	}
+	if health.Score != 100 {
+		t.Fatalf("expected perfect health score, got %d", health.Score)
+	}
+	if health.Metrics.DocumentCount != 1 || health.Metrics.IndexedCount != 1 {
+		t.Fatalf("unexpected document metrics: %#v", health.Metrics)
+	}
+	if health.Metrics.ChunkCount == 0 {
+		t.Fatal("expected chunk count to be reported")
+	}
+	if health.Metrics.SummaryChunkCount == 0 {
+		t.Fatal("expected structured summary chunks to be reported")
+	}
+	if health.Metrics.StructuredRowCount == 0 {
+		t.Fatal("expected structured row chunks to be reported")
+	}
+	if health.Metrics.RawContentChars == 0 {
+		t.Fatal("expected raw content chars to be reported")
+	}
+	if len(health.Documents) != 1 || health.Documents[0].NeedsReindex {
+		t.Fatalf("unexpected document health: %#v", health.Documents)
 	}
 }
 

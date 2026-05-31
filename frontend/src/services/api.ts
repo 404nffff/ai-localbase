@@ -26,7 +26,7 @@ export interface BackendDocumentItem {
   name: string
   sizeLabel: string
   uploadedAt: string
-  status: 'indexed' | 'ready' | 'processing'
+  status: 'indexed' | 'ready' | 'processing' | 'failed'
   contentPreview?: string
   chunkCount?: number
   indexedAt?: string
@@ -111,6 +111,47 @@ export interface DocumentDetailResponse {
   rawContent: string
   summary: string
   chunks: DocumentChunkPreview[]
+}
+
+export interface KnowledgeBaseHealthMetrics {
+  documentCount: number
+  indexedCount: number
+  processingCount: number
+  failedCount: number
+  emptyContentCount: number
+  chunkCount: number
+  vectorCount: number
+  summaryChunkCount: number
+  structuredRowCount: number
+  rawContentChars: number
+  qdrantEnabled: boolean
+  lastIndexedAt?: string
+}
+
+export interface KnowledgeBaseDocumentHealth {
+  documentId: string
+  documentName: string
+  status: string
+  indexedAt?: string
+  indexError?: string
+  chunkCount: number
+  vectorCount: number
+  summaryChunkCount: number
+  structuredRowCount: number
+  rawContentChars: number
+  rawContentAvailable: boolean
+  needsReindex: boolean
+  recommendation?: string
+}
+
+export interface KnowledgeBaseHealthResponse {
+  knowledgeBaseId: string
+  name: string
+  status: 'healthy' | 'warning' | 'attention' | 'empty'
+  score: number
+  metrics: KnowledgeBaseHealthMetrics
+  recommendations: string[]
+  documents: KnowledgeBaseDocumentHealth[]
 }
 
 export interface ReindexDocumentResponse {
@@ -361,6 +402,12 @@ export const fetchKnowledgeBaseDocumentDetail = async (
   documentId: string,
 ): Promise<DocumentDetailResponse> => (
   requestJson<DocumentDetailResponse>(`/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`)
+)
+
+export const fetchKnowledgeBaseHealth = async (
+  knowledgeBaseId: string,
+): Promise<KnowledgeBaseHealthResponse> => (
+  requestJson<KnowledgeBaseHealthResponse>(`/api/knowledge-bases/${knowledgeBaseId}/health`)
 )
 
 export const reindexKnowledgeBaseDocument = async (

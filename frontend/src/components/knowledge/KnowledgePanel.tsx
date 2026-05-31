@@ -1,6 +1,6 @@
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
-import type { DocumentDetailResponse, RetrievalDebugResponse } from '../../services/api'
+import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from '../../services/api'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -20,6 +20,7 @@ interface KnowledgePanelProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchKnowledgeBaseHealth: (knowledgeBaseId: string) => Promise<KnowledgeBaseHealthResponse>
   onFetchDocumentDetail: (
     knowledgeBaseId: string,
     documentId: string,
@@ -51,6 +52,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchKnowledgeBaseHealth,
   onFetchDocumentDetail,
   onReindexDocument,
   onDebugRetrieval,
@@ -67,6 +69,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
   const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
   const [documentDetailError, setDocumentDetailError] = useState('')
+  const [healthByKnowledgeBase, setHealthByKnowledgeBase] = useState<Record<string, KnowledgeBaseHealthResponse>>({})
+  const [healthLoadingId, setHealthLoadingId] = useState<string | null>(null)
+  const [healthError, setHealthError] = useState('')
   const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
   const [retrievalQuery, setRetrievalQuery] = useState('')
   const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
@@ -78,6 +83,52 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setRetrievalDebugResult(null)
     setRetrievalDebugError('')
   }, [selectedKnowledgeBaseId, selectedDocumentId])
+
+  const selectedKnowledgeBaseHealthKey = useMemo(() => {
+    if (!selectedKnowledgeBaseId) return ''
+    const knowledgeBase = knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId)
+    if (!knowledgeBase) return ''
+    return knowledgeBase.documents
+      .map((document) => [
+        document.id,
+        document.status,
+        document.chunkCount ?? 0,
+        document.indexedAt ?? '',
+        document.indexError ?? '',
+      ].join(':'))
+      .join('|')
+  }, [knowledgeBases, selectedKnowledgeBaseId])
+
+  useEffect(() => {
+    if (!open || !selectedKnowledgeBaseId) {
+      return
+    }
+
+    let canceled = false
+    setHealthLoadingId(selectedKnowledgeBaseId)
+    setHealthError('')
+    onFetchKnowledgeBaseHealth(selectedKnowledgeBaseId)
+      .then((health) => {
+        if (canceled) return
+        setHealthByKnowledgeBase((prev) => ({
+          ...prev,
+          [selectedKnowledgeBaseId]: health,
+        }))
+      })
+      .catch((error) => {
+        if (canceled) return
+        setHealthError(error instanceof Error ? error.message : '加载知识库健康度失败')
+      })
+      .finally(() => {
+        if (!canceled) {
+          setHealthLoadingId(null)
+        }
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [open, selectedKnowledgeBaseId, selectedKnowledgeBaseHealthKey, onFetchKnowledgeBaseHealth])
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
     onUploadFiles(knowledgeBaseId, event.target.files)
@@ -126,6 +177,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           },
         })
       }
+      const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
+      setHealthByKnowledgeBase((prev) => ({
+        ...prev,
+        [knowledgeBaseId]: health,
+      }))
     } finally {
       setReindexingDocumentId(null)
     }
@@ -203,7 +259,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const statusLabel = (status: string) => {
     if (status === 'indexed') return { text: '已索引', color: '#16a34a', bg: '#dcfce7' }
     if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
+    if (status === 'failed') return { text: '失败', color: '#b91c1c', bg: '#fee2e2' }
     return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
+  }
+
+  const healthStatusLabel = (status: KnowledgeBaseHealthResponse['status']) => {
+    if (status === 'healthy') return { text: '健康', color: '#047857', bg: '#d1fae5' }
+    if (status === 'warning') return { text: '需关注', color: '#b45309', bg: '#fef3c7' }
+    if (status === 'attention') return { text: '需处理', color: '#b91c1c', bg: '#fee2e2' }
+    return { text: '空库', color: '#475569', bg: '#e2e8f0' }
   }
 
   const chunkKindLabel = (kind: string) => {
@@ -320,6 +384,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                   const isSelected = selectedKnowledgeBaseId === kb.id
                   const isCollapsed = collapsedKnowledgeBases[kb.id]
                   const isGeneratingEval = generatingEvalKnowledgeBaseId === kb.id
+                  const health = healthByKnowledgeBase[kb.id]
+                  const healthBadge = health ? healthStatusLabel(health.status) : null
                   return (
                     <div key={kb.id} className={`kb-card${isSelected ? ' kb-card--active' : ''}`}>
                       {/* 知识库卡片头部 */}
@@ -552,6 +618,100 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                 </div>
                               )}
                             </div>
+                          )}
+                        </div>
+                      )}
+
+                      {isSelected && (
+                        <div className="kb-health-panel">
+                          <div className="kb-health-head">
+                            <div>
+                              <h3>索引健康度</h3>
+                              <p>
+                                {health?.metrics.lastIndexedAt
+                                  ? `最近索引：${new Date(health.metrics.lastIndexedAt).toLocaleString('zh-CN')}`
+                                  : '暂无索引时间'}
+                              </p>
+                            </div>
+                            {healthBadge ? (
+                              <span
+                                className="kb-health-badge"
+                                style={{ color: healthBadge.color, background: healthBadge.bg }}
+                              >
+                                {healthBadge.text} · {health.score}
+                              </span>
+                            ) : (
+                              <span className="kb-health-badge kb-health-badge--loading">
+                                {healthLoadingId === kb.id ? '检查中' : '待检查'}
+                              </span>
+                            )}
+                          </div>
+
+                          {healthError && healthLoadingId !== kb.id && (
+                            <div className="kb-health-error">{healthError}</div>
+                          )}
+
+                          {health && (
+                            <>
+                              <div className="kb-health-stats">
+                                <div>
+                                  <span>文档</span>
+                                  <strong>{health.metrics.documentCount}</strong>
+                                </div>
+                                <div>
+                                  <span>已索引</span>
+                                  <strong>{health.metrics.indexedCount}</strong>
+                                </div>
+                                <div>
+                                  <span>失败</span>
+                                  <strong>{health.metrics.failedCount}</strong>
+                                </div>
+                                <div>
+                                  <span>Chunks</span>
+                                  <strong>{health.metrics.chunkCount}</strong>
+                                </div>
+                                <div>
+                                  <span>向量</span>
+                                  <strong>{health.metrics.vectorCount}</strong>
+                                </div>
+                                <div>
+                                  <span>结构化行</span>
+                                  <strong>{health.metrics.structuredRowCount}</strong>
+                                </div>
+                              </div>
+
+                              <div className="kb-health-recommendations">
+                                {health.recommendations.map((item) => (
+                                  <div key={item} className="kb-health-recommendation">
+                                    {item}
+                                  </div>
+                                ))}
+                              </div>
+
+                              {health.documents.some((item) => item.needsReindex) && (
+                                <details className="kb-health-docs">
+                                  <summary>查看需处理文档</summary>
+                                  <div className="kb-health-doc-list">
+                                    {health.documents
+                                      .filter((item) => item.needsReindex)
+                                      .map((item) => (
+                                        <div key={item.documentId} className="kb-health-doc-item">
+                                          <div>
+                                            <strong>{item.documentName}</strong>
+                                            <span>{item.recommendation || '建议检查索引状态'}</span>
+                                          </div>
+                                          <button
+                                            onClick={() => void handleReindexDocument(kb.id, item.documentId)}
+                                            disabled={reindexingDocumentId === item.documentId}
+                                          >
+                                            {reindexingDocumentId === item.documentId ? '重建中' : '重建'}
+                                          </button>
+                                        </div>
+                                      ))}
+                                  </div>
+                                </details>
+                              )}
+                            </>
                           )}
                         </div>
                       )}

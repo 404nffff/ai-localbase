@@ -804,6 +804,110 @@ func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID string) (mode
 	return buildDocumentDetailResponse(s, document, content, chunks), nil
 }
 
+func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.KnowledgeBaseHealthResponse, error) {
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	if knowledgeBaseID == "" {
+		return model.KnowledgeBaseHealthResponse{}, fmt.Errorf("knowledge base id is required")
+	}
+	if s == nil || s.state == nil {
+		return model.KnowledgeBaseHealthResponse{}, fmt.Errorf("app service is nil")
+	}
+
+	s.state.Mu.RLock()
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	s.state.Mu.RUnlock()
+	if !ok {
+		return model.KnowledgeBaseHealthResponse{}, fmt.Errorf("knowledge base not found")
+	}
+
+	metrics := model.KnowledgeBaseHealthMetrics{
+		DocumentCount: len(kb.Documents),
+		QdrantEnabled: s.qdrant != nil && s.qdrant.IsEnabled(),
+	}
+	documents := make([]model.KnowledgeBaseDocumentHealth, 0, len(kb.Documents))
+	needsReindexCount := 0
+	for _, document := range kb.Documents {
+		item := s.buildKnowledgeBaseDocumentHealth(document)
+		documents = append(documents, item)
+
+		switch document.Status {
+		case "indexed":
+			metrics.IndexedCount++
+		case "processing":
+			metrics.ProcessingCount++
+		}
+		if strings.TrimSpace(document.IndexError) != "" || document.Status == "failed" {
+			metrics.FailedCount++
+		}
+		if !item.RawContentAvailable {
+			metrics.EmptyContentCount++
+		}
+		if item.NeedsReindex {
+			needsReindexCount++
+		}
+		metrics.ChunkCount += item.ChunkCount
+		metrics.VectorCount += item.VectorCount
+		metrics.SummaryChunkCount += item.SummaryChunkCount
+		metrics.StructuredRowCount += item.StructuredRowCount
+		metrics.RawContentChars += item.RawContentChars
+		if isLaterRFC3339(item.IndexedAt, metrics.LastIndexedAt) {
+			metrics.LastIndexedAt = item.IndexedAt
+		}
+	}
+
+	score := knowledgeBaseHealthScore(metrics, needsReindexCount)
+	status := knowledgeBaseHealthStatus(score, metrics, needsReindexCount)
+	return model.KnowledgeBaseHealthResponse{
+		KnowledgeBaseID: kb.ID,
+		Name:            kb.Name,
+		Status:          status,
+		Score:           score,
+		Metrics:         metrics,
+		Recommendations: knowledgeBaseHealthRecommendations(metrics, needsReindexCount),
+		Documents:       documents,
+	}, nil
+}
+
+func (s *AppService) buildKnowledgeBaseDocumentHealth(document model.Document) model.KnowledgeBaseDocumentHealth {
+	item := model.KnowledgeBaseDocumentHealth{
+		DocumentID:   document.ID,
+		DocumentName: document.Name,
+		Status:       document.Status,
+		IndexedAt:    document.IndexedAt,
+		IndexError:   document.IndexError,
+		ChunkCount:   document.ChunkCount,
+	}
+
+	content, err := util.ExtractDocumentText(document.Path)
+	if err == nil {
+		item.RawContentChars = len([]rune(content))
+		item.RawContentAvailable = strings.TrimSpace(content) != ""
+		if s != nil && s.rag != nil {
+			chunks := s.rag.BuildDocumentChunks(document, content)
+			item.ChunkCount = len(chunks)
+			for _, chunk := range chunks {
+				if chunk.Kind == "structured_summary" {
+					item.SummaryChunkCount++
+				}
+				if chunk.Kind == "structured_row" {
+					item.StructuredRowCount++
+				}
+			}
+		}
+	} else {
+		item.Recommendation = "无法读取原始文件，建议检查文件是否仍存在后重新上传。"
+	}
+
+	if s != nil && s.qdrant != nil && s.qdrant.IsEnabled() && document.Status == "indexed" {
+		item.VectorCount = item.ChunkCount
+	}
+	item.NeedsReindex = documentNeedsReindex(document, item)
+	if item.Recommendation == "" {
+		item.Recommendation = documentHealthRecommendation(document, item)
+	}
+	return item
+}
+
 func (s *AppService) findDocument(knowledgeBaseID, documentID string) (model.Document, error) {
 	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
 	documentID = strings.TrimSpace(documentID)
@@ -1926,6 +2030,123 @@ func buildDocumentDetailResponse(s *AppService, document model.Document, content
 		Summary:    summary,
 		Chunks:     chunkPreviews,
 	}
+}
+
+func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDocumentHealth) bool {
+	if strings.TrimSpace(document.IndexError) != "" {
+		return true
+	}
+	if document.Status != "indexed" {
+		return true
+	}
+	if health.RawContentAvailable && health.ChunkCount == 0 {
+		return true
+	}
+	if !health.RawContentAvailable {
+		return true
+	}
+	if strings.TrimSpace(document.IndexedAt) == "" {
+		return true
+	}
+	return false
+}
+
+func documentHealthRecommendation(document model.Document, health model.KnowledgeBaseDocumentHealth) string {
+	switch {
+	case strings.TrimSpace(document.IndexError) != "":
+		return "索引失败，建议查看错误信息后重建索引。"
+	case document.Status == "processing":
+		return "文档仍在处理中，完成后再观察健康度。"
+	case document.Status != "indexed":
+		return "文档尚未完成索引，建议重建索引。"
+	case !health.RawContentAvailable:
+		return "原文不可读或为空，建议重新上传文档。"
+	case health.ChunkCount == 0:
+		return "未生成 chunk，建议重建索引或检查文件内容。"
+	case health.SummaryChunkCount == 0 && health.StructuredRowCount > 0:
+		return "结构化行已识别但摘要块缺失，建议重建索引。"
+	default:
+		return ""
+	}
+}
+
+func knowledgeBaseHealthScore(metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) int {
+	if metrics.DocumentCount == 0 {
+		return 100
+	}
+	score := 100
+	score -= metrics.FailedCount * 25
+	score -= metrics.ProcessingCount * 10
+	score -= metrics.EmptyContentCount * 15
+	score -= needsReindexCount * 12
+	if metrics.ChunkCount == 0 {
+		score -= 25
+	}
+	if metrics.QdrantEnabled && metrics.IndexedCount > 0 && metrics.VectorCount == 0 {
+		score -= 20
+	}
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
+}
+
+func knowledgeBaseHealthStatus(metricsScore int, metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) string {
+	switch {
+	case metrics.DocumentCount == 0:
+		return "empty"
+	case metrics.FailedCount > 0 || metricsScore < 60:
+		return "attention"
+	case metrics.ProcessingCount > 0 || needsReindexCount > 0 || metricsScore < 85:
+		return "warning"
+	default:
+		return "healthy"
+	}
+}
+
+func knowledgeBaseHealthRecommendations(metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) []string {
+	recommendations := make([]string, 0)
+	if metrics.DocumentCount == 0 {
+		return []string{"当前知识库暂无文档，上传文档后可生成索引健康度。"}
+	}
+	if metrics.FailedCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("%d 份文档索引失败，建议查看文档详情并重建索引。", metrics.FailedCount))
+	}
+	if metrics.ProcessingCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("%d 份文档仍在处理中，请等待完成后再评估检索效果。", metrics.ProcessingCount))
+	}
+	if metrics.EmptyContentCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("%d 份文档原文为空或不可读，建议重新上传。", metrics.EmptyContentCount))
+	}
+	if needsReindexCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("%d 份文档建议重建索引。", needsReindexCount))
+	}
+	if metrics.QdrantEnabled && metrics.IndexedCount > 0 && metrics.VectorCount == 0 {
+		recommendations = append(recommendations, "Qdrant 已启用但未统计到向量，建议重建知识库索引。")
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, "知识库索引状态良好，可继续通过检索调试台观察命中质量。")
+	}
+	return recommendations
+}
+
+func isLaterRFC3339(candidate, current string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	if strings.TrimSpace(current) == "" {
+		return true
+	}
+	candidateTime, candidateErr := time.Parse(time.RFC3339, candidate)
+	currentTime, currentErr := time.Parse(time.RFC3339, current)
+	if candidateErr != nil || currentErr != nil {
+		return candidate > current
+	}
+	return candidateTime.After(currentTime)
 }
 
 func truncateRunes(value string, limit int) string {

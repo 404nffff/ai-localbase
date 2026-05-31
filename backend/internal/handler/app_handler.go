@@ -160,6 +160,16 @@ func (h *AppHandler) DeleteKnowledgeBase(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) GetKnowledgeBaseHealth(c *gin.Context) {
+	health, err := h.appService.GetKnowledgeBaseHealth(c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, health)
+}
+
 func (h *AppHandler) ListDocuments(c *gin.Context) {
 	items, err := h.appService.GetKnowledgeBaseDocuments(c.Param("id"))
 	if err != nil {

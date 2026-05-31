@@ -9,7 +9,7 @@ import {
   EmbeddingConfig,
   KnowledgeBase,
 } from '../App'
-import type { DocumentDetailResponse, RetrievalDebugResponse } from '../services/api'
+import type { DocumentDetailResponse, KnowledgeBaseHealthResponse, RetrievalDebugResponse } from '../services/api'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
 
@@ -30,6 +30,7 @@ interface SidebarProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchKnowledgeBaseHealth: (knowledgeBaseId: string) => Promise<KnowledgeBaseHealthResponse>
   onFetchDocumentDetail: (
     knowledgeBaseId: string,
     documentId: string,
@@ -87,6 +88,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchKnowledgeBaseHealth,
   onFetchDocumentDetail,
   onReindexDocument,
   onDebugRetrieval,
@@ -345,6 +347,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}
+        onFetchKnowledgeBaseHealth={onFetchKnowledgeBaseHealth}
         onFetchDocumentDetail={onFetchDocumentDetail}
         onReindexDocument={onReindexDocument}
         onDebugRetrieval={onDebugRetrieval}
