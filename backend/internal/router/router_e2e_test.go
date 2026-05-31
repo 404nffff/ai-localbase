@@ -190,6 +190,9 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if !containsString(toolNames, "create_knowledge_base") {
 		t.Fatalf("expected create_knowledge_base in tools list, got %v", toolNames)
 	}
+	if !containsString(toolNames, "get_mcp_capabilities") {
+		t.Fatalf("expected get_mcp_capabilities in tools list, got %v", toolNames)
+	}
 	if !containsString(toolNames, "delete_knowledge_base") {
 		t.Fatalf("expected delete_knowledge_base in tools list, got %v", toolNames)
 	}
@@ -219,6 +222,32 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	}
 	if !containsString(toolNames, "generate_eval_dataset") {
 		t.Fatalf("expected generate_eval_dataset in tools list, got %v", toolNames)
+	}
+
+	capabilitiesResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      101,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "get_mcp_capabilities",
+				"arguments": map[string]any{},
+			},
+		})),
+		"application/json",
+		headers,
+	)
+	if capabilitiesResp.Code != http.StatusOK {
+		t.Fatalf("expected capabilities status 200, got %d, body=%s", capabilitiesResp.Code, capabilitiesResp.Body.String())
+	}
+	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":21`) ||
+		!strings.Contains(capabilitiesResp.Body.String(), `"version":"0.2.0"`) ||
+		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) {
+		t.Fatalf("expected mcp capability summary, got %s", capabilitiesResp.Body.String())
 	}
 
 	callResp := performRequestWithHeaders(

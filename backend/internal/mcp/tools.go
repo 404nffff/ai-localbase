@@ -38,6 +38,22 @@ type AppServiceReader interface {
 func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 	return []ToolDefinition{
 		{
+			Name:            "get_mcp_capabilities",
+			Description:     "返回 MCP Server 能力摘要，包括版本、协议、工具数量、权限分布、启用状态和基础配置。",
+			InputSchema:     emptyObjectSchema(),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				tools := NewReadOnlyTools(appService)
+				capabilities := buildMCPCapabilities(appService.GetConfig(), tools)
+				return NewTextResult(
+					fmt.Sprintf("MCP Server %s 当前提供 %d 个工具。", serverVersion, capabilities["toolCount"]),
+					map[string]any{"capabilities": capabilities},
+				), nil
+			},
+		},
+		{
 			Name:            "get_config_summary",
 			Description:     "返回当前聊天模型与嵌入模型配置摘要。",
 			InputSchema:     emptyObjectSchema(),
@@ -717,6 +733,40 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 
 func DefaultRegistry(appService *service.AppService) *ToolRegistry {
 	return NewToolRegistry(NewReadOnlyTools(appService)...)
+}
+
+func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[string]any {
+	permissionCounts := map[string]int{
+		string(ToolPermissionReadOnly): 0,
+		string(ToolPermissionWrite):    0,
+		string(ToolPermissionDanger):   0,
+	}
+	toolItems := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		permission := string(tool.PermissionLevel)
+		permissionCounts[permission]++
+		toolItems = append(toolItems, map[string]any{
+			"name":            tool.Name,
+			"readOnly":        tool.ReadOnly,
+			"permissionLevel": permission,
+		})
+	}
+
+	return map[string]any{
+		"name":              serverName,
+		"version":           serverVersion,
+		"protocolVersion":   protocolVersion,
+		"jsonrpc":           jsonRPCVersion,
+		"transport":         "http",
+		"enabled":           cfg.MCP.Enabled,
+		"basePath":          cfg.MCP.BasePath,
+		"toolCount":         len(tools),
+		"permissionCounts":  permissionCounts,
+		"tools":             toolItems,
+		"capabilities":      map[string]any{"tools": map[string]any{"listChanged": false}},
+		"auth":              map[string]any{"type": "bearer", "tokenConfigured": strings.TrimSpace(cfg.MCP.Token) != ""},
+		"dangerousToolGate": "X-MCP-Confirm",
+	}
 }
 
 func emptyObjectSchema() map[string]any {

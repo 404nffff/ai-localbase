@@ -40,6 +40,9 @@ jobs:
           更多部署说明见 [`DOCKER_DEPLOY.md`](./DOCKER_DEPLOY.md)。
           EOF
 
+      - name: Validate release notes
+        run: scripts/check-release-notes.sh "${GITHUB_REF_NAME}" RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

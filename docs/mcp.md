@@ -81,7 +81,7 @@ MCP_REQUESTS_PER_MINUTE=120
 
 ## 当前内置工具
 
-当前共提供 **20 个 MCP 工具**，分为 **11 个只读工具**、**6 个写工具**、**3 个危险工具**。
+当前共提供 **21 个 MCP 工具**，分为 **12 个只读工具**、**6 个写工具**、**3 个危险工具**。
 
 ### 权限级别说明
 
@@ -93,6 +93,7 @@ MCP_REQUESTS_PER_MINUTE=120
 
 | 工具名 | 权限级别 | 作用 |
 |------|------|------|
+| `get_mcp_capabilities` | `read-only` | 获取 MCP Server 版本、协议、工具数量和权限分布 |
 | `get_config_summary` | `read-only` | 获取当前 Chat / Embedding 配置摘要 |
 | `list_knowledge_bases` | `read-only` | 列出全部知识库及统计信息 |
 | `list_documents` | `read-only` | 按知识库列出文档 |
@@ -115,6 +116,23 @@ MCP_REQUESTS_PER_MINUTE=120
 | `delete_conversation` | `danger` | 删除会话 |
 
 ### 只读工具
+
+#### `get_mcp_capabilities`
+
+权限级别：`read-only`
+
+输入参数：无
+
+返回内容：
+
+- MCP Server 名称与版本
+- MCP 协议版本与 JSON-RPC 版本
+- HTTP 挂载路径与启用状态
+- 工具总数
+- 按 `read-only` / `write` / `danger` 统计的权限分布
+- 当前工具清单
+- 鉴权类型与 Token 是否已配置
+- 危险工具确认头名称
 
 #### `get_config_summary`
 
