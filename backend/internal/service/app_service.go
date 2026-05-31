@@ -1801,6 +1801,15 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			}
 		}
 
+		gatedSelected := filterRelevantChunks(query, selected)
+		logRetrievalStageMetrics(req, query, "relevance_gate", time.Now(), map[string]any{
+			"status":            "ok",
+			"input_count":       len(selected),
+			"output_count":      len(gatedSelected),
+			"evidence_coverage": queryEvidenceCoverage(query, gatedSelected),
+		})
+		selected = gatedSelected
+
 		if s.semanticCache != nil && len(queryEmbedding) > 0 {
 			s.semanticCache.Set(queryEmbedding, query, selected)
 		}
@@ -1847,6 +1856,15 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			}
 		}
 	}
+
+	gatedSelected := filterRelevantChunks(query, selected)
+	logRetrievalStageMetrics(req, query, "relevance_gate", time.Now(), map[string]any{
+		"status":            "ok",
+		"input_count":       len(selected),
+		"output_count":      len(gatedSelected),
+		"evidence_coverage": queryEvidenceCoverage(query, gatedSelected),
+	})
+	selected = gatedSelected
 
 	if s.semanticCache != nil && len(queryEmbedding) > 0 {
 		s.semanticCache.Set(queryEmbedding, query, selected)
@@ -2761,7 +2779,8 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 					Index:           payloadInt(item.Payload, "chunk_index"),
 					Kind:            payloadString(item.Payload, "chunk_kind", "text"),
 				},
-				Score: item.Score,
+				Score:    item.Score,
+				RawScore: item.Score,
 			})
 			added++
 		}
@@ -3050,7 +3069,44 @@ func isLowConfidenceSelection(query string, chunks []RetrievedChunk) bool {
 	if topScore < lowConfidenceTopScoreThreshold || avgScore < lowConfidenceAvgScoreThreshold {
 		return true
 	}
-	return entityCoverage(query, chunks) < 0.2
+	return queryEvidenceCoverage(query, chunks) < 0.2
+}
+
+func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChunk {
+	if len(chunks) == 0 {
+		return nil
+	}
+	terms := queryEvidenceTerms(query)
+	if len(terms) == 0 {
+		return chunks
+	}
+
+	filtered := make([]RetrievedChunk, 0, len(chunks))
+	preferStructuredSummary := shouldPreferStructuredSummary(query)
+	for _, chunk := range chunks {
+		if preferStructuredSummary && (chunk.Kind == "structured_summary" || chunk.Kind == "structured_row") {
+			filtered = append(filtered, chunk)
+			continue
+		}
+		hits := evidenceHitCount(terms, chunk.Text)
+		coverage := float64(hits) / float64(len(terms))
+		rawScore := chunkRawScore(chunk)
+		switch {
+		case hits >= 2:
+			filtered = append(filtered, chunk)
+		case coverage >= 0.25:
+			filtered = append(filtered, chunk)
+		case hits >= 1 && rawScore >= 0.55:
+			filtered = append(filtered, chunk)
+		case rawScore >= 0.82 && queryEvidenceCoverage(query, []RetrievedChunk{chunk}) > 0:
+			filtered = append(filtered, chunk)
+		}
+	}
+
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return nil
 }
 
 func (s *AppService) shouldBypassRerank(candidates []RetrievedChunk) bool {
@@ -3100,7 +3156,7 @@ func scoreGap(chunks []RetrievedChunk) float64 {
 }
 
 func entityCoverage(query string, chunks []RetrievedChunk) float64 {
-	entities := splitTerms(query)
+	entities := queryEvidenceTerms(query)
 	if len(entities) == 0 {
 		return 1
 	}
@@ -3116,6 +3172,96 @@ func entityCoverage(query string, chunks []RetrievedChunk) float64 {
 		}
 	}
 	return float64(hit) / float64(len(entities))
+}
+
+func queryEvidenceCoverage(query string, chunks []RetrievedChunk) float64 {
+	return entityCoverage(query, chunks)
+}
+
+func evidenceHitCount(terms []string, text string) int {
+	if len(terms) == 0 || strings.TrimSpace(text) == "" {
+		return 0
+	}
+	lowered := strings.ToLower(text)
+	hits := 0
+	for _, term := range terms {
+		if strings.Contains(lowered, strings.ToLower(term)) {
+			hits++
+		}
+	}
+	return hits
+}
+
+func queryEvidenceTerms(query string) []string {
+	normalized := strings.TrimSpace(strings.ToLower(query))
+	if normalized == "" {
+		return nil
+	}
+
+	terms := splitTerms(normalized)
+	for _, segment := range continuousCJKSegments(normalized) {
+		runes := []rune(segment)
+		if len(runes) < 3 {
+			continue
+		}
+		maxN := minInt(4, len(runes))
+		for n := 2; n <= maxN; n++ {
+			for i := 0; i+n <= len(runes); i++ {
+				terms = append(terms, string(runes[i:i+n]))
+			}
+		}
+	}
+
+	stopTerms := map[string]struct{}{
+		"什么": {}, "多少": {}, "几个": {}, "如何": {}, "怎么": {}, "是否": {},
+		"是谁": {}, "哪些": {}, "有没有": {}, "请问": {}, "告诉": {}, "一下": {},
+		"the": {}, "and": {}, "for": {}, "with": {}, "what": {}, "which": {},
+		"who": {}, "how": {}, "where": {}, "when": {}, "is": {}, "are": {},
+	}
+	filtered := make([]string, 0, len(terms))
+	seen := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		term = strings.TrimSpace(strings.ToLower(term))
+		if len([]rune(term)) < 2 {
+			continue
+		}
+		if _, stop := stopTerms[term]; stop {
+			continue
+		}
+		if _, exists := seen[term]; exists {
+			continue
+		}
+		seen[term] = struct{}{}
+		filtered = append(filtered, term)
+	}
+	return filtered
+}
+
+func continuousCJKSegments(text string) []string {
+	segments := make([]string, 0)
+	current := make([]rune, 0)
+	flush := func() {
+		if len(current) > 0 {
+			segments = append(segments, string(current))
+			current = current[:0]
+		}
+	}
+	for _, r := range text {
+		if unicode.In(r, unicode.Han) {
+			current = append(current, r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return segments
+}
+
+func chunkRawScore(chunk RetrievedChunk) float64 {
+	if chunk.RawScore != 0 {
+		return chunk.RawScore
+	}
+	return chunk.Score
 }
 
 func chunkTextsFromRetrieved(chunks []RetrievedChunk) []string {

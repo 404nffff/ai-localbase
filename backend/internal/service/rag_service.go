@@ -145,7 +145,8 @@ type SparseVector struct {
 
 type RetrievedChunk struct {
 	DocumentChunk
-	Score float64
+	Score    float64
+	RawScore float64
 }
 
 type openAIEmbeddingRequest struct {
@@ -513,7 +514,8 @@ func (r *RagService) MultiQuerySearch(
 						Text:            text,
 						Index:           payloadInt(item.Payload, "chunk_index"),
 					},
-					Score: item.Score,
+					Score:    item.Score,
+					RawScore: item.Score,
 				})
 			}
 			resultChan <- results

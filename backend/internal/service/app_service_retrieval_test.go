@@ -202,6 +202,59 @@ func TestIsLowConfidenceSelection(t *testing.T) {
 	})
 }
 
+func TestFilterRelevantChunksRemovesUnrelatedHits(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID:   "doc-unrelated",
+				DocumentName: "unrelated.txt",
+				Text:         "这是一段关于部署参数、缓存策略和服务端口的文档。",
+			},
+			Score:    0.94,
+			RawScore: 0.61,
+		},
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID:   "doc-related",
+				DocumentName: "school.txt",
+				Text:         "武汉大学校长信息与学校治理结构说明。",
+			},
+			Score:    0.82,
+			RawScore: 0.58,
+		},
+	}
+
+	filtered := filterRelevantChunks("武汉大学校长是谁", chunks)
+	if len(filtered) != 1 {
+		t.Fatalf("expected one relevant chunk, got %#v", filtered)
+	}
+	if filtered[0].DocumentID != "doc-related" {
+		t.Fatalf("expected related document to remain, got %s", filtered[0].DocumentID)
+	}
+}
+
+func TestFilterRelevantChunksReturnsEmptyWhenNoEvidence(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID:   "doc-unrelated",
+				DocumentName: "unrelated.txt",
+				Text:         "系统部署参数、缓存策略和服务端口。",
+			},
+			Score:    0.98,
+			RawScore: 0.78,
+		},
+	}
+
+	filtered := filterRelevantChunks("武汉大学校长是谁", chunks)
+	if len(filtered) != 0 {
+		t.Fatalf("expected no chunks without query evidence, got %#v", filtered)
+	}
+	if !isLowConfidenceSelection("武汉大学校长是谁", filtered) {
+		t.Fatal("expected empty filtered result to be low confidence")
+	}
+}
+
 func TestDeduplicateRetrievedChunks(t *testing.T) {
 	chunks := []RetrievedChunk{
 		{DocumentChunk: DocumentChunk{DocumentID: "doc-1", DocumentName: "sample.csv", Text: "文件：sample.csv。字段：字段A、字段B。数据行数：4。"}, Score: 0.99},
