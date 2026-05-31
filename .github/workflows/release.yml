@@ -20,6 +20,7 @@ jobs:
 
       - name: Build release notes from annotated tag
         run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
             echo "## ${GITHUB_REF_NAME}" > RELEASE_NOTES.md

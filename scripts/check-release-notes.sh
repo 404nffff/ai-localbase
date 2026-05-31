@@ -16,11 +16,20 @@ fi
 
 tag_ref="refs/tags/$tag_name"
 if ! git rev-parse -q --verify "$tag_ref" >/dev/null; then
+  git fetch --force origin "$tag_ref:$tag_ref" >/dev/null 2>&1 || true
+fi
+
+if ! git rev-parse -q --verify "$tag_ref" >/dev/null; then
   echo "release check failed: tag $tag_name does not exist locally" >&2
   exit 1
 fi
 
 tag_type="$(git cat-file -t "$tag_ref")"
+if [ "$tag_type" != "tag" ]; then
+  git fetch --force origin "$tag_ref:$tag_ref" >/dev/null 2>&1 || true
+  tag_type="$(git cat-file -t "$tag_ref")"
+fi
+
 if [ "$tag_type" != "tag" ]; then
   echo "release check failed: $tag_name is a lightweight tag; use an annotated tag with release notes" >&2
   exit 1
