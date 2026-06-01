@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
+  addEvalDatasetCandidate,
   createKnowledgeBase,
   debugKnowledgeBaseRetrieval,
   deleteConversation,
@@ -28,6 +29,7 @@ import {
 import type {
   DocumentDetailResponse,
   EvalDatasetDetail,
+  EvalGroundTruthCase,
   EvalDatasetSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
@@ -781,6 +783,21 @@ function App() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '删除评估集失败，请稍后重试。'
+      throw new Error(message)
+    }
+  }
+
+  const handleAddEvalDatasetCandidate = async (
+    knowledgeBaseId: string,
+    documentId: string | null,
+    item: EvalGroundTruthCase,
+  ): Promise<EvalDatasetSummary> => {
+    try {
+      const response = await addEvalDatasetCandidate(knowledgeBaseId, documentId, item)
+      return response.dataset
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '加入待审核评估集失败，请稍后重试。'
       throw new Error(message)
     }
   }
@@ -1580,6 +1597,7 @@ function App() {
         onListEvalDatasets={handleListEvalDatasets}
         onFetchEvalDataset={handleFetchEvalDataset}
         onDeleteEvalDataset={handleDeleteEvalDataset}
+        onAddEvalDatasetCandidate={handleAddEvalDatasetCandidate}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}

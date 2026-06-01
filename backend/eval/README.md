@@ -66,6 +66,8 @@ backend/eval/
 | `source_documents` | []SourceDocument | 否 | 期望检索到的文档来源 |
 | `answer_type` | string | 否 | 答案类型：extractive/abstractive/yesno/numeric |
 | `difficulty` | string | 否 | 难度：easy/medium/hard |
+| `review_status` | string | 否 | 审核状态：pending/approved |
+| `disabled` | bool | 否 | 是否暂不参与评估 |
 
 ---
 
@@ -130,6 +132,26 @@ curl http://localhost:8080/api/eval/datasets/eval-xxx
 
 # 删除
 curl -X DELETE http://localhost:8080/api/eval/datasets/eval-xxx
+```
+
+检索调试台发现低置信结果后，也可以把候选样本加入待审核评估集。样本会以 `review_status=pending`、`disabled=true` 保存，后续需人工复核后再启用：
+
+```bash
+curl -X POST http://localhost:8080/api/eval/datasets/review-candidates \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "knowledgeBaseId":"kb-xxx",
+    "documentId":"doc-xxx",
+    "item":{
+      "id":"debug-low-confidence-kb-xxx-001",
+      "question":"示例问题",
+      "answer":"候选答案",
+      "answer_snippets":["候选证据片段"],
+      "source_documents":[{"knowledge_base_id":"kb-xxx","document_id":"doc-xxx","chunk_id":"chunk-xxx"}],
+      "answer_type":"retrieval-debug-candidate",
+      "difficulty":"hard"
+    }
+  }'
 ```
 
 ### 运行评估（真实模式）

@@ -1354,6 +1354,20 @@
   line-height: 1.5;
 }
 
+.kb-retrieval-eval span {
+  display: block;
+  margin-top: 5px;
+  color: #7c2d12;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kb-retrieval-eval-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
 .kb-retrieval-eval button {
   flex-shrink: 0;
   border: 0;
@@ -1368,6 +1382,11 @@
 
 .kb-retrieval-eval button:hover {
   background: #c2410c;
+}
+
+.kb-retrieval-eval button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
 }
 
 .kb-retrieval-context {

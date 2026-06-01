@@ -3,6 +3,7 @@ import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
 import type {
   DocumentDetailResponse,
   EvalDatasetDetail,
+  EvalGroundTruthCase,
   EvalDatasetSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
@@ -35,6 +36,11 @@ interface KnowledgePanelProps {
   onListEvalDatasets: (knowledgeBaseId: string) => Promise<EvalDatasetSummary[]>
   onFetchEvalDataset: (datasetId: string) => Promise<EvalDatasetDetail>
   onDeleteEvalDataset: (datasetId: string) => Promise<void>
+  onAddEvalDatasetCandidate: (
+    knowledgeBaseId: string,
+    documentId: string | null,
+    item: EvalGroundTruthCase,
+  ) => Promise<EvalDatasetSummary>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -68,6 +74,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onListEvalDatasets,
   onFetchEvalDataset,
   onDeleteEvalDataset,
+  onAddEvalDatasetCandidate,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -104,6 +111,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
   const [retrievalDebugResult, setRetrievalDebugResult] = useState<RetrievalDebugResponse | null>(null)
   const [retrievalDebugError, setRetrievalDebugError] = useState('')
+  const [savingEvalCandidate, setSavingEvalCandidate] = useState(false)
+  const [evalCandidateSaveMessage, setEvalCandidateSaveMessage] = useState('')
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const evalDatasetLoadSeq = useRef(0)
 
@@ -122,6 +131,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   useEffect(() => {
     setRetrievalDebugResult(null)
     setRetrievalDebugError('')
+    setEvalCandidateSaveMessage('')
   }, [selectedKnowledgeBaseId, selectedDocumentId])
 
   const loadEvalDatasets = useCallback(async (knowledgeBaseId: string) => {
@@ -313,6 +323,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
     setRetrievalDebugKnowledgeBaseId(knowledgeBaseId)
     setRetrievalDebugError('')
+    setEvalCandidateSaveMessage('')
     try {
       const result = await onDebugRetrieval(knowledgeBaseId, query, selectedDocumentId)
       setRetrievalDebugResult(result)
@@ -342,6 +353,28 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     link.click()
     link.remove()
     URL.revokeObjectURL(url)
+  }
+
+  const handleAddRetrievalEvalCandidate = async (knowledgeBaseId: string) => {
+    if (!retrievalDebugResult?.evalCandidate) {
+      return
+    }
+
+    setSavingEvalCandidate(true)
+    setEvalCandidateSaveMessage('')
+    try {
+      const dataset = await onAddEvalDatasetCandidate(
+        knowledgeBaseId,
+        selectedDocumentId,
+        retrievalDebugResult.evalCandidate,
+      )
+      setEvalCandidateSaveMessage(`已加入「${dataset.name}」`)
+      await loadEvalDatasets(knowledgeBaseId)
+    } catch (error) {
+      setEvalCandidateSaveMessage(error instanceof Error ? error.message : '加入待审核评估集失败')
+    } finally {
+      setSavingEvalCandidate(false)
+    }
   }
 
   const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
@@ -523,9 +556,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                         result={retrievalDebugResult}
                         error={retrievalDebugError}
                         loading={retrievalDebugKnowledgeBaseId === activeKnowledgeBaseId}
+                        savingEvalCandidate={savingEvalCandidate}
+                        evalCandidateSaveMessage={evalCandidateSaveMessage}
                         onQueryChange={setRetrievalQuery}
                         onRun={() => void handleRunRetrievalDebug(activeKnowledgeBaseId)}
                         onDownloadEvalCandidate={handleDownloadRetrievalEvalCandidate}
+                        onAddEvalCandidate={() => void handleAddRetrievalEvalCandidate(activeKnowledgeBaseId)}
                       />
                     </div>
 

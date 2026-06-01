@@ -12,6 +12,7 @@ import {
 import type {
   DocumentDetailResponse,
   EvalDatasetDetail,
+  EvalGroundTruthCase,
   EvalDatasetSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
@@ -36,6 +37,11 @@ interface SidebarProps {
   onListEvalDatasets: (knowledgeBaseId: string) => Promise<EvalDatasetSummary[]>
   onFetchEvalDataset: (datasetId: string) => Promise<EvalDatasetDetail>
   onDeleteEvalDataset: (datasetId: string) => Promise<void>
+  onAddEvalDatasetCandidate: (
+    knowledgeBaseId: string,
+    documentId: string | null,
+    item: EvalGroundTruthCase,
+  ) => Promise<EvalDatasetSummary>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -97,6 +103,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onListEvalDatasets,
   onFetchEvalDataset,
   onDeleteEvalDataset,
+  onAddEvalDatasetCandidate,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -359,6 +366,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onListEvalDatasets={onListEvalDatasets}
         onFetchEvalDataset={onFetchEvalDataset}
         onDeleteEvalDataset={onDeleteEvalDataset}
+        onAddEvalDatasetCandidate={onAddEvalDatasetCandidate}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}

@@ -183,6 +183,8 @@ export interface EvalGroundTruthCase {
   }>
   answer_type: string
   difficulty: string
+  review_status?: string
+  disabled?: boolean
   notes?: string
 }
 
@@ -216,11 +218,13 @@ export interface GenerateEvalDatasetResponse {
 export interface EvalDatasetSummary {
   id: string
   name: string
+  kind?: string
   knowledgeBaseId?: string
   documentId?: string
   count: number
   documentCount: number
   createdAt: string
+  updatedAt?: string
 }
 
 export interface EvalDatasetListResponse {
@@ -230,12 +234,20 @@ export interface EvalDatasetListResponse {
 export interface EvalDatasetDetail {
   id: string
   name: string
+  kind?: string
   knowledgeBaseId?: string
   documentId?: string
   count: number
   documentCount: number
   createdAt: string
+  updatedAt?: string
   items: EvalGroundTruthCase[]
+}
+
+export interface AddEvalDatasetCandidateResponse {
+  dataset: EvalDatasetSummary
+  item: EvalGroundTruthCase
+  created: boolean
 }
 
 export const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
@@ -474,6 +486,17 @@ export const getEvalDataset = async (
 export const deleteEvalDataset = async (datasetId: string): Promise<void> => {
   await requestOk(`/api/eval/datasets/${datasetId}`, { method: 'DELETE' })
 }
+
+export const addEvalDatasetCandidate = async (
+  knowledgeBaseId: string,
+  documentId: string | null | undefined,
+  item: EvalGroundTruthCase,
+): Promise<AddEvalDatasetCandidateResponse> => (
+  requestJson<AddEvalDatasetCandidateResponse>(
+    '/api/eval/datasets/review-candidates',
+    jsonRequest({ knowledgeBaseId, documentId: documentId ?? '', item }, { method: 'POST' }),
+  )
+)
 
 export const debugKnowledgeBaseRetrieval = async (
   knowledgeBaseId: string,

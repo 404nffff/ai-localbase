@@ -20,6 +20,12 @@ const answerTypeLabel: Record<string, string> = {
   listing: '列表',
   process: '流程',
   extractive: '摘录',
+  'retrieval-debug-candidate': '调试候选',
+}
+
+const reviewStatusLabel: Record<string, string> = {
+  pending: '待审核',
+  approved: '已审核',
 }
 
 const countBy = (items: EvalGroundTruthCase[], key: keyof EvalGroundTruthCase) =>
@@ -129,6 +135,8 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
                 <span>#{index + 1}</span>
                 <span>{answerTypeLabel[item.answer_type] ?? item.answer_type}</span>
                 <span>{difficultyLabel[item.difficulty] ?? item.difficulty}</span>
+                {item.review_status && <span>{reviewStatusLabel[item.review_status] ?? item.review_status}</span>}
+                {item.disabled && <span>未启用</span>}
               </div>
               <div className="kb-eval-preview-body">
                 <div className="kb-eval-preview-question">{getEvalQuestion(item)}</div>

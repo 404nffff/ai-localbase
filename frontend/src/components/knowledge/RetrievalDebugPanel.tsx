@@ -8,9 +8,12 @@ interface RetrievalDebugPanelProps {
   result: RetrievalDebugResponse | null
   error: string
   loading: boolean
+  savingEvalCandidate: boolean
+  evalCandidateSaveMessage: string
   onQueryChange: (value: string) => void
   onRun: () => void
   onDownloadEvalCandidate: () => void
+  onAddEvalCandidate: () => void
 }
 
 const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
@@ -19,9 +22,12 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
   result,
   error,
   loading,
+  savingEvalCandidate,
+  evalCandidateSaveMessage,
   onQueryChange,
   onRun,
   onDownloadEvalCandidate,
+  onAddEvalCandidate,
 }) => (
   <section className="kb-retrieval-debug">
     <div className="kb-panel-section-head">
@@ -70,8 +76,14 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
             <div>
               <strong>低置信评测候选</strong>
               <p>当前问题可沉淀为后续检索评测样本，下载后建议人工复核答案片段。</p>
+              {evalCandidateSaveMessage && <span>{evalCandidateSaveMessage}</span>}
             </div>
-            <button onClick={onDownloadEvalCandidate}>下载样本</button>
+            <div className="kb-retrieval-eval-actions">
+              <button onClick={onAddEvalCandidate} disabled={savingEvalCandidate}>
+                {savingEvalCandidate ? '加入中' : '加入待审核'}
+              </button>
+              <button onClick={onDownloadEvalCandidate}>下载样本</button>
+            </div>
           </div>
         )}
 

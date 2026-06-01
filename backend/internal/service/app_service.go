@@ -2334,6 +2334,8 @@ func buildRetrievalDebugEvalCandidate(req model.ChatCompletionRequest, query str
 		SourceDocuments: sourceDocuments,
 		AnswerType:      "retrieval-debug-candidate",
 		Difficulty:      "hard",
+		ReviewStatus:    evalReviewStatusPending,
+		Disabled:        true,
 		Notes:           "auto-generated from retrieval debug low-confidence result; please review before using as ground truth",
 	}
 }

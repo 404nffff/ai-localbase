@@ -15,6 +15,10 @@ import (
 const (
 	defaultEvalCasesPerDocument = 5
 	maxEvalCasesPerDocument     = 20
+	evalDatasetKindGenerated    = "generated"
+	evalDatasetKindReview       = "review"
+	evalReviewStatusPending     = "pending"
+	evalReviewStatusApproved    = "approved"
 )
 
 func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (model.GenerateEvalDatasetResponse, error) {
@@ -76,15 +80,18 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 		datasetKnowledgeBaseID = documents[0].KnowledgeBaseID
 	}
 	datasetDocumentID := strings.TrimSpace(req.DocumentID)
+	now := time.Now().UTC().Format(time.RFC3339)
 
 	dataset := model.EvalDataset{
 		ID:              util.NextID("eval"),
 		Name:            buildEvalDatasetName(req, documents),
+		Kind:            evalDatasetKindGenerated,
 		KnowledgeBaseID: datasetKnowledgeBaseID,
 		DocumentID:      datasetDocumentID,
 		Count:           len(cases),
 		DocumentCount:   len(documents),
-		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 		Items:           cloneEvalGroundTruthCases(cases),
 	}
 	if err := s.saveEvalDataset(dataset); err != nil {
@@ -114,20 +121,12 @@ func (s *AppService) ListEvalDatasets(knowledgeBaseID string) []model.EvalDatase
 		if knowledgeBaseID != "" && dataset.KnowledgeBaseID != knowledgeBaseID {
 			continue
 		}
-		items = append(items, model.EvalDatasetSummary{
-			ID:              dataset.ID,
-			Name:            dataset.Name,
-			KnowledgeBaseID: dataset.KnowledgeBaseID,
-			DocumentID:      dataset.DocumentID,
-			Count:           dataset.Count,
-			DocumentCount:   dataset.DocumentCount,
-			CreatedAt:       dataset.CreatedAt,
-		})
+		items = append(items, evalDatasetSummary(dataset))
 	}
 	s.state.Mu.RUnlock()
 
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreatedAt > items[j].CreatedAt
+		return evalDatasetSortTime(items[i]) > evalDatasetSortTime(items[j])
 	})
 	return items
 }
@@ -149,6 +148,99 @@ func (s *AppService) GetEvalDataset(id string) (model.EvalDataset, error) {
 	}
 	dataset.Items = cloneEvalGroundTruthCases(dataset.Items)
 	return dataset, nil
+}
+
+func (s *AppService) AddEvalDatasetCandidate(req model.AddEvalDatasetCandidateRequest) (model.AddEvalDatasetCandidateResponse, error) {
+	if s == nil || s.state == nil {
+		return model.AddEvalDatasetCandidateResponse{}, fmt.Errorf("app service is nil")
+	}
+
+	item := normalizeEvalCandidateItem(req.Item)
+	if item.Question == "" {
+		return model.AddEvalDatasetCandidateResponse{}, fmt.Errorf("eval candidate question is required")
+	}
+	if item.Answer == "" && len(item.AnswerSnippets) == 0 {
+		return model.AddEvalDatasetCandidateResponse{}, fmt.Errorf("eval candidate answer or snippets are required")
+	}
+
+	knowledgeBaseID, documentID, documentCount, datasetName, err := s.resolveEvalCandidateScope(req, item)
+	if err != nil {
+		return model.AddEvalDatasetCandidateResponse{}, err
+	}
+	if item.ID == "" {
+		item.ID = fmt.Sprintf("manual-%s-%x", sanitizeEvalIDPart(knowledgeBaseID), qdrantPointID(item.Question))
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	var previousDataset *model.EvalDataset
+	createdDataset := false
+	s.state.Mu.Lock()
+	if s.state.EvalDatasets == nil {
+		s.state.EvalDatasets = map[string]model.EvalDataset{}
+	}
+
+	datasetID := ""
+	for id, dataset := range s.state.EvalDatasets {
+		if dataset.Kind == evalDatasetKindReview &&
+			dataset.KnowledgeBaseID == knowledgeBaseID &&
+			dataset.DocumentID == documentID {
+			datasetID = id
+			break
+		}
+	}
+
+	var dataset model.EvalDataset
+	if datasetID == "" {
+		dataset = model.EvalDataset{
+			ID:              util.NextID("eval"),
+			Name:            datasetName,
+			Kind:            evalDatasetKindReview,
+			KnowledgeBaseID: knowledgeBaseID,
+			DocumentID:      documentID,
+			DocumentCount:   documentCount,
+			CreatedAt:       now,
+		}
+		datasetID = dataset.ID
+		createdDataset = true
+	} else {
+		dataset = s.state.EvalDatasets[datasetID]
+		snapshot := dataset
+		snapshot.Items = cloneEvalGroundTruthCases(dataset.Items)
+		previousDataset = &snapshot
+	}
+
+	replaced := false
+	for index, existing := range dataset.Items {
+		if existing.ID == item.ID {
+			dataset.Items[index] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		dataset.Items = append(dataset.Items, item)
+	}
+	dataset.Count = len(dataset.Items)
+	dataset.UpdatedAt = now
+	s.state.EvalDatasets[datasetID] = dataset
+	s.state.Mu.Unlock()
+
+	if err := s.saveState(); err != nil {
+		s.state.Mu.Lock()
+		if previousDataset != nil {
+			s.state.EvalDatasets[datasetID] = *previousDataset
+		} else {
+			delete(s.state.EvalDatasets, datasetID)
+		}
+		s.state.Mu.Unlock()
+		return model.AddEvalDatasetCandidateResponse{}, err
+	}
+
+	return model.AddEvalDatasetCandidateResponse{
+		Dataset: evalDatasetSummary(dataset),
+		Item:    item,
+		Created: createdDataset || !replaced,
+	}, nil
 }
 
 func (s *AppService) DeleteEvalDataset(id string) error {
@@ -179,6 +271,27 @@ func (s *AppService) DeleteEvalDataset(id string) error {
 		return err
 	}
 	return nil
+}
+
+func evalDatasetSummary(dataset model.EvalDataset) model.EvalDatasetSummary {
+	return model.EvalDatasetSummary{
+		ID:              dataset.ID,
+		Name:            dataset.Name,
+		Kind:            dataset.Kind,
+		KnowledgeBaseID: dataset.KnowledgeBaseID,
+		DocumentID:      dataset.DocumentID,
+		Count:           dataset.Count,
+		DocumentCount:   dataset.DocumentCount,
+		CreatedAt:       dataset.CreatedAt,
+		UpdatedAt:       dataset.UpdatedAt,
+	}
+}
+
+func evalDatasetSortTime(dataset model.EvalDatasetSummary) string {
+	if strings.TrimSpace(dataset.UpdatedAt) != "" {
+		return dataset.UpdatedAt
+	}
+	return dataset.CreatedAt
 }
 
 func (s *AppService) saveEvalDataset(dataset model.EvalDataset) error {
@@ -258,6 +371,128 @@ func buildEvalDatasetName(req model.GenerateEvalDatasetRequest, documents []mode
 		return fmt.Sprintf("评估集 - %s", documents[0].Name)
 	}
 	return "评估集 - 全部知识库"
+}
+
+func (s *AppService) resolveEvalCandidateScope(req model.AddEvalDatasetCandidateRequest, item model.EvalGroundTruthCase) (string, string, int, string, error) {
+	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	documentID := strings.TrimSpace(req.DocumentID)
+	for _, source := range item.SourceDocuments {
+		if knowledgeBaseID == "" {
+			knowledgeBaseID = strings.TrimSpace(source.KnowledgeBaseID)
+		}
+		if documentID == "" {
+			documentID = strings.TrimSpace(source.DocumentID)
+		}
+		if knowledgeBaseID != "" && documentID != "" {
+			break
+		}
+	}
+
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+
+	if knowledgeBaseID == "" && documentID != "" {
+		for _, kb := range s.state.KnowledgeBases {
+			for _, document := range kb.Documents {
+				if document.ID == documentID {
+					knowledgeBaseID = kb.ID
+					break
+				}
+			}
+			if knowledgeBaseID != "" {
+				break
+			}
+		}
+	}
+	if knowledgeBaseID == "" {
+		return "", "", 0, "", fmt.Errorf("knowledge base id is required")
+	}
+
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		return "", "", 0, "", fmt.Errorf("knowledge base not found")
+	}
+
+	documentName := ""
+	if documentID != "" {
+		for _, document := range kb.Documents {
+			if document.ID == documentID {
+				documentName = document.Name
+				break
+			}
+		}
+		if documentName == "" {
+			return "", "", 0, "", fmt.Errorf("document not found")
+		}
+	}
+
+	documentCount := len(kb.Documents)
+	datasetName := fmt.Sprintf("待审核评估样本 - %s", kb.Name)
+	if documentID != "" {
+		documentCount = 1
+		datasetName = fmt.Sprintf("待审核评估样本 - %s", documentName)
+	}
+	return knowledgeBaseID, documentID, documentCount, datasetName, nil
+}
+
+func normalizeEvalCandidateItem(item model.EvalGroundTruthCase) model.EvalGroundTruthCase {
+	item.ID = strings.TrimSpace(item.ID)
+	item.Question = strings.TrimSpace(item.Question)
+	item.Answer = strings.TrimSpace(item.Answer)
+	item.AnswerType = strings.TrimSpace(item.AnswerType)
+	if item.AnswerType == "" {
+		item.AnswerType = "retrieval-debug-candidate"
+	}
+	item.Difficulty = strings.TrimSpace(item.Difficulty)
+	if item.Difficulty == "" {
+		item.Difficulty = "hard"
+	}
+	item.ReviewStatus = evalReviewStatusPending
+	item.Disabled = true
+
+	item.AnswerSnippets = normalizeEvalSnippets(item.AnswerSnippets, 220)
+	sources := make([]model.EvalSourceDocument, 0, len(item.SourceDocuments))
+	seenSources := map[string]struct{}{}
+	for _, source := range item.SourceDocuments {
+		source.KnowledgeBaseID = strings.TrimSpace(source.KnowledgeBaseID)
+		source.DocumentID = strings.TrimSpace(source.DocumentID)
+		source.ChunkID = strings.TrimSpace(source.ChunkID)
+		if source.KnowledgeBaseID == "" && source.DocumentID == "" && source.ChunkID == "" {
+			continue
+		}
+		key := source.KnowledgeBaseID + "\x00" + source.DocumentID + "\x00" + source.ChunkID
+		if _, ok := seenSources[key]; ok {
+			continue
+		}
+		seenSources[key] = struct{}{}
+		sources = append(sources, source)
+	}
+	item.SourceDocuments = sources
+
+	item.Notes = strings.TrimSpace(item.Notes)
+	if item.Notes == "" {
+		item.Notes = "pending review from retrieval debug"
+	} else if !strings.Contains(strings.ToLower(item.Notes), "review") {
+		item.Notes += "; pending review"
+	}
+	return item
+}
+
+func normalizeEvalSnippets(snippets []string, maxRunes int) []string {
+	cleanSnippets := make([]string, 0, len(snippets))
+	seen := map[string]struct{}{}
+	for _, snippet := range snippets {
+		snippet = clipEvalRunes(normalizeEvalWhitespace(snippet), maxRunes)
+		if snippet == "" {
+			continue
+		}
+		if _, ok := seen[snippet]; ok {
+			continue
+		}
+		seen[snippet] = struct{}{}
+		cleanSnippets = append(cleanSnippets, snippet)
+	}
+	return cleanSnippets
 }
 
 func cloneEvalGroundTruthCases(source []model.EvalGroundTruthCase) []model.EvalGroundTruthCase {
@@ -519,31 +754,19 @@ func isStructuredEvalChunkKind(kind string) bool {
 }
 
 func newEvalCase(document model.Document, chunk DocumentChunk, question, answer string, snippets []string, answerType, difficulty, note string) model.EvalGroundTruthCase {
-	cleanSnippets := make([]string, 0, len(snippets))
-	seen := map[string]struct{}{}
-	for _, snippet := range snippets {
-		snippet = clipEvalRunes(normalizeEvalWhitespace(snippet), 220)
-		if snippet == "" {
-			continue
-		}
-		if _, ok := seen[snippet]; ok {
-			continue
-		}
-		seen[snippet] = struct{}{}
-		cleanSnippets = append(cleanSnippets, snippet)
-	}
 	return model.EvalGroundTruthCase{
 		Question:       strings.TrimSpace(question),
 		Answer:         strings.TrimSpace(answer),
-		AnswerSnippets: cleanSnippets,
+		AnswerSnippets: normalizeEvalSnippets(snippets, 220),
 		SourceDocuments: []model.EvalSourceDocument{{
 			KnowledgeBaseID: document.KnowledgeBaseID,
 			DocumentID:      document.ID,
 			ChunkID:         chunk.ID,
 		}},
-		AnswerType: strings.TrimSpace(answerType),
-		Difficulty: strings.TrimSpace(difficulty),
-		Notes:      fmt.Sprintf("auto-generated from %s; %s", document.Name, note),
+		AnswerType:   strings.TrimSpace(answerType),
+		Difficulty:   strings.TrimSpace(difficulty),
+		ReviewStatus: evalReviewStatusApproved,
+		Notes:        fmt.Sprintf("auto-generated from %s; %s", document.Name, note),
 	}
 }
 

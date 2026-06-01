@@ -318,28 +318,34 @@ type EvalGroundTruthCase struct {
 	SourceDocuments []EvalSourceDocument `json:"source_documents"`
 	AnswerType      string               `json:"answer_type"`
 	Difficulty      string               `json:"difficulty"`
+	ReviewStatus    string               `json:"review_status,omitempty"`
+	Disabled        bool                 `json:"disabled,omitempty"`
 	Notes           string               `json:"notes,omitempty"`
 }
 
 type EvalDataset struct {
 	ID              string                `json:"id"`
 	Name            string                `json:"name"`
+	Kind            string                `json:"kind,omitempty"`
 	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
 	DocumentID      string                `json:"documentId,omitempty"`
 	Count           int                   `json:"count"`
 	DocumentCount   int                   `json:"documentCount"`
 	CreatedAt       string                `json:"createdAt"`
+	UpdatedAt       string                `json:"updatedAt,omitempty"`
 	Items           []EvalGroundTruthCase `json:"items"`
 }
 
 type EvalDatasetSummary struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
+	Kind            string `json:"kind,omitempty"`
 	KnowledgeBaseID string `json:"knowledgeBaseId,omitempty"`
 	DocumentID      string `json:"documentId,omitempty"`
 	Count           int    `json:"count"`
 	DocumentCount   int    `json:"documentCount"`
 	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
 }
 
 type GenerateEvalDatasetRequest struct {
@@ -356,6 +362,18 @@ type GenerateEvalDatasetResponse struct {
 	DocumentCount   int                   `json:"documentCount"`
 	CreatedAt       string                `json:"createdAt,omitempty"`
 	Items           []EvalGroundTruthCase `json:"items"`
+}
+
+type AddEvalDatasetCandidateRequest struct {
+	KnowledgeBaseID string              `json:"knowledgeBaseId"`
+	DocumentID      string              `json:"documentId"`
+	Item            EvalGroundTruthCase `json:"item"`
+}
+
+type AddEvalDatasetCandidateResponse struct {
+	Dataset EvalDatasetSummary  `json:"dataset"`
+	Item    EvalGroundTruthCase `json:"item"`
+	Created bool                `json:"created"`
 }
 
 type RetrievalDebugRequest struct {

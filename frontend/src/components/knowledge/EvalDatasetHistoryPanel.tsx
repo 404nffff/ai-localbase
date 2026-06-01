@@ -25,6 +25,12 @@ const formatDateTime = (value: string) => {
   })
 }
 
+const datasetKindLabel = (kind?: string) => {
+  if (kind === 'review') return '待审核'
+  if (kind === 'generated') return '自动生成'
+  return '评估集'
+}
+
 const EvalDatasetHistoryPanel: React.FC<EvalDatasetHistoryPanelProps> = ({
   datasets,
   loading,
@@ -59,7 +65,7 @@ const EvalDatasetHistoryPanel: React.FC<EvalDatasetHistoryPanelProps> = ({
             <button className="kb-eval-history-main" onClick={() => onOpen(dataset.id)}>
               <span className="kb-eval-history-name">{dataset.name || dataset.id}</span>
               <span className="kb-eval-history-meta">
-                {dataset.count} 条用例 · {dataset.documentCount} 份文档 · {formatDateTime(dataset.createdAt)}
+                {datasetKindLabel(dataset.kind)} · {dataset.count} 条用例 · {dataset.documentCount} 份文档 · {formatDateTime(dataset.updatedAt || dataset.createdAt)}
               </span>
             </button>
             <div className="kb-eval-history-actions">

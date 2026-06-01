@@ -216,3 +216,87 @@ func TestGenerateEvalDatasetPersistsDataset(t *testing.T) {
 		t.Fatalf("expected deleted dataset")
 	}
 }
+
+func TestAddEvalDatasetCandidateCreatesReviewDataset(t *testing.T) {
+	tempDir := t.TempDir()
+	store := NewAppStateStore(filepath.Join(tempDir, "state.json"))
+	service := &AppService{
+		state: &model.AppState{
+			Config: model.AppConfig{},
+			KnowledgeBases: map[string]model.KnowledgeBase{
+				"kb-1": {
+					ID:        "kb-1",
+					Name:      "教师信息",
+					CreatedAt: "2026-03-12T00:00:00Z",
+					Documents: []model.Document{{
+						ID:              "doc-1",
+						KnowledgeBaseID: "kb-1",
+						Name:            "teachers.csv",
+						Status:          "indexed",
+					}},
+				},
+			},
+			EvalDatasets: map[string]model.EvalDataset{},
+		},
+		store: store,
+		rag:   NewRagService(),
+	}
+
+	req := model.AddEvalDatasetCandidateRequest{
+		KnowledgeBaseID: "kb-1",
+		DocumentID:      "doc-1",
+		Item: model.EvalGroundTruthCase{
+			ID:             "debug-low-confidence-kb-1-001",
+			Question:       "谁的薪资最高？",
+			Answer:         "张三的薪资最高。",
+			AnswerSnippets: []string{"张三,男,24000", "张三,男,24000"},
+			SourceDocuments: []model.EvalSourceDocument{{
+				KnowledgeBaseID: "kb-1",
+				DocumentID:      "doc-1",
+				ChunkID:         "chunk-1",
+			}},
+			AnswerType: "retrieval-debug-candidate",
+			Difficulty: "hard",
+		},
+	}
+
+	response, err := service.AddEvalDatasetCandidate(req)
+	if err != nil {
+		t.Fatalf("add eval candidate: %v", err)
+	}
+	if !response.Created || response.Dataset.Kind != evalDatasetKindReview {
+		t.Fatalf("expected created review dataset, got %#v", response)
+	}
+	if response.Item.ReviewStatus != evalReviewStatusPending || !response.Item.Disabled {
+		t.Fatalf("expected pending disabled candidate, got %#v", response.Item)
+	}
+	if len(response.Item.AnswerSnippets) != 1 {
+		t.Fatalf("expected normalized snippets, got %#v", response.Item.AnswerSnippets)
+	}
+
+	updatedReq := req
+	updatedReq.Item.Answer = "更新后的答案。"
+	second, err := service.AddEvalDatasetCandidate(updatedReq)
+	if err != nil {
+		t.Fatalf("add duplicate eval candidate: %v", err)
+	}
+	if second.Dataset.ID != response.Dataset.ID || second.Dataset.Count != 1 || second.Created {
+		t.Fatalf("expected duplicate candidate replaced in same dataset, got %#v", second)
+	}
+
+	dataset, err := service.GetEvalDataset(response.Dataset.ID)
+	if err != nil {
+		t.Fatalf("get review dataset: %v", err)
+	}
+	if dataset.Kind != evalDatasetKindReview || dataset.Count != 1 || dataset.Items[0].Answer != "更新后的答案。" {
+		t.Fatalf("unexpected review dataset: %#v", dataset)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load persisted state: %v", err)
+	}
+	if loaded.EvalDatasets[response.Dataset.ID].Items[0].ReviewStatus != evalReviewStatusPending {
+		t.Fatalf("expected persisted review status, got %#v", loaded.EvalDatasets[response.Dataset.ID].Items[0])
+	}
+}
