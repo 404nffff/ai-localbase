@@ -37,6 +37,21 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 				}},
 			},
 		},
+		EvalDatasets: map[string]model.EvalDataset{
+			"eval-1": {
+				ID:              "eval-1",
+				Name:            "示例评估集",
+				KnowledgeBaseID: "kb-1",
+				Count:           1,
+				DocumentCount:   1,
+				CreatedAt:       "2026-03-12T00:00:01Z",
+				Items: []model.EvalGroundTruthCase{{
+					ID:       "case-1",
+					Question: "示例问题？",
+					Answer:   "示例答案。",
+				}},
+			},
+		},
 	}
 
 	if err := store.Save(state); err != nil {
@@ -55,6 +70,9 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	}
 	if len(loaded.KnowledgeBases["kb-1"].Documents) != 1 {
 		t.Fatalf("expected persisted documents, got %d", len(loaded.KnowledgeBases["kb-1"].Documents))
+	}
+	if loaded.EvalDatasets["eval-1"].Count != 1 {
+		t.Fatalf("expected persisted eval dataset, got %#v", loaded.EvalDatasets["eval-1"])
 	}
 }
 
@@ -94,6 +112,16 @@ func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 				CreatedAt:   "2026-03-12T00:00:00Z",
 			},
 		},
+		EvalDatasets: map[string]model.EvalDataset{
+			"eval-persisted": {
+				ID:              "eval-persisted",
+				Name:            "示例持久化评估集",
+				KnowledgeBaseID: "kb-persisted",
+				Count:           1,
+				DocumentCount:   1,
+				CreatedAt:       "2026-03-12T00:00:01Z",
+			},
+		},
 	}
 	if err := store.Save(persisted); err != nil {
 		t.Fatalf("save persisted state: %v", err)
@@ -108,6 +136,10 @@ func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 	knowledgeBases := service.ListKnowledgeBases()
 	if len(knowledgeBases) != 1 || knowledgeBases[0].ID != "kb-persisted" {
 		t.Fatalf("expected persisted knowledge base, got %#v", knowledgeBases)
+	}
+	evalDatasets := service.ListEvalDatasets("kb-persisted")
+	if len(evalDatasets) != 1 || evalDatasets[0].ID != "eval-persisted" {
+		t.Fatalf("expected persisted eval dataset, got %#v", evalDatasets)
 	}
 }
 

@@ -183,6 +183,12 @@ func (h *AppHandler) ListDocuments(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) ListEvalDatasets(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"items": h.appService.ListEvalDatasets(c.Query("knowledgeBaseId")),
+	})
+}
+
 func (h *AppHandler) GenerateEvalDataset(c *gin.Context) {
 	var req model.GenerateEvalDatasetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -197,6 +203,28 @@ func (h *AppHandler) GenerateEvalDataset(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *AppHandler) GetEvalDataset(c *gin.Context) {
+	dataset, err := h.appService.GetEvalDataset(c.Param("datasetId"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, dataset)
+}
+
+func (h *AppHandler) DeleteEvalDataset(c *gin.Context) {
+	if err := h.appService.DeleteEvalDataset(c.Param("datasetId")); err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "eval dataset deleted",
+		"id":      c.Param("datasetId"),
+	})
 }
 
 func (h *AppHandler) DebugRetrieve(c *gin.Context) {

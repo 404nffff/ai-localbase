@@ -116,6 +116,22 @@ curl -X POST http://localhost:8080/api/eval/datasets/generate \
 
 响应中的 `items` 字段即为可直接保存到 `eval/data/*.json` 的数据集数组。
 
+生成成功后，后端也会把本次评估集保存到应用状态中，响应会返回 `datasetId` 和 `createdAt`。可通过以下接口管理已保存的评估集：
+
+```bash
+# 列表
+curl http://localhost:8080/api/eval/datasets
+
+# 按知识库过滤
+curl "http://localhost:8080/api/eval/datasets?knowledgeBaseId=kb-xxx"
+
+# 查看详情
+curl http://localhost:8080/api/eval/datasets/eval-xxx
+
+# 删除
+curl -X DELETE http://localhost:8080/api/eval/datasets/eval-xxx
+```
+
 ### 运行评估（真实模式）
 
 ```bash

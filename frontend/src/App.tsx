@@ -7,6 +7,7 @@ import {
   createKnowledgeBase,
   debugKnowledgeBaseRetrieval,
   deleteConversation,
+  deleteEvalDataset,
   deleteKnowledgeBase,
   deleteKnowledgeBaseDocument,
   extractErrorMessage,
@@ -16,6 +17,8 @@ import {
   fetchConversationDetail,
   fetchInitialAppData,
   generateEvalDataset,
+  getEvalDataset,
+  listEvalDatasets,
   reindexKnowledgeBaseDocument,
   resetMcpToken,
   saveConversation,
@@ -24,6 +27,8 @@ import {
 } from './services/api'
 import type {
   DocumentDetailResponse,
+  EvalDatasetDetail,
+  EvalDatasetSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
@@ -741,6 +746,41 @@ function App() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '生成评估集失败，请稍后重试。'
+      throw new Error(message)
+    }
+  }
+
+  const handleListEvalDatasets = async (
+    knowledgeBaseId: string,
+  ): Promise<EvalDatasetSummary[]> => {
+    try {
+      const response = await listEvalDatasets(knowledgeBaseId)
+      return response.items
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '加载评估集历史失败，请稍后重试。'
+      throw new Error(message)
+    }
+  }
+
+  const handleFetchEvalDataset = async (
+    datasetId: string,
+  ): Promise<EvalDatasetDetail> => {
+    try {
+      return await getEvalDataset(datasetId)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '加载评估集失败，请稍后重试。'
+      throw new Error(message)
+    }
+  }
+
+  const handleDeleteEvalDataset = async (datasetId: string): Promise<void> => {
+    try {
+      await deleteEvalDataset(datasetId)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '删除评估集失败，请稍后重试。'
       throw new Error(message)
     }
   }
@@ -1537,6 +1577,9 @@ function App() {
         onUploadFiles={handleUploadFiles}
         onUploadDirectory={handleUploadDirectory}
         onGenerateEvalDataset={handleGenerateEvalDataset}
+        onListEvalDatasets={handleListEvalDatasets}
+        onFetchEvalDataset={handleFetchEvalDataset}
+        onDeleteEvalDataset={handleDeleteEvalDataset}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}

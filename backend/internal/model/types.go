@@ -37,6 +37,7 @@ type AppState struct {
 	Mu             sync.RWMutex
 	Config         AppConfig
 	KnowledgeBases map[string]KnowledgeBase
+	EvalDatasets   map[string]EvalDataset
 }
 
 type HealthResponse struct {
@@ -320,6 +321,27 @@ type EvalGroundTruthCase struct {
 	Notes           string               `json:"notes,omitempty"`
 }
 
+type EvalDataset struct {
+	ID              string                `json:"id"`
+	Name            string                `json:"name"`
+	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string                `json:"documentId,omitempty"`
+	Count           int                   `json:"count"`
+	DocumentCount   int                   `json:"documentCount"`
+	CreatedAt       string                `json:"createdAt"`
+	Items           []EvalGroundTruthCase `json:"items"`
+}
+
+type EvalDatasetSummary struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	KnowledgeBaseID string `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string `json:"documentId,omitempty"`
+	Count           int    `json:"count"`
+	DocumentCount   int    `json:"documentCount"`
+	CreatedAt       string `json:"createdAt"`
+}
+
 type GenerateEvalDatasetRequest struct {
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
 	DocumentID      string `json:"documentId"`
@@ -327,10 +349,12 @@ type GenerateEvalDatasetRequest struct {
 }
 
 type GenerateEvalDatasetResponse struct {
+	DatasetID       string                `json:"datasetId,omitempty"`
 	KnowledgeBaseID string                `json:"knowledgeBaseId,omitempty"`
 	DocumentID      string                `json:"documentId,omitempty"`
 	Count           int                   `json:"count"`
 	DocumentCount   int                   `json:"documentCount"`
+	CreatedAt       string                `json:"createdAt,omitempty"`
 	Items           []EvalGroundTruthCase `json:"items"`
 }
 

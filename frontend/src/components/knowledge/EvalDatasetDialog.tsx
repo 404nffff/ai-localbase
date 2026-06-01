@@ -1,8 +1,10 @@
 import React, { useMemo } from 'react'
-import type { EvalGroundTruthCase, GenerateEvalDatasetResponse } from '../../services/api'
+import type { EvalDatasetDetail, EvalGroundTruthCase, GenerateEvalDatasetResponse } from '../../services/api'
+
+type EvalDatasetDialogDataset = GenerateEvalDatasetResponse | EvalDatasetDetail
 
 interface EvalDatasetDialogProps {
-  dataset: GenerateEvalDatasetResponse
+  dataset: EvalDatasetDialogDataset
   scopeName: string
   onClose: () => void
 }
@@ -55,7 +57,11 @@ const getEvalSnippets = (item: EvalGroundTruthCase) => {
   return looseItem.answer_snippets || looseItem.answerSnippets || looseItem.AnswerSnippets || []
 }
 
-const downloadEvalDataset = (dataset: GenerateEvalDatasetResponse) => {
+const getSavedDatasetId = (dataset: EvalDatasetDialogDataset) => (
+  ('datasetId' in dataset && dataset.datasetId) || ('id' in dataset ? dataset.id : '')
+)
+
+const downloadEvalDataset = (dataset: EvalDatasetDialogDataset) => {
   const blob = new Blob([JSON.stringify(dataset.items, null, 2)], {
     type: 'application/json;charset=utf-8',
   })
@@ -139,7 +145,10 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
         </div>
 
         <footer className="kb-eval-dialog-actions">
-          <span>预览前 {previewItems.length} 条，下载文件包含全部用例。</span>
+          <span>
+            预览前 {previewItems.length} 条，下载文件包含全部用例。
+            {getSavedDatasetId(dataset) ? ` 已保存为 ${getSavedDatasetId(dataset)}。` : ''}
+          </span>
           <button onClick={() => downloadEvalDataset(dataset)}>下载 JSON</button>
         </footer>
       </div>

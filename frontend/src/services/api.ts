@@ -204,10 +204,37 @@ export interface RetrievalDebugResponse {
 }
 
 export interface GenerateEvalDatasetResponse {
+  datasetId?: string
   knowledgeBaseId?: string
   documentId?: string
   count: number
   documentCount: number
+  createdAt?: string
+  items: EvalGroundTruthCase[]
+}
+
+export interface EvalDatasetSummary {
+  id: string
+  name: string
+  knowledgeBaseId?: string
+  documentId?: string
+  count: number
+  documentCount: number
+  createdAt: string
+}
+
+export interface EvalDatasetListResponse {
+  items: EvalDatasetSummary[]
+}
+
+export interface EvalDatasetDetail {
+  id: string
+  name: string
+  knowledgeBaseId?: string
+  documentId?: string
+  count: number
+  documentCount: number
+  createdAt: string
   items: EvalGroundTruthCase[]
 }
 
@@ -430,6 +457,23 @@ export const generateEvalDataset = async (
     jsonRequest({ knowledgeBaseId, maxPerDocument }, { method: 'POST' }),
   )
 )
+
+export const listEvalDatasets = async (
+  knowledgeBaseId?: string,
+): Promise<EvalDatasetListResponse> => {
+  const query = knowledgeBaseId ? `?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}` : ''
+  return requestJson<EvalDatasetListResponse>(`/api/eval/datasets${query}`)
+}
+
+export const getEvalDataset = async (
+  datasetId: string,
+): Promise<EvalDatasetDetail> => (
+  requestJson<EvalDatasetDetail>(`/api/eval/datasets/${datasetId}`)
+)
+
+export const deleteEvalDataset = async (datasetId: string): Promise<void> => {
+  await requestOk(`/api/eval/datasets/${datasetId}`, { method: 'DELETE' })
+}
 
 export const debugKnowledgeBaseRetrieval = async (
   knowledgeBaseId: string,

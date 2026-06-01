@@ -355,9 +355,13 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 			service.state = &model.AppState{
 				Config:         loadedState.Config,
 				KnowledgeBases: loadedState.KnowledgeBases,
+				EvalDatasets:   loadedState.EvalDatasets,
 			}
 			if service.state.KnowledgeBases == nil {
 				service.state.KnowledgeBases = map[string]model.KnowledgeBase{}
+			}
+			if service.state.EvalDatasets == nil {
+				service.state.EvalDatasets = map[string]model.EvalDataset{}
 			}
 		}
 	}
@@ -392,6 +396,7 @@ func (s *AppService) saveState() error {
 	state := persistentAppState{
 		Config:         s.state.Config,
 		KnowledgeBases: cloneKnowledgeBases(s.state.KnowledgeBases),
+		EvalDatasets:   cloneEvalDatasets(s.state.EvalDatasets),
 	}
 	s.state.Mu.RUnlock()
 
@@ -411,6 +416,19 @@ func cloneKnowledgeBases(source map[string]model.KnowledgeBase) map[string]model
 		cloned[id] = kb
 	}
 
+	return cloned
+}
+
+func cloneEvalDatasets(source map[string]model.EvalDataset) map[string]model.EvalDataset {
+	if source == nil {
+		return map[string]model.EvalDataset{}
+	}
+
+	cloned := make(map[string]model.EvalDataset, len(source))
+	for id, dataset := range source {
+		dataset.Items = cloneEvalGroundTruthCases(dataset.Items)
+		cloned[id] = dataset
+	}
 	return cloned
 }
 
@@ -452,6 +470,7 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 				CreatedAt:   now,
 			},
 		},
+		EvalDatasets: map[string]model.EvalDataset{},
 	}
 }
 
@@ -760,12 +779,25 @@ func (s *AppService) DeleteKnowledgeBase(id string) (int, error) {
 
 	removedKnowledgeBase := s.state.KnowledgeBases[id]
 	delete(s.state.KnowledgeBases, id)
+	if s.state.EvalDatasets == nil {
+		s.state.EvalDatasets = map[string]model.EvalDataset{}
+	}
+	removedEvalDatasets := make(map[string]model.EvalDataset)
+	for datasetID, dataset := range s.state.EvalDatasets {
+		if dataset.KnowledgeBaseID == id {
+			removedEvalDatasets[datasetID] = dataset
+			delete(s.state.EvalDatasets, datasetID)
+		}
+	}
 	remaining := len(s.state.KnowledgeBases)
 	s.state.Mu.Unlock()
 
 	if err := s.saveState(); err != nil {
 		s.state.Mu.Lock()
 		s.state.KnowledgeBases[id] = removedKnowledgeBase
+		for datasetID, dataset := range removedEvalDatasets {
+			s.state.EvalDatasets[datasetID] = dataset
+		}
 		s.state.Mu.Unlock()
 		return remaining, err
 	}

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -135,5 +137,82 @@ func TestBuildEvalCasesSkipsUnstructuredPlainText(t *testing.T) {
 	cases := buildEvalCasesFromChunk(document, chunk, 5)
 	if len(cases) != 0 {
 		t.Fatalf("expected no low-confidence cases, got %#v", cases)
+	}
+}
+
+func TestGenerateEvalDatasetPersistsDataset(t *testing.T) {
+	tempDir := t.TempDir()
+	documentPath := filepath.Join(tempDir, "teachers.csv")
+	content := strings.Join([]string{
+		"姓名,性别,薪资",
+		"张三,男,24000",
+		"李四,女,18000",
+		"王五,男,7000",
+	}, "\n")
+	if err := os.WriteFile(documentPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+
+	store := NewAppStateStore(filepath.Join(tempDir, "state.json"))
+	service := &AppService{
+		state: &model.AppState{
+			Config: model.AppConfig{},
+			KnowledgeBases: map[string]model.KnowledgeBase{
+				"kb-1": {
+					ID:        "kb-1",
+					Name:      "教师信息",
+					CreatedAt: "2026-03-12T00:00:00Z",
+					Documents: []model.Document{{
+						ID:              "doc-1",
+						KnowledgeBaseID: "kb-1",
+						Name:            "teachers.csv",
+						Path:            documentPath,
+						Status:          "indexed",
+					}},
+				},
+			},
+			EvalDatasets: map[string]model.EvalDataset{},
+		},
+		store: store,
+		rag:   NewRagService(),
+	}
+
+	response, err := service.GenerateEvalDataset(model.GenerateEvalDatasetRequest{
+		KnowledgeBaseID: "kb-1",
+		MaxPerDocument:  3,
+	})
+	if err != nil {
+		t.Fatalf("generate eval dataset: %v", err)
+	}
+	if response.DatasetID == "" || response.Count == 0 {
+		t.Fatalf("expected saved dataset metadata, got %#v", response)
+	}
+
+	summaries := service.ListEvalDatasets("kb-1")
+	if len(summaries) != 1 || summaries[0].ID != response.DatasetID {
+		t.Fatalf("expected one saved dataset summary, got %#v", summaries)
+	}
+
+	dataset, err := service.GetEvalDataset(response.DatasetID)
+	if err != nil {
+		t.Fatalf("get eval dataset: %v", err)
+	}
+	if dataset.Count != response.Count || len(dataset.Items) != response.Count {
+		t.Fatalf("expected saved dataset items, got %#v", dataset)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load persisted state: %v", err)
+	}
+	if _, ok := loaded.EvalDatasets[response.DatasetID]; !ok {
+		t.Fatalf("expected dataset persisted to state, got %#v", loaded.EvalDatasets)
+	}
+
+	if err := service.DeleteEvalDataset(response.DatasetID); err != nil {
+		t.Fatalf("delete eval dataset: %v", err)
+	}
+	if len(service.ListEvalDatasets("kb-1")) != 0 {
+		t.Fatalf("expected deleted dataset")
 	}
 }

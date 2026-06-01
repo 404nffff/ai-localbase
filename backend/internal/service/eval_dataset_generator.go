@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"ai-localbase/internal/model"
@@ -70,13 +71,139 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 		return model.GenerateEvalDatasetResponse{}, fmt.Errorf("no eval cases generated from selected documents")
 	}
 
-	return model.GenerateEvalDatasetResponse{
-		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-		DocumentID:      strings.TrimSpace(req.DocumentID),
+	datasetKnowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	if datasetKnowledgeBaseID == "" && len(documents) == 1 {
+		datasetKnowledgeBaseID = documents[0].KnowledgeBaseID
+	}
+	datasetDocumentID := strings.TrimSpace(req.DocumentID)
+
+	dataset := model.EvalDataset{
+		ID:              util.NextID("eval"),
+		Name:            buildEvalDatasetName(req, documents),
+		KnowledgeBaseID: datasetKnowledgeBaseID,
+		DocumentID:      datasetDocumentID,
 		Count:           len(cases),
 		DocumentCount:   len(documents),
-		Items:           cases,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		Items:           cloneEvalGroundTruthCases(cases),
+	}
+	if err := s.saveEvalDataset(dataset); err != nil {
+		return model.GenerateEvalDatasetResponse{}, fmt.Errorf("save eval dataset: %w", err)
+	}
+
+	return model.GenerateEvalDatasetResponse{
+		DatasetID:       dataset.ID,
+		KnowledgeBaseID: dataset.KnowledgeBaseID,
+		DocumentID:      dataset.DocumentID,
+		Count:           len(cases),
+		DocumentCount:   len(documents),
+		CreatedAt:       dataset.CreatedAt,
+		Items:           cloneEvalGroundTruthCases(cases),
 	}, nil
+}
+
+func (s *AppService) ListEvalDatasets(knowledgeBaseID string) []model.EvalDatasetSummary {
+	if s == nil || s.state == nil {
+		return nil
+	}
+
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	s.state.Mu.RLock()
+	items := make([]model.EvalDatasetSummary, 0, len(s.state.EvalDatasets))
+	for _, dataset := range s.state.EvalDatasets {
+		if knowledgeBaseID != "" && dataset.KnowledgeBaseID != knowledgeBaseID {
+			continue
+		}
+		items = append(items, model.EvalDatasetSummary{
+			ID:              dataset.ID,
+			Name:            dataset.Name,
+			KnowledgeBaseID: dataset.KnowledgeBaseID,
+			DocumentID:      dataset.DocumentID,
+			Count:           dataset.Count,
+			DocumentCount:   dataset.DocumentCount,
+			CreatedAt:       dataset.CreatedAt,
+		})
+	}
+	s.state.Mu.RUnlock()
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].CreatedAt > items[j].CreatedAt
+	})
+	return items
+}
+
+func (s *AppService) GetEvalDataset(id string) (model.EvalDataset, error) {
+	if s == nil || s.state == nil {
+		return model.EvalDataset{}, fmt.Errorf("app service is nil")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return model.EvalDataset{}, fmt.Errorf("eval dataset id is required")
+	}
+
+	s.state.Mu.RLock()
+	dataset, ok := s.state.EvalDatasets[id]
+	s.state.Mu.RUnlock()
+	if !ok {
+		return model.EvalDataset{}, fmt.Errorf("eval dataset not found")
+	}
+	dataset.Items = cloneEvalGroundTruthCases(dataset.Items)
+	return dataset, nil
+}
+
+func (s *AppService) DeleteEvalDataset(id string) error {
+	if s == nil || s.state == nil {
+		return fmt.Errorf("app service is nil")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("eval dataset id is required")
+	}
+
+	s.state.Mu.Lock()
+	if s.state.EvalDatasets == nil {
+		s.state.EvalDatasets = map[string]model.EvalDataset{}
+	}
+	removed, ok := s.state.EvalDatasets[id]
+	if !ok {
+		s.state.Mu.Unlock()
+		return fmt.Errorf("eval dataset not found")
+	}
+	delete(s.state.EvalDatasets, id)
+	s.state.Mu.Unlock()
+
+	if err := s.saveState(); err != nil {
+		s.state.Mu.Lock()
+		s.state.EvalDatasets[id] = removed
+		s.state.Mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *AppService) saveEvalDataset(dataset model.EvalDataset) error {
+	if s == nil || s.state == nil {
+		return fmt.Errorf("app service is nil")
+	}
+	if strings.TrimSpace(dataset.ID) == "" {
+		return fmt.Errorf("eval dataset id is required")
+	}
+
+	dataset.Items = cloneEvalGroundTruthCases(dataset.Items)
+	s.state.Mu.Lock()
+	if s.state.EvalDatasets == nil {
+		s.state.EvalDatasets = map[string]model.EvalDataset{}
+	}
+	s.state.EvalDatasets[dataset.ID] = dataset
+	s.state.Mu.Unlock()
+
+	if err := s.saveState(); err != nil {
+		s.state.Mu.Lock()
+		delete(s.state.EvalDatasets, dataset.ID)
+		s.state.Mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (s *AppService) evalDatasetDocuments(req model.GenerateEvalDatasetRequest) ([]model.Document, error) {
@@ -118,6 +245,36 @@ func (s *AppService) evalDatasetDocuments(req model.GenerateEvalDatasetRequest) 
 		return nil, fmt.Errorf("document not found")
 	}
 	return documents, nil
+}
+
+func buildEvalDatasetName(req model.GenerateEvalDatasetRequest, documents []model.Document) string {
+	if strings.TrimSpace(req.DocumentID) != "" && len(documents) == 1 {
+		return fmt.Sprintf("评估集 - %s", documents[0].Name)
+	}
+	if strings.TrimSpace(req.KnowledgeBaseID) != "" {
+		return fmt.Sprintf("评估集 - %s", strings.TrimSpace(req.KnowledgeBaseID))
+	}
+	if len(documents) == 1 {
+		return fmt.Sprintf("评估集 - %s", documents[0].Name)
+	}
+	return "评估集 - 全部知识库"
+}
+
+func cloneEvalGroundTruthCases(source []model.EvalGroundTruthCase) []model.EvalGroundTruthCase {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make([]model.EvalGroundTruthCase, len(source))
+	for index, item := range source {
+		if item.AnswerSnippets != nil {
+			item.AnswerSnippets = append([]string(nil), item.AnswerSnippets...)
+		}
+		if item.SourceDocuments != nil {
+			item.SourceDocuments = append([]model.EvalSourceDocument(nil), item.SourceDocuments...)
+		}
+		cloned[index] = item
+	}
+	return cloned
 }
 
 func selectEvalChunkCandidates(chunks []DocumentChunk, maxCount int) []DocumentChunk {

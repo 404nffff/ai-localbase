@@ -12,6 +12,7 @@ import (
 type persistentAppState struct {
 	Config         model.AppConfig                `json:"config"`
 	KnowledgeBases map[string]model.KnowledgeBase `json:"knowledgeBases"`
+	EvalDatasets   map[string]model.EvalDataset   `json:"evalDatasets,omitempty"`
 }
 
 type AppStateStore struct {
@@ -48,6 +49,9 @@ func (s *AppStateStore) Load() (*persistentAppState, error) {
 	}
 	if state.KnowledgeBases == nil {
 		state.KnowledgeBases = map[string]model.KnowledgeBase{}
+	}
+	if state.EvalDatasets == nil {
+		state.EvalDatasets = map[string]model.EvalDataset{}
 	}
 	return &state, nil
 }

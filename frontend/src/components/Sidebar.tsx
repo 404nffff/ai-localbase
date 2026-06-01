@@ -11,6 +11,8 @@ import {
 } from '../App'
 import type {
   DocumentDetailResponse,
+  EvalDatasetDetail,
+  EvalDatasetSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
@@ -31,6 +33,9 @@ interface SidebarProps {
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
   onGenerateEvalDataset: (knowledgeBaseId: string) => Promise<GenerateEvalDatasetResponse>
+  onListEvalDatasets: (knowledgeBaseId: string) => Promise<EvalDatasetSummary[]>
+  onFetchEvalDataset: (datasetId: string) => Promise<EvalDatasetDetail>
+  onDeleteEvalDataset: (datasetId: string) => Promise<void>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -89,6 +94,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onUploadFiles,
   onUploadDirectory,
   onGenerateEvalDataset,
+  onListEvalDatasets,
+  onFetchEvalDataset,
+  onDeleteEvalDataset,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -348,6 +356,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         onUploadFiles={onUploadFiles}
         onUploadDirectory={onUploadDirectory}
         onGenerateEvalDataset={onGenerateEvalDataset}
+        onListEvalDatasets={onListEvalDatasets}
+        onFetchEvalDataset={onFetchEvalDataset}
+        onDeleteEvalDataset={onDeleteEvalDataset}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
