@@ -402,6 +402,99 @@ func (s *AppService) DeleteEvalDataset(id string) error {
 	return nil
 }
 
+func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRequest) (model.RunEvalDatasetResponse, error) {
+	if s == nil || s.state == nil {
+		return model.RunEvalDatasetResponse{}, fmt.Errorf("app service is nil")
+	}
+
+	dataset, err := s.GetEvalDataset(datasetID)
+	if err != nil {
+		return model.RunEvalDatasetResponse{}, err
+	}
+
+	topK := req.TopK
+	if topK <= 0 {
+		topK = 12
+	}
+	if topK > 50 {
+		topK = 50
+	}
+
+	startedAt := time.Now()
+	startedAtLabel := startedAt.UTC().Format(time.RFC3339)
+	results := make([]model.EvalRunCaseResult, 0, len(dataset.Items))
+	skippedDisabled := 0
+	for _, item := range dataset.Items {
+		if item.Disabled && !req.IncludeDisabled {
+			skippedDisabled++
+			continue
+		}
+		if strings.TrimSpace(item.Question) == "" {
+			results = append(results, model.EvalRunCaseResult{
+				CaseID:         item.ID,
+				Question:       item.Question,
+				ExpectedAnswer: item.Answer,
+				HitRank:        -1,
+				Error:          "question is empty",
+			})
+			continue
+		}
+
+		debugReq := model.RetrievalDebugRequest{
+			Query:           item.Question,
+			KnowledgeBaseID: dataset.KnowledgeBaseID,
+			DocumentID:      dataset.DocumentID,
+			TopK:            topK,
+		}
+		if debugReq.KnowledgeBaseID == "" {
+			debugReq.KnowledgeBaseID = firstEvalSourceKnowledgeBaseID(item)
+		}
+
+		response, err := s.DebugRetrieve(debugReq)
+		caseResult := model.EvalRunCaseResult{
+			CaseID:         item.ID,
+			Question:       item.Question,
+			ExpectedAnswer: item.Answer,
+			HitRank:        -1,
+			ElapsedMs:      response.ElapsedMs,
+			LowConfidence:  response.LowConfidence,
+			Retrieved:      response.Items,
+		}
+		if err != nil {
+			caseResult.Error = err.Error()
+			results = append(results, caseResult)
+			continue
+		}
+
+		hit, rank, matchedBy := evalCaseHit(item, response.Items)
+		caseResult.Hit = hit
+		caseResult.HitRank = rank
+		caseResult.MatchedBy = matchedBy
+		if hit && rank > 0 {
+			caseResult.ReciprocalRank = 1 / float64(rank)
+		} else {
+			caseResult.Error = "未命中"
+		}
+		results = append(results, caseResult)
+	}
+
+	if len(results) == 0 {
+		return model.RunEvalDatasetResponse{}, fmt.Errorf("no enabled eval cases to run")
+	}
+
+	return model.RunEvalDatasetResponse{
+		RunID:           util.NextID("eval-run"),
+		DatasetID:       dataset.ID,
+		DatasetName:     dataset.Name,
+		KnowledgeBaseID: dataset.KnowledgeBaseID,
+		DocumentID:      dataset.DocumentID,
+		StartedAt:       startedAtLabel,
+		ElapsedMs:       time.Since(startedAt).Milliseconds(),
+		Metrics:         buildEvalRunMetrics(results, skippedDisabled),
+		Cases:           results,
+	}, nil
+}
+
 func evalDatasetSummary(dataset model.EvalDataset) model.EvalDatasetSummary {
 	return model.EvalDatasetSummary{
 		ID:              dataset.ID,
@@ -421,6 +514,98 @@ func evalDatasetSortTime(dataset model.EvalDatasetSummary) string {
 		return dataset.UpdatedAt
 	}
 	return dataset.CreatedAt
+}
+
+func firstEvalSourceKnowledgeBaseID(item model.EvalGroundTruthCase) string {
+	for _, source := range item.SourceDocuments {
+		if strings.TrimSpace(source.KnowledgeBaseID) != "" {
+			return strings.TrimSpace(source.KnowledgeBaseID)
+		}
+	}
+	return ""
+}
+
+func evalCaseHit(item model.EvalGroundTruthCase, chunks []model.RetrievalDebugChunk) (bool, int, string) {
+	for index, chunk := range chunks {
+		for _, source := range item.SourceDocuments {
+			if strings.TrimSpace(source.ChunkID) != "" && chunk.ID == source.ChunkID {
+				return true, index + 1, "chunk"
+			}
+		}
+	}
+
+	for index, chunk := range chunks {
+		for _, source := range item.SourceDocuments {
+			if strings.TrimSpace(source.DocumentID) != "" && chunk.DocumentID == source.DocumentID {
+				return true, index + 1, "document"
+			}
+		}
+	}
+
+	for index, chunk := range chunks {
+		chunkText := strings.ToLower(strings.TrimSpace(chunk.Text))
+		if chunkText == "" {
+			continue
+		}
+		for _, snippet := range item.AnswerSnippets {
+			normalizedSnippet := strings.ToLower(strings.TrimSpace(snippet))
+			if normalizedSnippet != "" && strings.Contains(chunkText, normalizedSnippet) {
+				return true, index + 1, "snippet"
+			}
+		}
+	}
+
+	return false, -1, ""
+}
+
+func buildEvalRunMetrics(results []model.EvalRunCaseResult, skippedDisabled int) model.EvalRunMetrics {
+	metrics := model.EvalRunMetrics{
+		TotalCases:      len(results),
+		SkippedDisabled: skippedDisabled,
+	}
+	if len(results) == 0 {
+		return metrics
+	}
+
+	latencies := make([]int64, 0, len(results))
+	var reciprocalSum float64
+	for _, result := range results {
+		if result.Hit {
+			metrics.HitCount++
+			reciprocalSum += result.ReciprocalRank
+		} else {
+			metrics.MissCount++
+		}
+		if result.LowConfidence {
+			metrics.LowConfidence++
+		}
+		if strings.TrimSpace(result.Error) != "" && !result.Hit {
+			metrics.ErrorCount++
+		}
+		latencies = append(latencies, result.ElapsedMs)
+	}
+	metrics.HitRate = float64(metrics.HitCount) / float64(len(results))
+	metrics.MRR = reciprocalSum / float64(len(results))
+	metrics.LatencyP50Ms = percentileInt64(latencies, 0.50)
+	metrics.LatencyP95Ms = percentileInt64(latencies, 0.95)
+	return metrics
+}
+
+func percentileInt64(values []int64, percentile float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Slice(values, func(i, j int) bool {
+		return values[i] < values[j]
+	})
+	index := int(float64(len(values)-1) * percentile)
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index]
 }
 
 func (s *AppService) saveEvalDataset(dataset model.EvalDataset) error {

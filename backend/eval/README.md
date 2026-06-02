@@ -178,6 +178,14 @@ curl -X PUT http://localhost:8080/api/eval/datasets/eval-xxx/items/case-xxx \
 curl -X DELETE http://localhost:8080/api/eval/datasets/eval-xxx/items/case-xxx
 ```
 
+已保存的评估集可以直接从 Web API 触发一次检索评估运行。默认只运行已启用样本，并返回 Hit Rate、MRR、检索时延、低置信数量和逐条命中结果：
+
+```bash
+curl -X POST http://localhost:8080/api/eval/datasets/eval-xxx/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"includeDisabled":false,"topK":12}'
+```
+
 ### 运行评估（真实模式）
 
 ```bash

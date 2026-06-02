@@ -8,6 +8,7 @@ import type {
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
+  RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
 } from '../../services/api'
@@ -52,6 +53,7 @@ interface KnowledgePanelProps {
     datasetId: string,
     itemId: string,
   ) => Promise<DeleteEvalDatasetItemResponse>
+  onRunEvalDataset: (datasetId: string) => Promise<RunEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -88,6 +90,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onAddEvalDatasetCandidate,
   onUpdateEvalDatasetItem,
   onDeleteEvalDatasetItem,
+  onRunEvalDataset,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
@@ -677,6 +680,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           onClose={() => setEvalDataset(null)}
           onUpdateItem={handleUpdateEvalDatasetItem}
           onDeleteItem={handleDeleteEvalDatasetItem}
+          onRun={onRunEvalDataset}
         />
       )}
     </>

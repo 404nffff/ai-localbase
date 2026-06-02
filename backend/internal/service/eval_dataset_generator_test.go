@@ -383,3 +383,62 @@ func TestUpdateAndDeleteEvalDatasetItem(t *testing.T) {
 		t.Fatalf("expected deleted item, got %#v", dataset)
 	}
 }
+
+func TestEvalCaseHitPrefersChunkDocumentThenSnippet(t *testing.T) {
+	item := model.EvalGroundTruthCase{
+		ID:             "case-1",
+		Question:       "谁的薪资最高？",
+		Answer:         "张三",
+		AnswerSnippets: []string{"张三"},
+		SourceDocuments: []model.EvalSourceDocument{{
+			KnowledgeBaseID: "kb-1",
+			DocumentID:      "doc-1",
+			ChunkID:         "doc-1-chunk-2",
+		}},
+	}
+	chunks := []model.RetrievalDebugChunk{
+		{ID: "doc-1-chunk-1", DocumentID: "doc-1", Text: "李四的薪资是 18000。"},
+		{ID: "doc-1-chunk-2", DocumentID: "doc-1", Text: "张三的薪资是 24000。"},
+	}
+
+	hit, rank, matchedBy := evalCaseHit(item, chunks)
+	if !hit || rank != 2 || matchedBy != "chunk" {
+		t.Fatalf("expected chunk hit at rank 2, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
+	}
+
+	item.SourceDocuments[0].ChunkID = "missing"
+	hit, rank, matchedBy = evalCaseHit(item, chunks)
+	if !hit || rank != 1 || matchedBy != "document" {
+		t.Fatalf("expected document hit at rank 1, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
+	}
+
+	item.SourceDocuments = nil
+	hit, rank, matchedBy = evalCaseHit(item, chunks)
+	if !hit || rank != 2 || matchedBy != "snippet" {
+		t.Fatalf("expected snippet hit at rank 2, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
+	}
+}
+
+func TestBuildEvalRunMetrics(t *testing.T) {
+	metrics := buildEvalRunMetrics([]model.EvalRunCaseResult{
+		{Hit: true, HitRank: 1, ReciprocalRank: 1, ElapsedMs: 10},
+		{Hit: true, HitRank: 2, ReciprocalRank: 0.5, ElapsedMs: 20, LowConfidence: true},
+		{Hit: false, HitRank: -1, ElapsedMs: 30, Error: "未命中"},
+	}, 2)
+
+	if metrics.TotalCases != 3 || metrics.HitCount != 2 || metrics.MissCount != 1 {
+		t.Fatalf("unexpected counts: %#v", metrics)
+	}
+	if metrics.HitRate < 0.66 || metrics.HitRate > 0.67 {
+		t.Fatalf("unexpected hit rate: %#v", metrics)
+	}
+	if metrics.MRR != 0.5 {
+		t.Fatalf("unexpected mrr: %#v", metrics)
+	}
+	if metrics.LowConfidence != 1 || metrics.ErrorCount != 1 || metrics.SkippedDisabled != 2 {
+		t.Fatalf("unexpected diagnostic counts: %#v", metrics)
+	}
+	if metrics.LatencyP50Ms != 20 || metrics.LatencyP95Ms != 20 {
+		t.Fatalf("unexpected latency percentiles: %#v", metrics)
+	}
+}

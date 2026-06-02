@@ -260,6 +260,45 @@ export interface DeleteEvalDatasetItemResponse {
   deleted: string
 }
 
+export interface EvalRunMetrics {
+  totalCases: number
+  hitCount: number
+  missCount: number
+  hitRate: number
+  mrr: number
+  latencyP50Ms: number
+  latencyP95Ms: number
+  lowConfidence: number
+  errorCount: number
+  skippedDisabled: number
+}
+
+export interface EvalRunCaseResult {
+  caseId: string
+  question: string
+  expectedAnswer: string
+  hit: boolean
+  hitRank: number
+  reciprocalRank: number
+  matchedBy?: string
+  elapsedMs: number
+  lowConfidence: boolean
+  error?: string
+  retrieved: RetrievalDebugChunk[]
+}
+
+export interface RunEvalDatasetResponse {
+  runId: string
+  datasetId: string
+  datasetName: string
+  knowledgeBaseId?: string
+  documentId?: string
+  startedAt: string
+  elapsedMs: number
+  metrics: EvalRunMetrics
+  cases: EvalRunCaseResult[]
+}
+
 export const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
   id: document.id,
   name: document.name,
@@ -526,6 +565,15 @@ export const deleteEvalDatasetItem = async (
   requestJson<DeleteEvalDatasetItemResponse>(
     `/api/eval/datasets/${datasetId}/items/${encodeURIComponent(itemId)}`,
     { method: 'DELETE' },
+  )
+)
+
+export const runEvalDataset = async (
+  datasetId: string,
+): Promise<RunEvalDatasetResponse> => (
+  requestJson<RunEvalDatasetResponse>(
+    `/api/eval/datasets/${datasetId}/runs`,
+    jsonRequest({ includeDisabled: false, topK: 12 }, { method: 'POST' }),
   )
 )
 

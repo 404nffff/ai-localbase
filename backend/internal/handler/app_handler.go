@@ -257,6 +257,22 @@ func (h *AppHandler) DeleteEvalDatasetItem(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *AppHandler) RunEvalDataset(c *gin.Context) {
+	var req model.RunEvalDatasetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid eval run request body")
+		return
+	}
+
+	response, err := h.appService.RunEvalDataset(c.Param("datasetId"), req)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *AppHandler) DeleteEvalDataset(c *gin.Context) {
 	if err := h.appService.DeleteEvalDataset(c.Param("datasetId")); err != nil {
 		writeError(c, http.StatusNotFound, err.Error())

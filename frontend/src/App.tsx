@@ -23,6 +23,7 @@ import {
   listEvalDatasets,
   reindexKnowledgeBaseDocument,
   resetMcpToken,
+  runEvalDataset,
   saveConversation,
   updateAppConfig,
   updateEvalDatasetItem,
@@ -36,6 +37,7 @@ import type {
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
+  RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
 } from './services/api'
@@ -829,6 +831,18 @@ function App() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '删除评估样本失败，请稍后重试。'
+      throw new Error(message)
+    }
+  }
+
+  const handleRunEvalDataset = async (
+    datasetId: string,
+  ): Promise<RunEvalDatasetResponse> => {
+    try {
+      return await runEvalDataset(datasetId)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '运行评估失败，请稍后重试。'
       throw new Error(message)
     }
   }
@@ -1631,6 +1645,7 @@ function App() {
         onAddEvalDatasetCandidate={handleAddEvalDatasetCandidate}
         onUpdateEvalDatasetItem={handleUpdateEvalDatasetItem}
         onDeleteEvalDatasetItem={handleDeleteEvalDatasetItem}
+        onRunEvalDataset={handleRunEvalDataset}
         directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}

@@ -40,6 +40,7 @@ func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, 
 		api.POST("/eval/datasets/generate", appHandler.GenerateEvalDataset)
 		api.POST("/eval/datasets/review-candidates", appHandler.AddEvalDatasetCandidate)
 		api.GET("/eval/datasets/:datasetId", appHandler.GetEvalDataset)
+		api.POST("/eval/datasets/:datasetId/runs", appHandler.RunEvalDataset)
 		api.PUT("/eval/datasets/:datasetId/items/:itemId", appHandler.UpdateEvalDatasetItem)
 		api.DELETE("/eval/datasets/:datasetId/items/:itemId", appHandler.DeleteEvalDatasetItem)
 		api.DELETE("/eval/datasets/:datasetId", appHandler.DeleteEvalDataset)

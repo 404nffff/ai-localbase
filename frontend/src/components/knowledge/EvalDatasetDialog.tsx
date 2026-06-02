@@ -1,5 +1,10 @@
 import React, { useMemo, useState } from 'react'
-import type { EvalDatasetDetail, EvalGroundTruthCase, GenerateEvalDatasetResponse } from '../../services/api'
+import type {
+  EvalDatasetDetail,
+  EvalGroundTruthCase,
+  GenerateEvalDatasetResponse,
+  RunEvalDatasetResponse,
+} from '../../services/api'
 
 type EvalDatasetDialogDataset = GenerateEvalDatasetResponse | EvalDatasetDetail
 
@@ -13,6 +18,7 @@ interface EvalDatasetDialogProps {
     item: EvalGroundTruthCase,
   ) => Promise<EvalGroundTruthCase>
   onDeleteItem?: (datasetId: string, itemId: string) => Promise<void>
+  onRun?: (datasetId: string) => Promise<RunEvalDatasetResponse>
 }
 
 interface EvalItemDraft {
@@ -114,6 +120,8 @@ const itemFromDraft = (item: EvalGroundTruthCase, draft: EvalItemDraft): EvalGro
   notes: draft.notes.trim() || undefined,
 })
 
+const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`
+
 const downloadEvalDataset = (dataset: EvalDatasetDialogDataset, enabledOnly: boolean) => {
   const items = enabledOnly ? dataset.items.filter((item) => !item.disabled) : dataset.items
   const blob = new Blob([JSON.stringify(items, null, 2)], {
@@ -138,11 +146,14 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
   onClose,
   onUpdateItem,
   onDeleteItem,
+  onRun,
 }) => {
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [draft, setDraft] = useState<EvalItemDraft | null>(null)
   const [savingItemId, setSavingItemId] = useState<string | null>(null)
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
+  const [evalRun, setEvalRun] = useState<RunEvalDatasetResponse | null>(null)
   const [actionError, setActionError] = useState('')
 
   const datasetId = getSavedDatasetId(dataset)
@@ -206,6 +217,23 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
     }
   }
 
+  const runDataset = async () => {
+    if (!datasetId || !onRun) return
+    setRunning(true)
+    setActionError('')
+    try {
+      const report = await onRun(datasetId)
+      setEvalRun(report)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '运行评估失败')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const reportCases = evalRun?.cases ?? []
+  const issueCases = reportCases.filter((item) => !item.hit || item.lowConfidence || item.error)
+
   return (
     <div className="kb-dialog-backdrop" onClick={onClose}>
       <div className="kb-eval-dialog" onClick={(event) => event.stopPropagation()}>
@@ -237,6 +265,65 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
         </section>
 
         {actionError && <div className="kb-eval-dialog-error">{actionError}</div>}
+
+        {evalRun && (
+          <section className="kb-eval-run-report">
+            <div className="kb-eval-run-head">
+              <div>
+                <span>最近一次评估</span>
+                <strong>{evalRun.runId}</strong>
+              </div>
+              <span>{new Date(evalRun.startedAt).toLocaleString()} · {evalRun.elapsedMs}ms</span>
+            </div>
+            <div className="kb-eval-run-metrics">
+              <div>
+                <strong>{formatPercent(evalRun.metrics.hitRate)}</strong>
+                <span>Hit Rate</span>
+              </div>
+              <div>
+                <strong>{evalRun.metrics.mrr.toFixed(3)}</strong>
+                <span>MRR</span>
+              </div>
+              <div>
+                <strong>{evalRun.metrics.hitCount}/{evalRun.metrics.totalCases}</strong>
+                <span>命中用例</span>
+              </div>
+              <div>
+                <strong>{evalRun.metrics.latencyP95Ms}ms</strong>
+                <span>检索 P95</span>
+              </div>
+              <div>
+                <strong>{evalRun.metrics.lowConfidence}</strong>
+                <span>低置信</span>
+              </div>
+              <div>
+                <strong>{evalRun.metrics.skippedDisabled}</strong>
+                <span>跳过禁用</span>
+              </div>
+            </div>
+            <div className="kb-eval-run-cases">
+              {(issueCases.length > 0 ? issueCases : reportCases).slice(0, 8).map((item) => (
+                <div className="kb-eval-run-case" key={item.caseId}>
+                  <div className="kb-eval-run-case-main">
+                    <span className={item.hit ? 'kb-eval-run-pass' : 'kb-eval-run-fail'}>
+                      {item.hit ? `命中 #${item.hitRank}` : '未命中'}
+                    </span>
+                    {item.lowConfidence && <span>低置信</span>}
+                    {item.matchedBy && <span>{item.matchedBy}</span>}
+                    <strong>{item.question}</strong>
+                    <p>{item.error || item.expectedAnswer}</p>
+                  </div>
+                  {item.retrieved[0] && (
+                    <div className="kb-eval-run-evidence">
+                      <span>{item.retrieved[0].documentName || item.retrieved[0].documentId}</span>
+                      <p>{item.retrieved[0].text}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="kb-eval-preview-list">
           {previewItems.map((item, index) => {
@@ -400,6 +487,11 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
             {datasetId ? ` 已保存为 ${datasetId}。` : ''}
           </span>
           <div>
+            {onRun && datasetId && (
+              <button onClick={() => void runDataset()} disabled={running}>
+                {running ? '评估中' : '运行评估'}
+              </button>
+            )}
             <button onClick={() => downloadEvalDataset(dataset, true)}>下载启用 JSON</button>
             <button onClick={() => downloadEvalDataset(dataset, false)}>下载全部 JSON</button>
           </div>

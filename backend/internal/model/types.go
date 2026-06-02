@@ -390,6 +390,50 @@ type DeleteEvalDatasetItemResponse struct {
 	Deleted string             `json:"deleted"`
 }
 
+type RunEvalDatasetRequest struct {
+	IncludeDisabled bool `json:"includeDisabled,omitempty"`
+	TopK            int  `json:"topK,omitempty"`
+}
+
+type EvalRunMetrics struct {
+	TotalCases      int     `json:"totalCases"`
+	HitCount        int     `json:"hitCount"`
+	MissCount       int     `json:"missCount"`
+	HitRate         float64 `json:"hitRate"`
+	MRR             float64 `json:"mrr"`
+	LatencyP50Ms    int64   `json:"latencyP50Ms"`
+	LatencyP95Ms    int64   `json:"latencyP95Ms"`
+	LowConfidence   int     `json:"lowConfidence"`
+	ErrorCount      int     `json:"errorCount"`
+	SkippedDisabled int     `json:"skippedDisabled"`
+}
+
+type EvalRunCaseResult struct {
+	CaseID         string                `json:"caseId"`
+	Question       string                `json:"question"`
+	ExpectedAnswer string                `json:"expectedAnswer"`
+	Hit            bool                  `json:"hit"`
+	HitRank        int                   `json:"hitRank"`
+	ReciprocalRank float64               `json:"reciprocalRank"`
+	MatchedBy      string                `json:"matchedBy,omitempty"`
+	ElapsedMs      int64                 `json:"elapsedMs"`
+	LowConfidence  bool                  `json:"lowConfidence"`
+	Error          string                `json:"error,omitempty"`
+	Retrieved      []RetrievalDebugChunk `json:"retrieved"`
+}
+
+type RunEvalDatasetResponse struct {
+	RunID           string              `json:"runId"`
+	DatasetID       string              `json:"datasetId"`
+	DatasetName     string              `json:"datasetName"`
+	KnowledgeBaseID string              `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string              `json:"documentId,omitempty"`
+	StartedAt       string              `json:"startedAt"`
+	ElapsedMs       int64               `json:"elapsedMs"`
+	Metrics         EvalRunMetrics      `json:"metrics"`
+	Cases           []EvalRunCaseResult `json:"cases"`
+}
+
 type RetrievalDebugRequest struct {
 	Query           string `json:"query"`
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
