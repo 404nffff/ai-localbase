@@ -169,6 +169,15 @@ export interface RetrievalDebugChunk {
   kind: string
   score: number
   text: string
+  matchReasons?: string[]
+}
+
+export interface RetrievalDebugTraceStep {
+  stage: string
+  status: string
+  reason?: string
+  inputCount?: number
+  outputCount?: number
 }
 
 export interface EvalGroundTruthCase {
@@ -202,6 +211,7 @@ export interface RetrievalDebugResponse {
   contextPreview: string
   sources: Array<Record<string, string>>
   evalCandidate?: EvalGroundTruthCase
+  trace?: RetrievalDebugTraceStep[]
   items: RetrievalDebugChunk[]
 }
 

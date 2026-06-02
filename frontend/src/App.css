@@ -1389,18 +1389,35 @@
   cursor: not-allowed;
 }
 
-.kb-retrieval-context {
+.kb-retrieval-context,
+.kb-retrieval-trace {
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   background: #fff;
 }
 
-.kb-retrieval-context summary {
+.kb-retrieval-context summary,
+.kb-retrieval-trace summary {
   padding: 9px 12px;
   cursor: pointer;
   color: #334155;
   font-size: 12px;
   font-weight: 700;
+}
+
+.kb-retrieval-trace div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.kb-retrieval-trace span {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .kb-retrieval-context pre,
@@ -1456,6 +1473,23 @@
 
 .kb-retrieval-hit-head span {
   flex-shrink: 0;
+  font-weight: 700;
+}
+
+.kb-retrieval-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+
+.kb-retrieval-reasons span {
+  padding: 3px 7px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: #1d4ed8;
+  font-size: 11px;
   font-weight: 700;
 }
 

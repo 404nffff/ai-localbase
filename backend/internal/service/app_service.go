@@ -1374,17 +1374,64 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		return model.RetrievalDebugResponse{}, err
 	}
 
+	trace := []model.RetrievalDebugTraceStep{{
+		Stage:       "retrieve",
+		Status:      "ok",
+		Reason:      "基础检索、重排、MMR 和相关性过滤后的候选",
+		OutputCount: len(chunks),
+	}}
 	retrievalLowConfidence := isLowConfidenceSelection(query, chunks)
 	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(chatReq, query)
 	if err != nil {
 		return model.RetrievalDebugResponse{}, err
 	}
 	if deterministicUsed {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "deterministic",
+			Status:      "ok",
+			Reason:      "命中结构化查询意图，补充确定性结果",
+			InputCount:  len(chunks),
+			OutputCount: len(chunks) + len(deterministicChunks),
+		})
 		chunks = append(deterministicChunks, chunks...)
+	} else {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "deterministic",
+			Status:      "skipped",
+			Reason:      "未识别到可确定执行的结构化查询意图",
+			OutputCount: len(chunks),
+		})
 	}
+	expandedInputCount := len(chunks)
 	chunks = s.expandStructuredSourceRows(chatReq, query, chunks)
+	if len(chunks) != expandedInputCount {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "structured_source_expand",
+			Status:      "ok",
+			Reason:      "根据结构化摘要补全相关原始行",
+			InputCount:  expandedInputCount,
+			OutputCount: len(chunks),
+		})
+	}
+	dedupInputCount := len(chunks)
 	chunks = deduplicateRetrievedChunks(chunks)
+	if len(chunks) != dedupInputCount {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "deduplicate",
+			Status:      "ok",
+			Reason:      "移除重复 chunk，保留首个更靠前结果",
+			InputCount:  dedupInputCount,
+			OutputCount: len(chunks),
+		})
+	}
 	if req.TopK > 0 && len(chunks) > req.TopK {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "topk",
+			Status:      "ok",
+			Reason:      "根据调试 TopK 截断展示结果",
+			InputCount:  len(chunks),
+			OutputCount: req.TopK,
+		})
 		chunks = chunks[:req.TopK]
 	}
 
@@ -1403,6 +1450,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 			Kind:            chunk.Kind,
 			Score:           chunk.Score,
 			Text:            truncateRunes(strings.TrimSpace(chunk.Text), retrievalDebugChunkTextLimit),
+			MatchReasons:    buildRetrievalDebugMatchReasons(query, chunk, deterministicUsed),
 		})
 	}
 
@@ -1420,6 +1468,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		ContextPreview:    contextText,
 		Sources:           sources,
 		EvalCandidate:     evalCandidate,
+		Trace:             trace,
 		Items:             items,
 	}, nil
 }
@@ -3141,6 +3190,46 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 		return filtered
 	}
 	return nil
+}
+
+func buildRetrievalDebugMatchReasons(query string, chunk RetrievedChunk, deterministicUsed bool) []string {
+	reasons := make([]string, 0, 5)
+	terms := queryEvidenceTerms(query)
+	if len(terms) > 0 {
+		hits := evidenceHitCount(terms, chunk.Text)
+		if hits > 0 {
+			reasons = append(reasons, fmt.Sprintf("匹配查询证据词 %d/%d", hits, len(terms)))
+		} else {
+			reasons = append(reasons, "未直接匹配查询证据词，依赖向量相似度")
+		}
+	}
+
+	rawScore := chunkRawScore(chunk)
+	switch {
+	case rawScore >= 0.82:
+		reasons = append(reasons, "原始检索分较高")
+	case rawScore >= 0.55:
+		reasons = append(reasons, "原始检索分中等")
+	case rawScore > 0:
+		reasons = append(reasons, "原始检索分偏低")
+	}
+
+	coverage := keywordCoverage(query, chunk.Text)
+	if coverage >= 0.5 {
+		reasons = append(reasons, "关键词覆盖较好")
+	}
+
+	if chunk.Kind == "structured_summary" || chunk.Kind == "structured_row" {
+		reasons = append(reasons, "结构化数据片段")
+	}
+	if deterministicUsed && (chunk.Kind == "structured_summary" || chunk.Kind == "structured_row") {
+		reasons = append(reasons, "确定性结构化查询补充")
+	}
+
+	if len(reasons) == 0 {
+		reasons = append(reasons, "由检索排序策略保留")
+	}
+	return reasons
 }
 
 func (s *AppService) shouldBypassRerank(candidates []RetrievedChunk) bool {

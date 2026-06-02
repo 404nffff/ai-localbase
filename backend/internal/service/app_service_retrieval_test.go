@@ -255,6 +255,38 @@ func TestFilterRelevantChunksReturnsEmptyWhenNoEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildRetrievalDebugMatchReasons(t *testing.T) {
+	reasons := buildRetrievalDebugMatchReasons("武汉大学校长是谁", RetrievedChunk{
+		DocumentChunk: DocumentChunk{
+			Kind: "text",
+			Text: "武汉大学校长信息与学校治理结构说明。",
+		},
+		Score:    0.82,
+		RawScore: 0.86,
+	}, false)
+
+	joined := strings.Join(reasons, " ")
+	if !strings.Contains(joined, "匹配查询证据词") {
+		t.Fatalf("expected evidence match reason, got %#v", reasons)
+	}
+	if !strings.Contains(joined, "原始检索分较高") {
+		t.Fatalf("expected high score reason, got %#v", reasons)
+	}
+
+	structuredReasons := buildRetrievalDebugMatchReasons("谁的薪资最高", RetrievedChunk{
+		DocumentChunk: DocumentChunk{
+			Kind: "structured_row",
+			Text: "第2行：姓名：张三。薪资：24000。",
+		},
+		Score:    0.72,
+		RawScore: 0.61,
+	}, true)
+	joined = strings.Join(structuredReasons, " ")
+	if !strings.Contains(joined, "结构化数据片段") || !strings.Contains(joined, "确定性结构化查询补充") {
+		t.Fatalf("expected structured deterministic reasons, got %#v", structuredReasons)
+	}
+}
+
 func TestDeduplicateRetrievedChunks(t *testing.T) {
 	chunks := []RetrievedChunk{
 		{DocumentChunk: DocumentChunk{DocumentID: "doc-1", DocumentName: "sample.csv", Text: "文件：sample.csv。字段：字段A、字段B。数据行数：4。"}, Score: 0.99},

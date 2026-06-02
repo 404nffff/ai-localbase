@@ -442,29 +442,39 @@ type RetrievalDebugRequest struct {
 }
 
 type RetrievalDebugChunk struct {
-	ID              string  `json:"id"`
-	KnowledgeBaseID string  `json:"knowledgeBaseId"`
-	DocumentID      string  `json:"documentId"`
-	DocumentName    string  `json:"documentName"`
-	Index           int     `json:"index"`
-	Kind            string  `json:"kind"`
-	Score           float64 `json:"score"`
-	Text            string  `json:"text"`
+	ID              string   `json:"id"`
+	KnowledgeBaseID string   `json:"knowledgeBaseId"`
+	DocumentID      string   `json:"documentId"`
+	DocumentName    string   `json:"documentName"`
+	Index           int      `json:"index"`
+	Kind            string   `json:"kind"`
+	Score           float64  `json:"score"`
+	Text            string   `json:"text"`
+	MatchReasons    []string `json:"matchReasons,omitempty"`
+}
+
+type RetrievalDebugTraceStep struct {
+	Stage       string `json:"stage"`
+	Status      string `json:"status"`
+	Reason      string `json:"reason,omitempty"`
+	InputCount  int    `json:"inputCount,omitempty"`
+	OutputCount int    `json:"outputCount,omitempty"`
 }
 
 type RetrievalDebugResponse struct {
-	Query             string                `json:"query"`
-	KnowledgeBaseID   string                `json:"knowledgeBaseId,omitempty"`
-	DocumentID        string                `json:"documentId,omitempty"`
-	SearchMode        string                `json:"searchMode"`
-	StructuredIntent  string                `json:"structuredIntent,omitempty"`
-	TargetField       string                `json:"targetField,omitempty"`
-	DeterministicUsed bool                  `json:"deterministicUsed"`
-	ElapsedMs         int64                 `json:"elapsedMs"`
-	Count             int                   `json:"count"`
-	LowConfidence     bool                  `json:"lowConfidence"`
-	ContextPreview    string                `json:"contextPreview"`
-	Sources           []map[string]string   `json:"sources"`
-	EvalCandidate     *EvalGroundTruthCase  `json:"evalCandidate,omitempty"`
-	Items             []RetrievalDebugChunk `json:"items"`
+	Query             string                    `json:"query"`
+	KnowledgeBaseID   string                    `json:"knowledgeBaseId,omitempty"`
+	DocumentID        string                    `json:"documentId,omitempty"`
+	SearchMode        string                    `json:"searchMode"`
+	StructuredIntent  string                    `json:"structuredIntent,omitempty"`
+	TargetField       string                    `json:"targetField,omitempty"`
+	DeterministicUsed bool                      `json:"deterministicUsed"`
+	ElapsedMs         int64                     `json:"elapsedMs"`
+	Count             int                       `json:"count"`
+	LowConfidence     bool                      `json:"lowConfidence"`
+	ContextPreview    string                    `json:"contextPreview"`
+	Sources           []map[string]string       `json:"sources"`
+	EvalCandidate     *EvalGroundTruthCase      `json:"evalCandidate,omitempty"`
+	Trace             []RetrievalDebugTraceStep `json:"trace,omitempty"`
+	Items             []RetrievalDebugChunk     `json:"items"`
 }

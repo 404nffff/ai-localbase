@@ -94,6 +94,20 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
           </details>
         )}
 
+        {result.trace && result.trace.length > 0 && (
+          <details className="kb-retrieval-trace">
+            <summary>检索处理说明</summary>
+            <div>
+              {result.trace.map((step, index) => (
+                <span key={`${step.stage}-${index}`}>
+                  {step.stage}：{step.reason || step.status}
+                  {(step.inputCount || step.outputCount) ? `（${step.inputCount ?? '-'} -> ${step.outputCount ?? '-'}）` : ''}
+                </span>
+              ))}
+            </div>
+          </details>
+        )}
+
         <div className="kb-retrieval-hits">
           {result.items.length === 0 ? (
             <div className="kb-docs-empty">没有命中 chunk</div>
@@ -106,6 +120,13 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
                   <span>#{item.index + 1}</span>
                   <span>{item.score.toFixed(4)}</span>
                 </div>
+                {item.matchReasons && item.matchReasons.length > 0 && (
+                  <div className="kb-retrieval-reasons">
+                    {item.matchReasons.map((reason) => (
+                      <span key={reason}>{reason}</span>
+                    ))}
+                  </div>
+                )}
                 <pre>{item.text}</pre>
               </div>
             ))
