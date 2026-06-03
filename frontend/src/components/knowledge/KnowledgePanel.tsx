@@ -9,6 +9,7 @@ import type {
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
+  RetrievalSearchMode,
   RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
@@ -56,7 +57,7 @@ interface KnowledgePanelProps {
     datasetId: string,
     itemId: string,
   ) => Promise<DeleteEvalDatasetItemResponse>
-  onRunEvalDataset: (datasetId: string) => Promise<RunEvalDatasetResponse>
+  onRunEvalDataset: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -71,6 +72,7 @@ interface KnowledgePanelProps {
     knowledgeBaseId: string,
     query: string,
     documentId: string | null,
+    searchMode?: RetrievalSearchMode,
   ) => Promise<RetrievalDebugResponse>
   onClose: () => void
 }
@@ -131,6 +133,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [healthError, setHealthError] = useState('')
   const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
   const [retrievalQuery, setRetrievalQuery] = useState('')
+  const [retrievalSearchMode, setRetrievalSearchMode] = useState<RetrievalSearchMode>('auto')
   const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
   const [retrievalDebugResult, setRetrievalDebugResult] = useState<RetrievalDebugResponse | null>(null)
   const [retrievalDebugError, setRetrievalDebugError] = useState('')
@@ -359,8 +362,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     }
   }
 
-  const handleRunEvalDataset = async (datasetId: string) => {
-    const report = await onRunEvalDataset(datasetId)
+  const handleRunEvalDataset = async (datasetId: string, searchMode?: RetrievalSearchMode) => {
+    const report = await onRunEvalDataset(datasetId, searchMode)
     if (activeKnowledgeBaseId) {
       void loadEvalRuns(activeKnowledgeBaseId)
     }
@@ -416,7 +419,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setRetrievalDebugError('')
     setEvalCandidateSaveMessage('')
     try {
-      const result = await onDebugRetrieval(knowledgeBaseId, query, selectedDocumentId)
+      const result = await onDebugRetrieval(knowledgeBaseId, query, selectedDocumentId, retrievalSearchMode)
       setRetrievalDebugResult(result)
     } catch (error) {
       setRetrievalDebugResult(null)
@@ -644,12 +647,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       <RetrievalDebugPanel
                         scopeLabel={selectedScopeLabel}
                         query={retrievalQuery}
+                        searchMode={retrievalSearchMode}
                         result={retrievalDebugResult}
                         error={retrievalDebugError}
                         loading={retrievalDebugKnowledgeBaseId === activeKnowledgeBaseId}
                         savingEvalCandidate={savingEvalCandidate}
                         evalCandidateSaveMessage={evalCandidateSaveMessage}
                         onQueryChange={setRetrievalQuery}
+                        onSearchModeChange={setRetrievalSearchMode}
                         onRun={() => void handleRunRetrievalDebug(activeKnowledgeBaseId)}
                         onDownloadEvalCandidate={handleDownloadRetrievalEvalCandidate}
                         onAddEvalCandidate={() => void handleAddRetrievalEvalCandidate(activeKnowledgeBaseId)}

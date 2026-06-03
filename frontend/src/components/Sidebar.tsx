@@ -18,6 +18,7 @@ import type {
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
+  RetrievalSearchMode,
   RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
@@ -56,7 +57,7 @@ interface SidebarProps {
     datasetId: string,
     itemId: string,
   ) => Promise<DeleteEvalDatasetItemResponse>
-  onRunEvalDataset: (datasetId: string) => Promise<RunEvalDatasetResponse>
+  onRunEvalDataset: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -71,6 +72,7 @@ interface SidebarProps {
     knowledgeBaseId: string,
     query: string,
     documentId: string | null,
+    searchMode?: RetrievalSearchMode,
   ) => Promise<RetrievalDebugResponse>
   conversations: Conversation[]
   activeConversationId: string | null

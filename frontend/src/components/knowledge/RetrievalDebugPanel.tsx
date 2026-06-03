@@ -1,30 +1,46 @@
 import React from 'react'
-import type { RetrievalDebugResponse } from '../../services/api'
+import type { RetrievalDebugResponse, RetrievalSearchMode } from '../../services/api'
 import { chunkKindLabel, structuredIntentLabel } from './knowledgeLabels'
 
 interface RetrievalDebugPanelProps {
   scopeLabel: string
   query: string
+  searchMode: RetrievalSearchMode
   result: RetrievalDebugResponse | null
   error: string
   loading: boolean
   savingEvalCandidate: boolean
   evalCandidateSaveMessage: string
   onQueryChange: (value: string) => void
+  onSearchModeChange: (value: RetrievalSearchMode) => void
   onRun: () => void
   onDownloadEvalCandidate: () => void
   onAddEvalCandidate: () => void
 }
 
+const searchModeOptions: Array<{ value: RetrievalSearchMode; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'dense', label: '向量' },
+  { value: 'hybrid', label: '混合' },
+]
+
+const resolvedSearchModeLabel = (mode?: string) => {
+  if (mode === 'hybrid') return '混合检索'
+  if (mode === 'dense') return '向量检索'
+  return '等待检索'
+}
+
 const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
   scopeLabel,
   query,
+  searchMode,
   result,
   error,
   loading,
   savingEvalCandidate,
   evalCandidateSaveMessage,
   onQueryChange,
+  onSearchModeChange,
   onRun,
   onDownloadEvalCandidate,
   onAddEvalCandidate,
@@ -35,9 +51,24 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
         <h3>检索调试台</h3>
         <p>当前范围：{scopeLabel}</p>
       </div>
-      <span className="kb-retrieval-mode">
-        {result?.searchMode === 'hybrid' ? '混合检索' : '向量检索'}
-      </span>
+      <div className="kb-retrieval-mode-block">
+        <span className="kb-retrieval-mode">
+          {resolvedSearchModeLabel(result?.searchMode)}
+        </span>
+        <div className="kb-retrieval-mode-tabs" role="tablist" aria-label="检索模式">
+          {searchModeOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={searchMode === option.value ? 'active' : ''}
+              onClick={() => onSearchModeChange(option.value)}
+              disabled={loading}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
     <div className="kb-retrieval-input-row">
       <input

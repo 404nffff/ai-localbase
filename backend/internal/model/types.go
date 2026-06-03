@@ -225,6 +225,7 @@ type ChatCompletionRequest struct {
 	Messages        []ChatMessage        `json:"messages"`
 	KnowledgeBaseID string               `json:"knowledgeBaseId"`
 	DocumentID      string               `json:"documentId"`
+	RetrievalMode   string               `json:"retrievalMode,omitempty"`
 	Config          ChatModelConfig      `json:"config"`
 	Embedding       EmbeddingModelConfig `json:"embedding"`
 }
@@ -392,8 +393,9 @@ type DeleteEvalDatasetItemResponse struct {
 }
 
 type RunEvalDatasetRequest struct {
-	IncludeDisabled bool `json:"includeDisabled,omitempty"`
-	TopK            int  `json:"topK,omitempty"`
+	IncludeDisabled bool   `json:"includeDisabled,omitempty"`
+	TopK            int    `json:"topK,omitempty"`
+	SearchMode      string `json:"searchMode,omitempty"`
 }
 
 type EvalRunMetrics struct {
@@ -429,6 +431,7 @@ type RunEvalDatasetResponse struct {
 	DatasetName     string              `json:"datasetName"`
 	KnowledgeBaseID string              `json:"knowledgeBaseId,omitempty"`
 	DocumentID      string              `json:"documentId,omitempty"`
+	SearchMode      string              `json:"searchMode"`
 	StartedAt       string              `json:"startedAt"`
 	ElapsedMs       int64               `json:"elapsedMs"`
 	Metrics         EvalRunMetrics      `json:"metrics"`
@@ -441,6 +444,7 @@ type EvalRunSummary struct {
 	DatasetName     string         `json:"datasetName"`
 	KnowledgeBaseID string         `json:"knowledgeBaseId,omitempty"`
 	DocumentID      string         `json:"documentId,omitempty"`
+	SearchMode      string         `json:"searchMode"`
 	StartedAt       string         `json:"startedAt"`
 	ElapsedMs       int64          `json:"elapsedMs"`
 	Metrics         EvalRunMetrics `json:"metrics"`
@@ -455,6 +459,7 @@ type RetrievalDebugRequest struct {
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
 	DocumentID      string `json:"documentId"`
 	TopK            int    `json:"topK"`
+	SearchMode      string `json:"searchMode,omitempty"`
 }
 
 type RetrievalDebugChunk struct {

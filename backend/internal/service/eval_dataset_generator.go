@@ -459,11 +459,13 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 	if topK > 50 {
 		topK = 50
 	}
+	searchMode := normalizeRetrievalMode(req.SearchMode)
 
 	startedAt := time.Now()
 	startedAtLabel := startedAt.UTC().Format(time.RFC3339)
 	results := make([]model.EvalRunCaseResult, 0, len(dataset.Items))
 	skippedDisabled := 0
+	runSearchMode := ""
 	for _, item := range dataset.Items {
 		if item.Disabled && !req.IncludeDisabled {
 			skippedDisabled++
@@ -485,12 +487,16 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 			KnowledgeBaseID: dataset.KnowledgeBaseID,
 			DocumentID:      dataset.DocumentID,
 			TopK:            topK,
+			SearchMode:      searchMode,
 		}
 		if debugReq.KnowledgeBaseID == "" {
 			debugReq.KnowledgeBaseID = firstEvalSourceKnowledgeBaseID(item)
 		}
 
 		response, err := s.DebugRetrieve(debugReq)
+		if runSearchMode == "" && strings.TrimSpace(response.SearchMode) != "" {
+			runSearchMode = response.SearchMode
+		}
 		caseResult := model.EvalRunCaseResult{
 			CaseID:         item.ID,
 			Question:       item.Question,
@@ -528,6 +534,7 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 		DatasetName:     dataset.Name,
 		KnowledgeBaseID: dataset.KnowledgeBaseID,
 		DocumentID:      dataset.DocumentID,
+		SearchMode:      evalRunSearchModeLabel(runSearchMode, searchMode),
 		StartedAt:       startedAtLabel,
 		ElapsedMs:       time.Since(startedAt).Milliseconds(),
 		Metrics:         buildEvalRunMetrics(results, skippedDisabled),
@@ -567,10 +574,23 @@ func evalRunSummary(run model.RunEvalDatasetResponse) model.EvalRunSummary {
 		DatasetName:     run.DatasetName,
 		KnowledgeBaseID: run.KnowledgeBaseID,
 		DocumentID:      run.DocumentID,
+		SearchMode:      run.SearchMode,
 		StartedAt:       run.StartedAt,
 		ElapsedMs:       run.ElapsedMs,
 		Metrics:         run.Metrics,
 	}
+}
+
+func evalRunSearchModeLabel(actualMode, requestedMode string) string {
+	actualMode = strings.TrimSpace(actualMode)
+	if actualMode != "" {
+		return actualMode
+	}
+	requestedMode = normalizeRetrievalMode(requestedMode)
+	if requestedMode == "hybrid" {
+		return "hybrid"
+	}
+	return "dense"
 }
 
 func (s *AppService) saveEvalRun(run model.RunEvalDatasetResponse) error {

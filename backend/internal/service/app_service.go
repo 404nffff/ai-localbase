@@ -1405,6 +1405,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 	chatReq := model.ChatCompletionRequest{
 		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
 		DocumentID:      strings.TrimSpace(req.DocumentID),
+		RetrievalMode:   normalizeRetrievalMode(req.SearchMode),
 		Config:          s.currentChatConfig(),
 		Embedding:       s.currentEmbeddingConfig(),
 		Messages: []model.ChatMessage{{
@@ -1502,7 +1503,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		Query:             query,
 		KnowledgeBaseID:   chatReq.KnowledgeBaseID,
 		DocumentID:        chatReq.DocumentID,
-		SearchMode:        ternaryString(s.serverConfig.EnableHybridSearch, "hybrid", "dense"),
+		SearchMode:        s.resolvedRetrievalSearchMode(chatReq),
 		StructuredIntent:  string(deterministicResult.Plan.Intent),
 		TargetField:       deterministicResult.Plan.TargetField,
 		DeterministicUsed: deterministicUsed,
@@ -3492,6 +3493,13 @@ func (s *AppService) shouldUseHybridSearch(req model.ChatCompletionRequest) bool
 	if s == nil {
 		return false
 	}
+	mode := normalizeRetrievalMode(req.RetrievalMode)
+	if mode == "dense" {
+		return false
+	}
+	if mode == "hybrid" {
+		return true
+	}
 	if !s.serverConfig.EnableHybridSearch {
 		return false
 	}
@@ -3499,6 +3507,24 @@ func (s *AppService) shouldUseHybridSearch(req model.ChatCompletionRequest) bool
 		return false
 	}
 	return true
+}
+
+func (s *AppService) resolvedRetrievalSearchMode(req model.ChatCompletionRequest) string {
+	if s != nil && s.shouldUseHybridSearch(req) {
+		return "hybrid"
+	}
+	return "dense"
+}
+
+func normalizeRetrievalMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "dense", "vector":
+		return "dense"
+	case "hybrid":
+		return "hybrid"
+	default:
+		return "auto"
+	}
 }
 
 func (s *AppService) shouldUseHybridFallback(selected []RetrievedChunk) bool {

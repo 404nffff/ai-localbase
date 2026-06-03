@@ -443,6 +443,18 @@ func TestBuildEvalRunMetrics(t *testing.T) {
 	}
 }
 
+func TestEvalRunSearchModeLabel(t *testing.T) {
+	if actual := evalRunSearchModeLabel("hybrid", "dense"); actual != "hybrid" {
+		t.Fatalf("expected actual mode to win, got %s", actual)
+	}
+	if actual := evalRunSearchModeLabel("", "hybrid"); actual != "hybrid" {
+		t.Fatalf("expected requested hybrid fallback, got %s", actual)
+	}
+	if actual := evalRunSearchModeLabel("", "auto"); actual != "dense" {
+		t.Fatalf("expected unresolved auto to fall back to dense, got %s", actual)
+	}
+}
+
 func TestListEvalRunsAndDeleteDatasetCleanup(t *testing.T) {
 	tempDir := t.TempDir()
 	store := NewAppStateStore(filepath.Join(tempDir, "state.json"))

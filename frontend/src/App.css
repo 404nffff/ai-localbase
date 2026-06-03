@@ -1256,6 +1256,48 @@
   font-weight: 700;
 }
 
+.kb-retrieval-mode-block {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-retrieval-mode-tabs {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.kb-retrieval-mode-tabs button {
+  min-width: 42px;
+  border: 0;
+  border-right: 1px solid #dbeafe;
+  padding: 4px 9px;
+  background: transparent;
+  color: #475569;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.kb-retrieval-mode-tabs button:last-child {
+  border-right: 0;
+}
+
+.kb-retrieval-mode-tabs button.active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.kb-retrieval-mode-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .kb-retrieval-input-row {
   display: flex;
   gap: 8px;
@@ -2441,8 +2483,33 @@
   display: flex;
   flex-wrap: wrap;
   flex-shrink: 0;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.kb-eval-run-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kb-eval-dialog-actions .kb-eval-run-mode span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.kb-eval-run-mode select {
+  min-height: 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .kb-eval-dialog-actions button {
@@ -2912,7 +2979,7 @@
 
 .kb-eval-trend-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 9px;
   margin-bottom: 10px;
 }
@@ -3065,6 +3132,7 @@
   .kb-header-actions,
   .kb-workspace-actions,
   .kb-retrieval-input-row,
+  .kb-retrieval-mode-block,
   .kb-upload-task-compact,
   .kb-retrieval-eval,
   .kb-eval-trend-item,
@@ -3128,9 +3196,14 @@
   }
 
   .kb-eval-dialog-actions div,
+  .kb-eval-run-mode,
   .kb-eval-edit-row {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .kb-eval-run-mode {
+    align-items: stretch;
   }
 
   .kb-eval-dialog-actions button {

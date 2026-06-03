@@ -186,6 +186,25 @@ curl -X POST http://localhost:8080/api/eval/datasets/eval-xxx/runs \
   -d '{"includeDisabled":false,"topK":12}'
 ```
 
+如果要对比检索策略，可以通过 `searchMode` 指定运行模式：
+
+```bash
+# 自动模式：使用当前服务配置
+curl -X POST http://localhost:8080/api/eval/datasets/eval-xxx/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"includeDisabled":false,"topK":12,"searchMode":"auto"}'
+
+# 强制向量检索
+curl -X POST http://localhost:8080/api/eval/datasets/eval-xxx/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"includeDisabled":false,"topK":12,"searchMode":"dense"}'
+
+# 强制混合检索
+curl -X POST http://localhost:8080/api/eval/datasets/eval-xxx/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"includeDisabled":false,"topK":12,"searchMode":"hybrid"}'
+```
+
 运行结果会保存为质量趋势历史，可按知识库或评估集查询：
 
 ```bash

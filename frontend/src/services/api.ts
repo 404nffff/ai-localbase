@@ -215,6 +215,8 @@ export interface RetrievalDebugResponse {
   items: RetrievalDebugChunk[]
 }
 
+export type RetrievalSearchMode = 'auto' | 'dense' | 'hybrid'
+
 export interface GenerateEvalDatasetResponse {
   datasetId?: string
   knowledgeBaseId?: string
@@ -303,6 +305,7 @@ export interface RunEvalDatasetResponse {
   datasetName: string
   knowledgeBaseId?: string
   documentId?: string
+  searchMode: string
   startedAt: string
   elapsedMs: number
   metrics: EvalRunMetrics
@@ -586,10 +589,11 @@ export const deleteEvalDatasetItem = async (
 
 export const runEvalDataset = async (
   datasetId: string,
+  searchMode: RetrievalSearchMode = 'auto',
 ): Promise<RunEvalDatasetResponse> => (
   requestJson<RunEvalDatasetResponse>(
     `/api/eval/datasets/${datasetId}/runs`,
-    jsonRequest({ includeDisabled: false, topK: 12 }, { method: 'POST' }),
+    jsonRequest({ includeDisabled: false, topK: 12, searchMode }, { method: 'POST' }),
   )
 )
 
@@ -608,9 +612,10 @@ export const debugKnowledgeBaseRetrieval = async (
   knowledgeBaseId: string,
   query: string,
   documentId?: string | null,
+  searchMode: RetrievalSearchMode = 'auto',
 ): Promise<RetrievalDebugResponse> => (
   requestJson<RetrievalDebugResponse>(
     `/api/knowledge-bases/${knowledgeBaseId}/retrieval/debug`,
-    jsonRequest({ query, documentId: documentId ?? '', topK: 12 }, { method: 'POST' }),
+    jsonRequest({ query, documentId: documentId ?? '', topK: 12, searchMode }, { method: 'POST' }),
   )
 )

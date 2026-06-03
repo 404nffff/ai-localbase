@@ -83,12 +83,41 @@ func TestShouldUseHybridSearch(t *testing.T) {
 		t.Fatal("expected hybrid search to be disabled by default")
 	}
 
+	if !service.shouldUseHybridSearch(model.ChatCompletionRequest{KnowledgeBaseID: "kb-1", RetrievalMode: "hybrid"}) {
+		t.Fatal("expected request-level hybrid mode to override disabled server config")
+	}
+
 	service.serverConfig.EnableHybridSearch = true
 	if !service.shouldUseHybridSearch(model.ChatCompletionRequest{KnowledgeBaseID: "kb-1"}) {
 		t.Fatal("expected hybrid search to be enabled for knowledge base scope")
 	}
+	if service.shouldUseHybridSearch(model.ChatCompletionRequest{KnowledgeBaseID: "kb-1", RetrievalMode: "dense"}) {
+		t.Fatal("expected request-level dense mode to override enabled server config")
+	}
 	if service.shouldUseHybridSearch(model.ChatCompletionRequest{DocumentID: "doc-1"}) {
 		t.Fatal("expected document scope to keep dense-only retrieval")
+	}
+}
+
+func TestNormalizeRetrievalMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: "auto"},
+		{name: "dense", input: "dense", expected: "dense"},
+		{name: "vector alias", input: " vector ", expected: "dense"},
+		{name: "hybrid", input: "HYBRID", expected: "hybrid"},
+		{name: "unknown", input: "keyword", expected: "auto"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if actual := normalizeRetrievalMode(tt.input); actual != tt.expected {
+				t.Fatalf("expected %s, got %s", tt.expected, actual)
+			}
+		})
 	}
 }
 

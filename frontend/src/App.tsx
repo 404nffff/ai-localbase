@@ -39,6 +39,7 @@ import type {
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
+  RetrievalSearchMode,
   RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
@@ -852,9 +853,10 @@ function App() {
 
   const handleRunEvalDataset = async (
     datasetId: string,
+    searchMode: RetrievalSearchMode = 'auto',
   ): Promise<RunEvalDatasetResponse> => {
     try {
-      return await runEvalDataset(datasetId)
+      return await runEvalDataset(datasetId, searchMode)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '运行评估失败，请稍后重试。'
@@ -1168,8 +1170,9 @@ function App() {
     knowledgeBaseId: string,
     query: string,
     documentId: string | null,
+    searchMode: RetrievalSearchMode = 'auto',
   ): Promise<RetrievalDebugResponse> => {
-    return debugKnowledgeBaseRetrieval(knowledgeBaseId, query, documentId)
+    return debugKnowledgeBaseRetrieval(knowledgeBaseId, query, documentId, searchMode)
   }
 
   const handleSendMessage = async (content: string) => {

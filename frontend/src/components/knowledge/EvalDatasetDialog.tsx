@@ -3,6 +3,7 @@ import type {
   EvalDatasetDetail,
   EvalGroundTruthCase,
   GenerateEvalDatasetResponse,
+  RetrievalSearchMode,
   RunEvalDatasetResponse,
 } from '../../services/api'
 
@@ -18,7 +19,7 @@ interface EvalDatasetDialogProps {
     item: EvalGroundTruthCase,
   ) => Promise<EvalGroundTruthCase>
   onDeleteItem?: (datasetId: string, itemId: string) => Promise<void>
-  onRun?: (datasetId: string) => Promise<RunEvalDatasetResponse>
+  onRun?: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
 }
 
 interface EvalItemDraft {
@@ -122,6 +123,12 @@ const itemFromDraft = (item: EvalGroundTruthCase, draft: EvalItemDraft): EvalGro
 
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`
 
+const searchModeLabel = (mode?: string) => {
+  if (mode === 'hybrid') return '混合检索'
+  if (mode === 'dense') return '向量检索'
+  return '自动'
+}
+
 const downloadEvalDataset = (dataset: EvalDatasetDialogDataset, enabledOnly: boolean) => {
   const items = enabledOnly ? dataset.items.filter((item) => !item.disabled) : dataset.items
   const blob = new Blob([JSON.stringify(items, null, 2)], {
@@ -153,6 +160,7 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
   const [savingItemId, setSavingItemId] = useState<string | null>(null)
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [evalSearchMode, setEvalSearchMode] = useState<RetrievalSearchMode>('auto')
   const [evalRun, setEvalRun] = useState<RunEvalDatasetResponse | null>(null)
   const [actionError, setActionError] = useState('')
 
@@ -222,7 +230,7 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
     setRunning(true)
     setActionError('')
     try {
-      const report = await onRun(datasetId)
+      const report = await onRun(datasetId, evalSearchMode)
       setEvalRun(report)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '运行评估失败')
@@ -273,7 +281,9 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
                 <span>最近一次评估</span>
                 <strong>{evalRun.runId}</strong>
               </div>
-              <span>{new Date(evalRun.startedAt).toLocaleString()} · {evalRun.elapsedMs}ms</span>
+              <span>
+                {searchModeLabel(evalRun.searchMode)} · {new Date(evalRun.startedAt).toLocaleString()} · {evalRun.elapsedMs}ms
+              </span>
             </div>
             <div className="kb-eval-run-metrics">
               <div>
@@ -487,6 +497,20 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
             {datasetId ? ` 已保存为 ${datasetId}。` : ''}
           </span>
           <div>
+            {onRun && datasetId && (
+              <label className="kb-eval-run-mode">
+                <span>检索模式</span>
+                <select
+                  value={evalSearchMode}
+                  onChange={(event) => setEvalSearchMode(event.currentTarget.value as RetrievalSearchMode)}
+                  disabled={running}
+                >
+                  <option value="auto">自动</option>
+                  <option value="dense">向量</option>
+                  <option value="hybrid">混合</option>
+                </select>
+              </label>
+            )}
             {onRun && datasetId && (
               <button onClick={() => void runDataset()} disabled={running}>
                 {running ? '评估中' : '运行评估'}

@@ -10,6 +10,12 @@ interface EvalRunTrendPanelProps {
 
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`
 
+const searchModeLabel = (mode?: string) => {
+  if (mode === 'hybrid') return '混合'
+  if (mode === 'dense') return '向量'
+  return '自动'
+}
+
 const formatDateTime = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
@@ -72,13 +78,17 @@ const EvalRunTrendPanel: React.FC<EvalRunTrendPanelProps> = ({
               <strong>{latest?.metrics.latencyP95Ms ?? 0}ms</strong>
               <span>检索 P95</span>
             </div>
+            <div>
+              <strong>{searchModeLabel(latest?.searchMode)}</strong>
+              <span>最新模式</span>
+            </div>
           </div>
           <div className="kb-eval-trend-list">
             {visibleRuns.map((run) => (
               <article key={run.runId} className="kb-eval-trend-item">
                 <div>
                   <strong>{run.datasetName || run.datasetId}</strong>
-                  <span>{formatDateTime(run.startedAt)} · {run.metrics.totalCases} 条用例</span>
+                  <span>{formatDateTime(run.startedAt)} · {searchModeLabel(run.searchMode)} · {run.metrics.totalCases} 条用例</span>
                 </div>
                 <div className="kb-eval-trend-metrics">
                   <span>Hit {formatPercent(run.metrics.hitRate)}</span>
