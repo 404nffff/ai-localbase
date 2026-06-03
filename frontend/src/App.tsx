@@ -133,6 +133,9 @@ export interface MCPConfig {
 export interface RetrievalConfig {
   defaultSearchMode: 'dense' | 'hybrid'
   hybridSearchEnabled: boolean
+  rerankStrategy: 'keyword' | 'semantic'
+  enableQueryRewrite: boolean
+  queryRewriteMaxVariants: number
   topKDocument: number
   candidateTopKDocument: number
   topKKnowledgeBase: number
@@ -165,6 +168,9 @@ const STREAM_REQUEST_TIMEOUT_MS = 180_000
 const defaultRetrievalConfig: RetrievalConfig = {
   defaultSearchMode: 'dense',
   hybridSearchEnabled: false,
+  rerankStrategy: 'keyword',
+  enableQueryRewrite: false,
+  queryRewriteMaxVariants: 3,
   topKDocument: 6,
   candidateTopKDocument: 12,
   topKKnowledgeBase: 10,
@@ -323,6 +329,14 @@ const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): Ap
     retrieval: {
       defaultSearchMode: retrieval.defaultSearchMode === 'hybrid' ? 'hybrid' : 'dense',
       hybridSearchEnabled: Boolean(retrieval.hybridSearchEnabled),
+      rerankStrategy: retrieval.rerankStrategy === 'semantic' ? 'semantic' : 'keyword',
+      enableQueryRewrite: Boolean(retrieval.enableQueryRewrite),
+      queryRewriteMaxVariants: clampNumber(
+        retrieval.queryRewriteMaxVariants,
+        fallback.retrieval.queryRewriteMaxVariants,
+        1,
+        5,
+      ),
       topKDocument,
       candidateTopKDocument: clampNumber(
         retrieval.candidateTopKDocument,

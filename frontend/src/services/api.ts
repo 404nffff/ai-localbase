@@ -206,6 +206,8 @@ export interface RetrievalDebugResponse {
   knowledgeBaseId?: string
   documentId?: string
   searchMode: string
+  rerankStrategy: string
+  queryRewriteUsed: boolean
   structuredIntent?: string
   targetField?: string
   deterministicUsed: boolean

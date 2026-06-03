@@ -245,6 +245,46 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               </label>
 
               <label className="settings-field">
+                <span>重排策略</span>
+                <select
+                  value={config.retrieval.rerankStrategy}
+                  onChange={(event) =>
+                    onRetrievalConfigChange(
+                      'rerankStrategy',
+                      event.target.value as RetrievalConfig['rerankStrategy'],
+                    )
+                  }
+                >
+                  <option value="keyword">关键词融合</option>
+                  <option value="semantic">语义重排</option>
+                </select>
+              </label>
+
+              <label className="settings-field settings-field-toggle">
+                <span>Query Rewrite</span>
+                <input
+                  type="checkbox"
+                  checked={config.retrieval.enableQueryRewrite}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('enableQueryRewrite', event.target.checked)
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>改写数量</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={config.retrieval.queryRewriteMaxVariants}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('queryRewriteMaxVariants', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
                 <span>文档 TopK</span>
                 <input
                   type="number"

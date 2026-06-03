@@ -74,6 +74,19 @@ func (r *LLMQueryRewriter) SetChatConfigProvider(provider func() model.ChatModel
 	r.chatConfig = provider
 }
 
+func (r *LLMQueryRewriter) SetMaxVariants(maxVariants int) {
+	if r == nil {
+		return
+	}
+	if maxVariants < 1 {
+		maxVariants = 1
+	}
+	if maxVariants > 5 {
+		maxVariants = 5
+	}
+	r.maxVariants = maxVariants
+}
+
 // Rewrite 使用 LLM 将原始 query 重写为多个变体
 func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversationHistory []string) (QueryRewriteResult, error) {
 	result := QueryRewriteResult{OriginalQuery: query}

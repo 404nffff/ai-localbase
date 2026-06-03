@@ -72,6 +72,9 @@ type MCPConfig struct {
 type RetrievalConfig struct {
 	DefaultSearchMode        string `json:"defaultSearchMode"`
 	HybridSearchEnabled      bool   `json:"hybridSearchEnabled"`
+	RerankStrategy           string `json:"rerankStrategy"`
+	EnableQueryRewrite       bool   `json:"enableQueryRewrite"`
+	QueryRewriteMaxVariants  int    `json:"queryRewriteMaxVariants"`
 	TopKDocument             int    `json:"topKDocument"`
 	CandidateTopKDocument    int    `json:"candidateTopKDocument"`
 	TopKKnowledgeBase        int    `json:"topKKnowledgeBase"`
@@ -504,6 +507,8 @@ type RetrievalDebugResponse struct {
 	KnowledgeBaseID   string                    `json:"knowledgeBaseId,omitempty"`
 	DocumentID        string                    `json:"documentId,omitempty"`
 	SearchMode        string                    `json:"searchMode"`
+	RerankStrategy    string                    `json:"rerankStrategy"`
+	QueryRewriteUsed  bool                      `json:"queryRewriteUsed"`
 	StructuredIntent  string                    `json:"structuredIntent,omitempty"`
 	TargetField       string                    `json:"targetField,omitempty"`
 	DeterministicUsed bool                      `json:"deterministicUsed"`

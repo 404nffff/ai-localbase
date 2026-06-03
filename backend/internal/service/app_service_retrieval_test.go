@@ -121,6 +121,34 @@ func TestNormalizeRetrievalMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeRetrievalConfigIncludesRerankAndRewrite(t *testing.T) {
+	cfg := normalizeRetrievalConfig(model.RetrievalConfig{}, model.ServerConfig{
+		EnableSemanticReranker: true,
+		EnableQueryRewrite:     true,
+	})
+	if cfg.RerankStrategy != "semantic" {
+		t.Fatalf("expected semantic rerank default from server config, got %s", cfg.RerankStrategy)
+	}
+	if !cfg.EnableQueryRewrite {
+		t.Fatal("expected query rewrite default from server config")
+	}
+	if cfg.QueryRewriteMaxVariants != 3 {
+		t.Fatalf("expected default query rewrite variants 3, got %d", cfg.QueryRewriteMaxVariants)
+	}
+
+	cfg = normalizeRetrievalConfig(model.RetrievalConfig{
+		RerankStrategy:          "keyword",
+		EnableQueryRewrite:      false,
+		QueryRewriteMaxVariants: 9,
+	}, model.ServerConfig{EnableSemanticReranker: true, EnableQueryRewrite: true})
+	if cfg.RerankStrategy != "keyword" {
+		t.Fatalf("expected explicit keyword strategy, got %s", cfg.RerankStrategy)
+	}
+	if cfg.QueryRewriteMaxVariants != 5 {
+		t.Fatalf("expected variants to be clamped to 5, got %d", cfg.QueryRewriteMaxVariants)
+	}
+}
+
 func TestSelectWithMMRRespectsPerDocumentLimit(t *testing.T) {
 	candidates := []RetrievedChunk{
 		{DocumentChunk: DocumentChunk{DocumentID: "doc-a", Text: "示例机构 团队 规模", Index: 0}, Score: 0.98},

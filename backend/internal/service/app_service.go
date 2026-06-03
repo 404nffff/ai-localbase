@@ -11,9 +11,7 @@ import (
 	"mime/multipart"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -56,13 +54,6 @@ type AppService struct {
 	queryRewriter     QueryRewriter
 	semanticCache     *SemanticCache
 	contextCompressor ContextCompressor
-}
-
-// SemanticReranker 语义重排器接口
-// Rerank 对候选 chunks 按与 query 的语义相关度重新排序
-// 返回排序后的 chunks（score 已更新）
-type SemanticReranker interface {
-	Rerank(ctx context.Context, query string, chunks []RetrievedChunk) ([]RetrievedChunk, error)
 }
 
 // ContextCompressor 上下文压缩器接口
@@ -127,193 +118,6 @@ func (c *LLMContextCompressor) Compress(ctx context.Context, query string, chunk
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
-// EmbeddingReranker 基于 embedding cosine similarity 的重排器
-// 这是一个轻量级实现：计算 query embedding 与每个 chunk embedding 的 cosine similarity
-// 不依赖外部模型服务，直接复用现有 EmbedTexts 能力
-type EmbeddingReranker struct {
-	ragSvc          *RagService
-	embeddingConfig func() model.EmbeddingModelConfig
-	vectorSize      func() int
-	embed           func(ctx context.Context, cfg model.EmbeddingModelConfig, texts []string, vectorSize int) ([][]float64, error)
-}
-
-// NewEmbeddingReranker 创建基于 embedding 的重排器
-func NewEmbeddingReranker(ragSvc *RagService) *EmbeddingReranker {
-	return &EmbeddingReranker{ragSvc: ragSvc}
-}
-
-// SetEmbeddingConfigProvider 注入 embedding 配置提供函数
-func (r *EmbeddingReranker) SetEmbeddingConfigProvider(provider func() model.EmbeddingModelConfig) {
-	r.embeddingConfig = provider
-}
-
-// SetVectorSizeProvider 注入向量维度提供函数
-func (r *EmbeddingReranker) SetVectorSizeProvider(provider func() int) {
-	r.vectorSize = provider
-}
-
-// Rerank 使用 embedding cosine similarity 重排
-func (r *EmbeddingReranker) Rerank(ctx context.Context, query string, chunks []RetrievedChunk) ([]RetrievedChunk, error) {
-	if len(chunks) == 0 {
-		return nil, nil
-	}
-	if r == nil {
-		return nil, fmt.Errorf("embedding reranker is nil")
-	}
-
-	cfg := model.EmbeddingModelConfig{}
-	if r.embeddingConfig != nil {
-		cfg = r.embeddingConfig()
-	}
-	vectorSize := 0
-	if r.vectorSize != nil {
-		vectorSize = r.vectorSize()
-	}
-
-	embed := r.embed
-	if embed == nil {
-		if r.ragSvc == nil {
-			return nil, fmt.Errorf("rag service is nil")
-		}
-		embed = r.ragSvc.EmbedTexts
-	}
-
-	queryVectors, err := embed(ctx, cfg, []string{query}, vectorSize)
-	if err != nil {
-		return nil, fmt.Errorf("embed query: %w", err)
-	}
-	if len(queryVectors) == 0 {
-		return nil, fmt.Errorf("empty query embedding")
-	}
-
-	texts := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		texts = append(texts, chunk.Text)
-	}
-	chunkVectors, err := embed(ctx, cfg, texts, vectorSize)
-	if err != nil {
-		return nil, fmt.Errorf("embed chunks: %w", err)
-	}
-	if len(chunkVectors) != len(chunks) {
-		return nil, fmt.Errorf("embedding size mismatch: %d != %d", len(chunkVectors), len(chunks))
-	}
-
-	queryVec := float64ToFloat32(queryVectors[0])
-	ranked := make([]RetrievedChunk, len(chunks))
-	copy(ranked, chunks)
-	for i := range ranked {
-		chunkVec := float64ToFloat32(chunkVectors[i])
-		similarity := cosineSimilarity(queryVec, chunkVec)
-		ranked[i].Score = float64(similarity)
-	}
-
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].Score == ranked[j].Score {
-			if ranked[i].DocumentID == ranked[j].DocumentID {
-				return ranked[i].Index < ranked[j].Index
-			}
-			return ranked[i].DocumentID < ranked[j].DocumentID
-		}
-		return ranked[i].Score > ranked[j].Score
-	})
-	return ranked, nil
-}
-
-// LLMReranker 基于 LLM 打分的重排器
-// 对每个 (query, chunk) 对，让 LLM 打 0-10 的相关度分数
-// 精度更高但延迟更大，适合 topK 较小的场景（≤5个候选）
-type LLMReranker struct {
-	llmSvc     *LLMService
-	chatConfig func() model.ChatModelConfig
-}
-
-// SetChatConfigProvider 注入 Chat 配置提供函数
-func (r *LLMReranker) SetChatConfigProvider(provider func() model.ChatModelConfig) {
-	r.chatConfig = provider
-}
-
-// Rerank 使用 LLM 对每个候选打分
-func (r *LLMReranker) Rerank(ctx context.Context, query string, chunks []RetrievedChunk) ([]RetrievedChunk, error) {
-	if len(chunks) == 0 {
-		return nil, nil
-	}
-	if r == nil || r.llmSvc == nil {
-		return nil, fmt.Errorf("llm service is nil")
-	}
-
-	config := model.ChatModelConfig{}
-	if r.chatConfig != nil {
-		config = r.chatConfig()
-	}
-	if strings.TrimSpace(config.Model) == "" {
-		return nil, fmt.Errorf("chat model config is empty")
-	}
-
-	scores := make([]float64, len(chunks))
-	sem := make(chan struct{}, 3)
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(chunks))
-
-	for i, chunk := range chunks {
-		wg.Add(1)
-		go func(idx int, text string) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				errChan <- ctx.Err()
-				return
-			}
-
-			prompt := fmt.Sprintf("请评估以下文档与问题的相关度，返回0-10的整数分数。\n问题：%s\n文档：%s\n分数：", query, text)
-			resp, err := r.llmSvc.Chat(model.ChatCompletionRequest{
-				Messages: []model.ChatMessage{{Role: "user", Content: prompt}},
-				Config:   config,
-			})
-			if err != nil {
-				errChan <- err
-				return
-			}
-			if len(resp.Choices) == 0 {
-				errChan <- fmt.Errorf("empty llm response")
-				return
-			}
-			score, err := parseLLMScore(resp.Choices[0].Message.Content)
-			if err != nil {
-				errChan <- err
-				return
-			}
-			scores[idx] = score
-		}(i, chunk.Text)
-	}
-
-	wg.Wait()
-	close(errChan)
-	for err := range errChan {
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	ranked := make([]RetrievedChunk, len(chunks))
-	copy(ranked, chunks)
-	for i := range ranked {
-		ranked[i].Score = scores[i]
-	}
-
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].Score == ranked[j].Score {
-			if ranked[i].DocumentID == ranked[j].DocumentID {
-				return ranked[i].Index < ranked[j].Index
-			}
-			return ranked[i].DocumentID < ranked[j].DocumentID
-		}
-		return ranked[i].Score > ranked[j].Score
-	})
-	return ranked, nil
-}
-
 func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory ChatHistoryStore, serverConfig model.ServerConfig) *AppService {
 	service := &AppService{
 		state:        defaultAppState(serverConfig),
@@ -326,26 +130,20 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	}
 	service.rag.SetQdrantService(qdrant)
 
-	if serverConfig.EnableSemanticReranker {
-		service.reranker = NewEmbeddingReranker(service.rag)
-		if embeddingReranker, ok := service.reranker.(*EmbeddingReranker); ok {
-			embeddingReranker.SetEmbeddingConfigProvider(service.currentEmbeddingConfig)
-			embeddingReranker.SetVectorSizeProvider(service.qdrantVectorSize)
-		}
+	service.reranker = NewEmbeddingReranker(service.rag)
+	if embeddingReranker, ok := service.reranker.(*EmbeddingReranker); ok {
+		embeddingReranker.SetEmbeddingConfigProvider(service.currentEmbeddingConfig)
+		embeddingReranker.SetVectorSizeProvider(service.qdrantVectorSize)
 	}
 
 	if serverConfig.EnableSemanticCache {
 		service.semanticCache = NewSemanticCache(0, 0, 0)
 	}
 
-	if serverConfig.EnableQueryRewrite || serverConfig.EnableContextCompression {
-		llmService := NewLLMService()
-		if serverConfig.EnableQueryRewrite {
-			service.SetQueryRewriter(NewLLMQueryRewriter(llmService, 3))
-		}
-		if serverConfig.EnableContextCompression {
-			service.SetContextCompressor(NewLLMContextCompressor(llmService, 800))
-		}
+	llmService := NewLLMService()
+	service.SetQueryRewriter(NewLLMQueryRewriter(llmService, 3))
+	if serverConfig.EnableContextCompression {
+		service.SetContextCompressor(NewLLMContextCompressor(llmService, 800))
 	}
 
 	if store != nil {
@@ -378,6 +176,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if strings.TrimSpace(service.state.Config.MCP.Token) == "" {
 		service.state.Config.MCP.Token = generateMCPToken()
 	}
+	service.state.Config.Retrieval = normalizeRetrievalConfig(service.state.Config.Retrieval, serverConfig)
 
 	for kbID := range service.state.KnowledgeBases {
 		if err := service.ensureKnowledgeBaseCollection(kbID); err != nil {
@@ -613,6 +412,9 @@ func defaultRetrievalConfig(serverConfig model.ServerConfig) model.RetrievalConf
 func normalizeRetrievalConfig(cfg model.RetrievalConfig, serverConfig model.ServerConfig) model.RetrievalConfig {
 	emptyConfig := strings.TrimSpace(cfg.DefaultSearchMode) == "" &&
 		!cfg.HybridSearchEnabled &&
+		strings.TrimSpace(cfg.RerankStrategy) == "" &&
+		!cfg.EnableQueryRewrite &&
+		cfg.QueryRewriteMaxVariants == 0 &&
 		cfg.TopKDocument == 0 &&
 		cfg.CandidateTopKDocument == 0 &&
 		cfg.TopKKnowledgeBase == 0 &&
@@ -626,6 +428,17 @@ func normalizeRetrievalConfig(cfg model.RetrievalConfig, serverConfig model.Serv
 		if serverConfig.EnableHybridSearch {
 			mode = "hybrid"
 		}
+	}
+	rerankStrategy := normalizeRerankStrategy(cfg.RerankStrategy)
+	if rerankStrategy == "" {
+		rerankStrategy = "keyword"
+		if serverConfig.EnableSemanticReranker {
+			rerankStrategy = "semantic"
+		}
+	}
+	queryRewriteMaxVariants := cfg.QueryRewriteMaxVariants
+	if queryRewriteMaxVariants <= 0 {
+		queryRewriteMaxVariants = 3
 	}
 	topKDocument := cfg.TopKDocument
 	if topKDocument <= 0 {
@@ -671,14 +484,19 @@ func normalizeRetrievalConfig(cfg model.RetrievalConfig, serverConfig model.Serv
 	}
 	hybridSearchEnabled := cfg.HybridSearchEnabled
 	enableLowConfidenceBoost := cfg.EnableLowConfidenceBoost
+	enableQueryRewrite := cfg.EnableQueryRewrite
 	if emptyConfig {
 		hybridSearchEnabled = serverConfig.EnableHybridSearch
 		enableLowConfidenceBoost = serverConfig.RetrievalEnableAutoExpand
+		enableQueryRewrite = serverConfig.EnableQueryRewrite
 	}
 
 	return model.RetrievalConfig{
 		DefaultSearchMode:        mode,
 		HybridSearchEnabled:      hybridSearchEnabled,
+		RerankStrategy:           rerankStrategy,
+		EnableQueryRewrite:       enableQueryRewrite,
+		QueryRewriteMaxVariants:  minInt(maxInt(queryRewriteMaxVariants, 1), 5),
 		TopKDocument:             topKDocument,
 		CandidateTopKDocument:    maxInt(candidateTopKDocument, topKDocument),
 		TopKKnowledgeBase:        topKKnowledgeBase,
@@ -690,6 +508,12 @@ func normalizeRetrievalConfig(cfg model.RetrievalConfig, serverConfig model.Serv
 }
 
 func validateRetrievalConfig(cfg model.RetrievalConfig) error {
+	if normalizeRerankStrategy(cfg.RerankStrategy) == "" {
+		return fmt.Errorf("rerank strategy must be keyword or semantic")
+	}
+	if cfg.QueryRewriteMaxVariants < 1 || cfg.QueryRewriteMaxVariants > 5 {
+		return fmt.Errorf("query rewrite max variants must be between 1 and 5")
+	}
 	if cfg.TopKDocument < 1 || cfg.TopKDocument > 30 {
 		return fmt.Errorf("document topK must be between 1 and 30")
 	}
@@ -1469,7 +1293,7 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 
 	var queryVector []float64
 	embeddingStartedAt := time.Now()
-	if s.queryRewriter == nil {
+	if !s.queryRewriteEnabled() {
 		embedCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
@@ -1536,6 +1360,24 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		Reason:      "基础检索、重排、MMR 和相关性过滤后的候选",
 		OutputCount: len(chunks),
 	}}
+	trace = append(trace, model.RetrievalDebugTraceStep{
+		Stage:  "rerank",
+		Status: "ok",
+		Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategy()),
+	})
+	if s.queryRewriteEnabled() {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "query_rewrite",
+			Status: "ok",
+			Reason: fmt.Sprintf("已启用查询改写，最多生成 %d 个查询变体", s.queryRewriteMaxVariants()),
+		})
+	} else {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "query_rewrite",
+			Status: "skipped",
+			Reason: "未启用查询改写",
+		})
+	}
 	retrievalLowConfidence := isLowConfidenceSelection(query, chunks)
 	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(chatReq, query)
 	if err != nil {
@@ -1618,6 +1460,8 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		KnowledgeBaseID:   chatReq.KnowledgeBaseID,
 		DocumentID:        chatReq.DocumentID,
 		SearchMode:        s.resolvedRetrievalSearchMode(chatReq),
+		RerankStrategy:    s.rerankStrategy(),
+		QueryRewriteUsed:  s.queryRewriteEnabled(),
 		StructuredIntent:  string(deterministicResult.Plan.Intent),
 		TargetField:       deterministicResult.Plan.TargetField,
 		DeterministicUsed: deterministicUsed,
@@ -1971,7 +1815,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		}
 	}
 
-	if s.queryRewriter != nil {
+	if s.queryRewriteEnabled() {
 		if setter, ok := s.queryRewriter.(interface {
 			SetChatConfigProvider(func() model.ChatModelConfig)
 		}); ok {
@@ -1979,46 +1823,35 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 				return s.resolveChatConfig(req)
 			})
 		}
+		if setter, ok := s.queryRewriter.(interface {
+			SetMaxVariants(int)
+		}); ok {
+			setter.SetMaxVariants(s.queryRewriteMaxVariants())
+		}
 		history := recentConversationHistory(req.Messages, 3)
 		rewriteResult, err := s.queryRewriter.Rewrite(ctx, query, history)
 		if err != nil {
-			return nil, err
-		}
-		queries := rewriteResult.RewrittenQueries
-		if len(queries) == 0 {
-			queries = []string{query}
-		}
-		embeddingConfig := s.resolveEmbeddingConfig(req)
-
-		candidates := make([]RetrievedChunk, 0)
-		seenChunkIDs := make(map[string]struct{})
-		for _, knowledgeBaseID := range knowledgeBaseIDs {
-			results, err := s.rag.MultiQuerySearch(ctx, queries, knowledgeBaseID, params.candidateTopK, 0, embeddingConfig)
-			if err != nil {
-				return nil, fmt.Errorf("multi query search qdrant collection %s: %w", knowledgeBaseID, err)
+			logRetrievalStageMetrics(req, query, "query_rewrite", time.Now(), map[string]any{
+				"status": "error",
+				"error":  err.Error(),
+			})
+		} else {
+			logRetrievalStageMetrics(req, query, "query_rewrite", time.Now(), map[string]any{
+				"status":  "ok",
+				"queries": len(rewriteResult.RewrittenQueries),
+			})
+			queries := rewriteResult.RewrittenQueries
+			if len(queries) == 0 {
+				queries = []string{query}
 			}
-			for _, item := range results {
-				if strings.TrimSpace(req.DocumentID) != "" && item.DocumentID != req.DocumentID {
-					continue
-				}
-				if _, exists := seenChunkIDs[item.ID]; exists {
-					continue
-				}
-				seenChunkIDs[item.ID] = struct{}{}
-				candidates = append(candidates, item)
-			}
-		}
+			embeddingConfig := s.resolveEmbeddingConfig(req)
 
-		selected := s.applySelectionStrategy(req, query, ctx, candidates, params)
-
-		if autoExpand && strings.TrimSpace(req.DocumentID) == "" && isLowConfidenceSelection(query, selected) {
-			expandedCandidateTopK := params.candidateTopK * 2
-			expandedCandidates := make([]RetrievedChunk, 0)
-			seenChunkIDs = make(map[string]struct{})
+			candidates := make([]RetrievedChunk, 0)
+			seenChunkIDs := make(map[string]struct{})
 			for _, knowledgeBaseID := range knowledgeBaseIDs {
-				results, err := s.rag.MultiQuerySearch(ctx, queries, knowledgeBaseID, expandedCandidateTopK, 0, embeddingConfig)
+				results, err := s.rag.MultiQuerySearch(ctx, queries, knowledgeBaseID, params.candidateTopK, 0, embeddingConfig)
 				if err != nil {
-					continue
+					return nil, fmt.Errorf("multi query search qdrant collection %s: %w", knowledgeBaseID, err)
 				}
 				for _, item := range results {
 					if strings.TrimSpace(req.DocumentID) != "" && item.DocumentID != req.DocumentID {
@@ -2028,33 +1861,57 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 						continue
 					}
 					seenChunkIDs[item.ID] = struct{}{}
-					expandedCandidates = append(expandedCandidates, item)
+					candidates = append(candidates, item)
 				}
 			}
-			if len(expandedCandidates) > 0 {
-				expandedParams := params
-				expandedParams.perDocumentLimit++
-				expandedSelected := s.applySelectionStrategy(req, query, ctx, expandedCandidates, expandedParams)
-				if selectionQuality(expandedSelected) > selectionQuality(selected) {
-					selected = expandedSelected
+
+			selected := s.applySelectionStrategy(req, query, ctx, candidates, params)
+
+			if autoExpand && strings.TrimSpace(req.DocumentID) == "" && isLowConfidenceSelection(query, selected) {
+				expandedCandidateTopK := params.candidateTopK * 2
+				expandedCandidates := make([]RetrievedChunk, 0)
+				seenChunkIDs = make(map[string]struct{})
+				for _, knowledgeBaseID := range knowledgeBaseIDs {
+					results, err := s.rag.MultiQuerySearch(ctx, queries, knowledgeBaseID, expandedCandidateTopK, 0, embeddingConfig)
+					if err != nil {
+						continue
+					}
+					for _, item := range results {
+						if strings.TrimSpace(req.DocumentID) != "" && item.DocumentID != req.DocumentID {
+							continue
+						}
+						if _, exists := seenChunkIDs[item.ID]; exists {
+							continue
+						}
+						seenChunkIDs[item.ID] = struct{}{}
+						expandedCandidates = append(expandedCandidates, item)
+					}
+				}
+				if len(expandedCandidates) > 0 {
+					expandedParams := params
+					expandedParams.perDocumentLimit++
+					expandedSelected := s.applySelectionStrategy(req, query, ctx, expandedCandidates, expandedParams)
+					if selectionQuality(expandedSelected) > selectionQuality(selected) {
+						selected = expandedSelected
+					}
 				}
 			}
-		}
 
-		gatedSelected := filterRelevantChunks(query, selected)
-		logRetrievalStageMetrics(req, query, "relevance_gate", time.Now(), map[string]any{
-			"status":            "ok",
-			"input_count":       len(selected),
-			"output_count":      len(gatedSelected),
-			"evidence_coverage": queryEvidenceCoverage(query, gatedSelected),
-		})
-		selected = gatedSelected
+			gatedSelected := filterRelevantChunks(query, selected)
+			logRetrievalStageMetrics(req, query, "relevance_gate", time.Now(), map[string]any{
+				"status":            "ok",
+				"input_count":       len(selected),
+				"output_count":      len(gatedSelected),
+				"evidence_coverage": queryEvidenceCoverage(query, gatedSelected),
+			})
+			selected = gatedSelected
 
-		if s.semanticCache != nil && len(queryEmbedding) > 0 {
-			s.semanticCache.Set(queryEmbedding, query, selected)
+			if s.semanticCache != nil && len(queryEmbedding) > 0 {
+				s.semanticCache.Set(queryEmbedding, query, selected)
+			}
+			logRetrievalMetrics(req, query, params, candidates, selected)
+			return selected, nil
 		}
-		logRetrievalMetrics(req, query, params, candidates, selected)
-		return selected, nil
 	}
 
 	useHybrid := s.shouldUseHybridSearch(req)
@@ -2974,6 +2831,35 @@ func (s *AppService) retrievalAutoExpandEnabled() bool {
 	return s.currentRetrievalConfig().EnableLowConfidenceBoost
 }
 
+func (s *AppService) queryRewriteEnabled() bool {
+	if s == nil || s.queryRewriter == nil {
+		return false
+	}
+	return s.currentRetrievalConfig().EnableQueryRewrite
+}
+
+func (s *AppService) queryRewriteMaxVariants() int {
+	cfg := s.currentRetrievalConfig()
+	if cfg.QueryRewriteMaxVariants < 1 {
+		return 3
+	}
+	if cfg.QueryRewriteMaxVariants > 5 {
+		return 5
+	}
+	return cfg.QueryRewriteMaxVariants
+}
+
+func (s *AppService) rerankStrategy() string {
+	if s == nil {
+		return "keyword"
+	}
+	strategy := normalizeRerankStrategy(s.currentRetrievalConfig().RerankStrategy)
+	if strategy == "" {
+		return "keyword"
+	}
+	return strategy
+}
+
 func trimRetrievedChunksToContextLimit(chunks []RetrievedChunk, maxChars int) []RetrievedChunk {
 	if len(chunks) == 0 || maxChars <= 0 {
 		return chunks
@@ -3151,41 +3037,17 @@ func (s *AppService) rerankCandidates(ctx context.Context, candidates []Retrieve
 		return nil
 	}
 
-	if s != nil && s.serverConfig.EnableSemanticReranker && s.reranker != nil {
+	if s != nil && s.rerankStrategy() == "semantic" && s.reranker != nil {
 		ranked, err := s.reranker.Rerank(ctx, query, candidates)
 		if err == nil && len(ranked) > 0 {
 			return ranked
 		}
 	}
 
-	ranked := make([]RetrievedChunk, len(candidates))
-	copy(ranked, candidates)
-
-	minScore, maxScore := ranked[0].Score, ranked[0].Score
-	for _, item := range ranked {
-		if item.Score < minScore {
-			minScore = item.Score
-		}
-		if item.Score > maxScore {
-			maxScore = item.Score
-		}
+	ranked, err := KeywordReranker{}.Rerank(ctx, query, candidates)
+	if err != nil || len(ranked) == 0 {
+		return candidates
 	}
-
-	for i := range ranked {
-		vectorScore := normalizeScore(ranked[i].Score, minScore, maxScore)
-		keywordScore := keywordCoverage(query, ranked[i].Text)
-		ranked[i].Score = rerankVectorWeight*vectorScore + rerankKeywordWeight*keywordScore + scoreBoost(ranked[i].Text)
-	}
-
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].Score == ranked[j].Score {
-			if ranked[i].DocumentID == ranked[j].DocumentID {
-				return ranked[i].Index < ranked[j].Index
-			}
-			return ranked[i].DocumentID < ranked[j].DocumentID
-		}
-		return ranked[i].Score > ranked[j].Score
-	})
 	return ranked
 }
 
@@ -3619,55 +3481,6 @@ func chunkTextsFromRetrieved(chunks []RetrievedChunk) []string {
 	return texts
 }
 
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) == 0 || len(a) != len(b) {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return float32(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
-}
-
-func parseLLMScore(content string) (float64, error) {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return 0, fmt.Errorf("empty llm score")
-	}
-
-	num := strings.Builder{}
-	for _, r := range content {
-		if (r >= '0' && r <= '9') || r == '.' {
-			num.WriteRune(r)
-			continue
-		}
-		if num.Len() == 0 {
-			continue
-		}
-		break
-	}
-	if num.Len() == 0 {
-		return 0, fmt.Errorf("no numeric score in llm response")
-	}
-	score, err := strconv.ParseFloat(num.String(), 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse llm score: %w", err)
-	}
-	if score < 0 {
-		score = 0
-	}
-	if score > 10 {
-		score = 10
-	}
-	return score, nil
-}
-
 func (s *AppService) shouldUseHybridSearch(req model.ChatCompletionRequest) bool {
 	if s == nil {
 		return false
@@ -3704,6 +3517,19 @@ func normalizeRetrievalMode(mode string) string {
 		return "hybrid"
 	default:
 		return "auto"
+	}
+}
+
+func normalizeRerankStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "":
+		return ""
+	case "keyword", "lexical":
+		return "keyword"
+	case "semantic", "embedding":
+		return "semantic"
+	default:
+		return ""
 	}
 }
 

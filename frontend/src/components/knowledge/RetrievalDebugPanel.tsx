@@ -30,6 +30,11 @@ const resolvedSearchModeLabel = (mode?: string) => {
   return '等待检索'
 }
 
+const rerankStrategyLabel = (strategy?: string) => {
+  if (strategy === 'semantic') return '语义重排'
+  return '关键词重排'
+}
+
 const retrievalChannelLabel = (channel: string) => {
   if (channel === 'dense') return '向量'
   if (channel === 'sparse') return '关键词'
@@ -137,6 +142,8 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
           <span>{result.elapsedMs} ms</span>
           <span>{result.lowConfidence ? '低置信' : '置信正常'}</span>
           <span>{result.deterministicUsed ? '确定性补全' : '向量优先'}</span>
+          <span>{rerankStrategyLabel(result.rerankStrategy)}</span>
+          <span>{result.queryRewriteUsed ? '已改写查询' : '未改写查询'}</span>
           {structuredIntentLabel(result.structuredIntent) && (
             <span>
               {structuredIntentLabel(result.structuredIntent)}

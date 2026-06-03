@@ -78,8 +78,8 @@ docker compose up --build
 | `QDRANT_DISTANCE` | `Cosine` | 距离算法 |
 | `QDRANT_TIMEOUT_SECONDS` | `5` | Qdrant 超时秒数 |
 | `ENABLE_HYBRID_SEARCH` | `false` | 启用 Hybrid Search |
-| `ENABLE_SEMANTIC_RERANKER` | `false` | 启用语义重排 |
-| `ENABLE_QUERY_REWRITE` | `false` | 启用 Query Rewrite |
+| `ENABLE_SEMANTIC_RERANKER` | `false` | 语义重排启动默认值，可在高级检索中切换 |
+| `ENABLE_QUERY_REWRITE` | `false` | Query Rewrite 启动默认值，可在高级检索中开关 |
 | `ENABLE_SEMANTIC_CACHE` | `false` | 启用语义缓存 |
 | `ENABLE_CONTEXT_COMPRESSION` | `false` | 启用上下文压缩 |
 |
