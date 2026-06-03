@@ -16,6 +16,20 @@ const searchModeLabel = (mode?: string) => {
   return '自动'
 }
 
+const rerankStrategyLabel = (strategy?: string) => {
+  if (strategy === 'semantic') return '语义'
+  return '关键词'
+}
+
+const evalStrategyLabel = (run?: EvalRunSummary | null) => {
+  if (!run) return '-'
+  return `${rerankStrategyLabel(run.rerankStrategy)} / ${run.queryRewriteUsed ? '改写' : '不改写'}`
+}
+
+const evalRunModeLabel = (run: EvalRunSummary) => (
+  `${searchModeLabel(run.searchMode)} · ${evalStrategyLabel(run)}`
+)
+
 const formatDateTime = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
@@ -82,13 +96,17 @@ const EvalRunTrendPanel: React.FC<EvalRunTrendPanelProps> = ({
               <strong>{searchModeLabel(latest?.searchMode)}</strong>
               <span>最新模式</span>
             </div>
+            <div>
+              <strong>{evalStrategyLabel(latest)}</strong>
+              <span>最新策略</span>
+            </div>
           </div>
           <div className="kb-eval-trend-list">
             {visibleRuns.map((run) => (
               <article key={run.runId} className="kb-eval-trend-item">
                 <div>
                   <strong>{run.datasetName || run.datasetId}</strong>
-                  <span>{formatDateTime(run.startedAt)} · {searchModeLabel(run.searchMode)} · {run.metrics.totalCases} 条用例</span>
+                  <span>{formatDateTime(run.startedAt)} · {evalRunModeLabel(run)} · {run.metrics.totalCases} 条用例</span>
                 </div>
                 <div className="kb-eval-trend-metrics">
                   <span>Hit {formatPercent(run.metrics.hitRate)}</span>
