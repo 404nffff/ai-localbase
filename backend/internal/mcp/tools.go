@@ -18,7 +18,7 @@ type AppServiceReader interface {
 	GetConfig() model.AppConfig
 	ListKnowledgeBases() []model.KnowledgeBase
 	GetKnowledgeBaseDocuments(id string) ([]model.Document, error)
-	GetDocumentDetail(knowledgeBaseID, documentID string) (model.DocumentDetailResponse, error)
+	GetDocumentDetail(knowledgeBaseID, documentID, focusChunkID string) (model.DocumentDetailResponse, error)
 	ReindexDocument(knowledgeBaseID, documentID string) (model.Document, error)
 	ListConversations() ([]model.ConversationListItem, error)
 	GetConversation(id string) (*model.Conversation, error)
@@ -140,7 +140,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				detail, err := appService.GetDocumentDetail(knowledgeBaseID, documentID)
+				detail, err := appService.GetDocumentDetail(knowledgeBaseID, documentID, "")
 				if err != nil {
 					return ToolCallResult{}, err
 				}

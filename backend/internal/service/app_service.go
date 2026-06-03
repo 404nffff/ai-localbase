@@ -490,6 +490,7 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 				BasePath: defaultMCPBasePath(serverConfig.MCPBasePath),
 				Token:    generateMCPToken(),
 			},
+			Retrieval: defaultRetrievalConfig(serverConfig),
 		},
 		KnowledgeBases: map[string]model.KnowledgeBase{
 			kbID: {
@@ -539,6 +540,7 @@ func (s *AppService) GetConfig() model.AppConfig {
 	if strings.TrimSpace(cfg.MCP.Token) == "" {
 		cfg.MCP.Token = generateMCPToken()
 	}
+	cfg.Retrieval = normalizeRetrievalConfig(cfg.Retrieval, s.serverConfig)
 	return cfg
 }
 
@@ -602,6 +604,111 @@ func defaultMCPBasePath(basePath string) string {
 		return "/" + trimmed
 	}
 	return trimmed
+}
+
+func defaultRetrievalConfig(serverConfig model.ServerConfig) model.RetrievalConfig {
+	return normalizeRetrievalConfig(model.RetrievalConfig{}, serverConfig)
+}
+
+func normalizeRetrievalConfig(cfg model.RetrievalConfig, serverConfig model.ServerConfig) model.RetrievalConfig {
+	emptyConfig := strings.TrimSpace(cfg.DefaultSearchMode) == "" &&
+		!cfg.HybridSearchEnabled &&
+		cfg.TopKDocument == 0 &&
+		cfg.CandidateTopKDocument == 0 &&
+		cfg.TopKKnowledgeBase == 0 &&
+		cfg.CandidateTopKAllDocs == 0 &&
+		cfg.MaxChunksPerDocument == 0 &&
+		cfg.MaxContextChars == 0 &&
+		!cfg.EnableLowConfidenceBoost
+	mode := normalizeRetrievalMode(cfg.DefaultSearchMode)
+	if mode == "auto" {
+		mode = "dense"
+		if serverConfig.EnableHybridSearch {
+			mode = "hybrid"
+		}
+	}
+	topKDocument := cfg.TopKDocument
+	if topKDocument <= 0 {
+		topKDocument = serverConfig.RetrievalTopKDocument
+	}
+	if topKDocument <= 0 {
+		topKDocument = ragSearchTopKDocument
+	}
+	candidateTopKDocument := cfg.CandidateTopKDocument
+	if candidateTopKDocument <= 0 {
+		candidateTopKDocument = serverConfig.RetrievalCandidateTopKDocument
+	}
+	if candidateTopKDocument <= 0 {
+		candidateTopKDocument = ragSearchCandidateTopKDocument
+	}
+	topKKnowledgeBase := cfg.TopKKnowledgeBase
+	if topKKnowledgeBase <= 0 {
+		topKKnowledgeBase = serverConfig.RetrievalTopKKnowledgeBase
+	}
+	if topKKnowledgeBase <= 0 {
+		topKKnowledgeBase = ragSearchTopKKnowledgeBase
+	}
+	candidateTopKAllDocs := cfg.CandidateTopKAllDocs
+	if candidateTopKAllDocs <= 0 {
+		candidateTopKAllDocs = serverConfig.RetrievalCandidateTopKAllDocs
+	}
+	if candidateTopKAllDocs <= 0 {
+		candidateTopKAllDocs = ragSearchCandidateTopKAllDocs
+	}
+	maxChunksPerDocument := cfg.MaxChunksPerDocument
+	if maxChunksPerDocument <= 0 {
+		maxChunksPerDocument = serverConfig.RetrievalMaxChunksPerDocument
+	}
+	if maxChunksPerDocument <= 0 {
+		maxChunksPerDocument = ragMaxChunksPerDocument
+	}
+	maxContextChars := cfg.MaxContextChars
+	if maxContextChars <= 0 {
+		maxContextChars = serverConfig.RetrievalMaxContextChars
+	}
+	if maxContextChars <= 0 {
+		maxContextChars = 2400
+	}
+	hybridSearchEnabled := cfg.HybridSearchEnabled
+	enableLowConfidenceBoost := cfg.EnableLowConfidenceBoost
+	if emptyConfig {
+		hybridSearchEnabled = serverConfig.EnableHybridSearch
+		enableLowConfidenceBoost = serverConfig.RetrievalEnableAutoExpand
+	}
+
+	return model.RetrievalConfig{
+		DefaultSearchMode:        mode,
+		HybridSearchEnabled:      hybridSearchEnabled,
+		TopKDocument:             topKDocument,
+		CandidateTopKDocument:    maxInt(candidateTopKDocument, topKDocument),
+		TopKKnowledgeBase:        topKKnowledgeBase,
+		CandidateTopKAllDocs:     maxInt(candidateTopKAllDocs, topKKnowledgeBase),
+		MaxChunksPerDocument:     maxChunksPerDocument,
+		MaxContextChars:          maxContextChars,
+		EnableLowConfidenceBoost: enableLowConfidenceBoost,
+	}
+}
+
+func validateRetrievalConfig(cfg model.RetrievalConfig) error {
+	if cfg.TopKDocument < 1 || cfg.TopKDocument > 30 {
+		return fmt.Errorf("document topK must be between 1 and 30")
+	}
+	if cfg.CandidateTopKDocument < cfg.TopKDocument || cfg.CandidateTopKDocument > 80 {
+		return fmt.Errorf("document candidate topK must be between document topK and 80")
+	}
+	if cfg.TopKKnowledgeBase < 1 || cfg.TopKKnowledgeBase > 40 {
+		return fmt.Errorf("knowledge base topK must be between 1 and 40")
+	}
+	if cfg.CandidateTopKAllDocs < cfg.TopKKnowledgeBase || cfg.CandidateTopKAllDocs > 120 {
+		return fmt.Errorf("knowledge base candidate topK must be between knowledge base topK and 120")
+	}
+	if cfg.MaxChunksPerDocument < 1 || cfg.MaxChunksPerDocument > 10 {
+		return fmt.Errorf("max chunks per document must be between 1 and 10")
+	}
+	if cfg.MaxContextChars < 800 || cfg.MaxContextChars > 20000 {
+		return fmt.Errorf("max context chars must be between 800 and 20000")
+	}
+	return nil
 }
 
 func generateMCPToken() string {
@@ -709,6 +816,10 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 			BasePath: mcpBasePath,
 			Token:    mcpToken,
 		},
+		Retrieval: normalizeRetrievalConfig(req.Retrieval, s.serverConfig),
+	}
+	if err := validateRetrievalConfig(nextConfig.Retrieval); err != nil {
+		return model.AppConfig{}, err
 	}
 	if s.hasSensitiveStructuredDocuments() && !IsLocalOllamaConfig(nextConfig.Chat, nextConfig.Embedding) {
 		return model.AppConfig{}, fmt.Errorf("sensitive structured documents require local ollama for both chat and embedding")
@@ -865,7 +976,7 @@ func (s *AppService) GetKnowledgeBaseDocuments(id string) ([]model.Document, err
 	return kb.Documents, nil
 }
 
-func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID string) (model.DocumentDetailResponse, error) {
+func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID, focusChunkID string) (model.DocumentDetailResponse, error) {
 	document, err := s.findDocument(knowledgeBaseID, documentID)
 	if err != nil {
 		return model.DocumentDetailResponse{}, err
@@ -877,7 +988,7 @@ func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID string) (mode
 	}
 
 	chunks := s.rag.BuildDocumentChunks(document, content)
-	return buildDocumentDetailResponse(s, document, content, chunks), nil
+	return buildDocumentDetailResponse(s, document, content, chunks, focusChunkID), nil
 }
 
 func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.KnowledgeBaseHealthResponse, error) {
@@ -1839,7 +1950,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	}
 
 	query := latestUserMessage(req.Messages)
-	params := resolveRetrievalParamsWithConfig(req, s.serverConfig)
+	params := s.resolveRetrievalParams(req)
 	autoExpand := s.retrievalAutoExpandEnabled()
 	ctx := context.Background()
 
@@ -2118,7 +2229,7 @@ func documentFilter(documentID string) map[string]any {
 	}
 }
 
-func buildDocumentDetailResponse(s *AppService, document model.Document, content string, chunks []DocumentChunk) model.DocumentDetailResponse {
+func buildDocumentDetailResponse(s *AppService, document model.Document, content string, chunks []DocumentChunk, focusChunkID string) model.DocumentDetailResponse {
 	rawContent := strings.TrimSpace(content)
 	rawContentTruncated := false
 	if len([]rune(rawContent)) > documentDetailRawContentLimit {
@@ -2147,6 +2258,21 @@ func buildDocumentDetailResponse(s *AppService, document model.Document, content
 			Kind:  chunk.Kind,
 			Text:  truncateRunes(strings.TrimSpace(chunk.Text), documentDetailChunkTextLimit),
 		})
+	}
+	focusChunkID = strings.TrimSpace(focusChunkID)
+	if focusChunkID != "" && !documentChunkPreviewContains(chunkPreviews, focusChunkID) {
+		for _, chunk := range chunks {
+			if chunk.ID != focusChunkID {
+				continue
+			}
+			chunkPreviews = append(chunkPreviews, model.DocumentChunkPreview{
+				ID:    chunk.ID,
+				Index: chunk.Index,
+				Kind:  chunk.Kind,
+				Text:  truncateRunes(strings.TrimSpace(chunk.Text), documentDetailChunkTextLimit),
+			})
+			break
+		}
 	}
 
 	summary := strings.TrimSpace(strings.Join(summaryParts, "\n\n"))
@@ -2177,6 +2303,15 @@ func buildDocumentDetailResponse(s *AppService, document model.Document, content
 		Summary:    summary,
 		Chunks:     chunkPreviews,
 	}
+}
+
+func documentChunkPreviewContains(chunks []model.DocumentChunkPreview, chunkID string) bool {
+	for _, chunk := range chunks {
+		if chunk.ID == chunkID {
+			return true
+		}
+	}
+	return false
 }
 
 func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDocumentHealth) bool {
@@ -2795,18 +2930,48 @@ func resolveRetrievalParamsWithConfig(req model.ChatCompletionRequest, cfg model
 	}
 }
 
+func (s *AppService) currentRetrievalConfig() model.RetrievalConfig {
+	if s == nil || s.state == nil {
+		if s == nil {
+			return defaultRetrievalConfig(model.ServerConfig{})
+		}
+		return defaultRetrievalConfig(s.serverConfig)
+	}
+	s.state.Mu.RLock()
+	cfg := s.state.Config.Retrieval
+	s.state.Mu.RUnlock()
+	return normalizeRetrievalConfig(cfg, s.serverConfig)
+}
+
+func (s *AppService) resolveRetrievalParams(req model.ChatCompletionRequest) retrievalParams {
+	cfg := s.currentRetrievalConfig()
+	if strings.TrimSpace(req.DocumentID) != "" {
+		return retrievalParams{
+			candidateTopK:    cfg.CandidateTopKDocument,
+			finalTopK:        cfg.TopKDocument,
+			perDocumentLimit: maxInt(cfg.MaxChunksPerDocument, cfg.TopKDocument),
+		}
+	}
+	return retrievalParams{
+		candidateTopK:    cfg.CandidateTopKAllDocs,
+		finalTopK:        cfg.TopKKnowledgeBase,
+		perDocumentLimit: cfg.MaxChunksPerDocument,
+	}
+}
+
 func (s *AppService) retrievalMaxContextChars() int {
-	if s == nil || s.serverConfig.RetrievalMaxContextChars <= 0 {
+	cfg := s.currentRetrievalConfig()
+	if cfg.MaxContextChars <= 0 {
 		return 2400
 	}
-	return s.serverConfig.RetrievalMaxContextChars
+	return cfg.MaxContextChars
 }
 
 func (s *AppService) retrievalAutoExpandEnabled() bool {
 	if s == nil {
 		return false
 	}
-	return s.serverConfig.RetrievalEnableAutoExpand
+	return s.currentRetrievalConfig().EnableLowConfidenceBoost
 }
 
 func trimRetrievedChunksToContextLimit(chunks []RetrievedChunk, maxChars int) []RetrievedChunk {
@@ -3514,13 +3679,14 @@ func (s *AppService) shouldUseHybridSearch(req model.ChatCompletionRequest) bool
 	if mode == "hybrid" {
 		return true
 	}
-	if !s.serverConfig.EnableHybridSearch {
+	retrievalConfig := s.currentRetrievalConfig()
+	if !retrievalConfig.HybridSearchEnabled {
 		return false
 	}
 	if strings.TrimSpace(req.DocumentID) != "" {
 		return false
 	}
-	return true
+	return retrievalConfig.DefaultSearchMode == "hybrid"
 }
 
 func (s *AppService) resolvedRetrievalSearchMode(req model.ChatCompletionRequest) string {
@@ -3545,7 +3711,7 @@ func (s *AppService) shouldUseHybridFallback(selected []RetrievedChunk) bool {
 	if s == nil {
 		return false
 	}
-	if !s.serverConfig.EnableHybridSearch {
+	if !s.currentRetrievalConfig().HybridSearchEnabled {
 		return false
 	}
 	return len(selected) == 0 || selectionQuality(selected) < 0.55

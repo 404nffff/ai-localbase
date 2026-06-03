@@ -69,10 +69,23 @@ type MCPConfig struct {
 	Token    string `json:"token"`
 }
 
+type RetrievalConfig struct {
+	DefaultSearchMode        string `json:"defaultSearchMode"`
+	HybridSearchEnabled      bool   `json:"hybridSearchEnabled"`
+	TopKDocument             int    `json:"topKDocument"`
+	CandidateTopKDocument    int    `json:"candidateTopKDocument"`
+	TopKKnowledgeBase        int    `json:"topKKnowledgeBase"`
+	CandidateTopKAllDocs     int    `json:"candidateTopKAllDocs"`
+	MaxChunksPerDocument     int    `json:"maxChunksPerDocument"`
+	MaxContextChars          int    `json:"maxContextChars"`
+	EnableLowConfidenceBoost bool   `json:"enableLowConfidenceBoost"`
+}
+
 type AppConfig struct {
 	Chat      ChatConfig      `json:"chat"`
 	Embedding EmbeddingConfig `json:"embedding"`
 	MCP       MCPConfig       `json:"mcp"`
+	Retrieval RetrievalConfig `json:"retrieval"`
 }
 
 type KnowledgeBase struct {
@@ -258,6 +271,7 @@ type ConfigUpdateRequest struct {
 	Chat      ChatConfig      `json:"chat"`
 	Embedding EmbeddingConfig `json:"embedding"`
 	MCP       MCPConfig       `json:"mcp"`
+	Retrieval RetrievalConfig `json:"retrieval"`
 }
 
 type Conversation struct {

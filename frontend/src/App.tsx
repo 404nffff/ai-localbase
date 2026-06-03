@@ -65,6 +65,12 @@ export interface ChatSourceMetadata {
   toolName?: string
 }
 
+export interface CitationNavigationTarget {
+  knowledgeBaseId: string
+  documentId: string
+  chunkId?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -123,10 +129,23 @@ export interface MCPConfig {
   token: string
 }
 
+export interface RetrievalConfig {
+  defaultSearchMode: 'dense' | 'hybrid'
+  hybridSearchEnabled: boolean
+  topKDocument: number
+  candidateTopKDocument: number
+  topKKnowledgeBase: number
+  candidateTopKAllDocs: number
+  maxChunksPerDocument: number
+  maxContextChars: number
+  enableLowConfidenceBoost: boolean
+}
+
 export interface AppConfig {
   chat: ChatConfig
   embedding: EmbeddingConfig
   mcp: MCPConfig
+  retrieval: RetrievalConfig
 }
 
 export type ChatMode = 'fast' | 'think'
@@ -141,6 +160,18 @@ const THINK_MODEL_STORAGE_KEY = 'ai-localbase-think-model'
 const FALLBACK_REQUEST_TIMEOUT_MS = 90_000
 const STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000
 const STREAM_REQUEST_TIMEOUT_MS = 180_000
+
+const defaultRetrievalConfig: RetrievalConfig = {
+  defaultSearchMode: 'dense',
+  hybridSearchEnabled: false,
+  topKDocument: 6,
+  candidateTopKDocument: 12,
+  topKKnowledgeBase: 10,
+  candidateTopKAllDocs: 32,
+  maxChunksPerDocument: 2,
+  maxContextChars: 2400,
+  enableLowConfidenceBoost: false,
+}
 
 interface ChatCompletionResponse {
   id: string
@@ -167,6 +198,7 @@ interface ChatRequestBody {
   model: string
   knowledgeBaseId: string
   documentId: string
+  retrievalMode: RetrievalConfig['defaultSearchMode']
   config: ChatConfig
   embedding: EmbeddingConfig
   messages: Array<{
@@ -260,6 +292,67 @@ const createId = () => {
 const isDegradedFallbackContent = (content: string) =>
   /降级|fallback|无法完成流式|已切换|上游错误|模型服务暂不可用/.test(content)
 
+const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.round(parsed)))
+}
+
+const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): AppConfig => {
+  const retrieval = {
+    ...fallback.retrieval,
+    ...(config.retrieval ?? {}),
+  }
+  const topKDocument = clampNumber(retrieval.topKDocument, fallback.retrieval.topKDocument, 1, 30)
+  const topKKnowledgeBase = clampNumber(retrieval.topKKnowledgeBase, fallback.retrieval.topKKnowledgeBase, 1, 40)
+
+  return {
+    chat: {
+      ...fallback.chat,
+      ...(config.chat ?? {}),
+    },
+    embedding: {
+      ...fallback.embedding,
+      ...(config.embedding ?? {}),
+    },
+    mcp: {
+      ...fallback.mcp,
+      ...(config.mcp ?? {}),
+    },
+    retrieval: {
+      defaultSearchMode: retrieval.defaultSearchMode === 'hybrid' ? 'hybrid' : 'dense',
+      hybridSearchEnabled: Boolean(retrieval.hybridSearchEnabled),
+      topKDocument,
+      candidateTopKDocument: clampNumber(
+        retrieval.candidateTopKDocument,
+        fallback.retrieval.candidateTopKDocument,
+        topKDocument,
+        80,
+      ),
+      topKKnowledgeBase,
+      candidateTopKAllDocs: clampNumber(
+        retrieval.candidateTopKAllDocs,
+        fallback.retrieval.candidateTopKAllDocs,
+        topKKnowledgeBase,
+        120,
+      ),
+      maxChunksPerDocument: clampNumber(
+        retrieval.maxChunksPerDocument,
+        fallback.retrieval.maxChunksPerDocument,
+        1,
+        10,
+      ),
+      maxContextChars: clampNumber(
+        retrieval.maxContextChars,
+        fallback.retrieval.maxContextChars,
+        800,
+        20000,
+      ),
+      enableLowConfidenceBoost: Boolean(retrieval.enableLowConfidenceBoost),
+    },
+  }
+}
+
 const normalizeChatMetadata = (metadata?: ChatCompletionResponse['metadata'] | ChatMessageMetadata) => {
   if (!metadata) return undefined
   const normalized: ChatMessageMetadata = {}
@@ -328,6 +421,8 @@ function App() {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isKnowledgePanelOpen, setIsKnowledgePanelOpen] = useState(false)
+  const [citationNavigationTarget, setCitationNavigationTarget] =
+    useState<CitationNavigationTarget | null>(null)
   const [directoryUploadTask, setDirectoryUploadTask] = useState<DirectoryUploadTask>(
     createEmptyDirectoryUploadTask,
   )
@@ -374,6 +469,7 @@ function App() {
         basePath: '/mcp',
         token: '',
       },
+      retrieval: defaultRetrievalConfig,
     }
 
     if (typeof window === 'undefined') {
@@ -387,10 +483,7 @@ function App() {
         return defaultConfig
       }
 
-      return {
-        ...defaultConfig,
-        ...(JSON.parse(cachedConfig) as Partial<AppConfig>),
-      }
+      return normalizeAppConfig(JSON.parse(cachedConfig) as Partial<AppConfig>, defaultConfig)
     } catch {
       return defaultConfig
     }
@@ -413,7 +506,7 @@ function App() {
 
   const persistConfigToBackend = async (nextConfig: AppConfig) => {
     const savedConfig = await updateAppConfig(nextConfig)
-    setConfig(savedConfig)
+    setConfig((prev) => normalizeAppConfig(savedConfig, prev))
     setBackendReady(true)
   }
 
@@ -482,7 +575,7 @@ function App() {
 
           const nextKnowledgeBases = initialData.knowledgeBases
           setKnowledgeBases(nextKnowledgeBases)
-          setConfig(initialData.config)
+          setConfig((prev) => normalizeAppConfig(initialData.config, prev))
           setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
           setSelectedDocumentId(null)
 
@@ -1154,8 +1247,9 @@ function App() {
   const handleFetchDocumentDetail = async (
     knowledgeBaseId: string,
     documentId: string,
+    focusChunkId?: string,
   ): Promise<DocumentDetailResponse> => {
-    return fetchKnowledgeBaseDocumentDetail(knowledgeBaseId, documentId)
+    return fetchKnowledgeBaseDocumentDetail(knowledgeBaseId, documentId, focusChunkId)
   }
 
   const handleFetchKnowledgeBaseHealth = useCallback(async (
@@ -1269,6 +1363,7 @@ function App() {
       model: selectedChatModel,
       knowledgeBaseId: selectedKnowledgeBaseId ?? '',
       documentId: selectedDocumentId ?? '',
+      retrievalMode: config.retrieval.defaultSearchMode,
       config: {
         ...config.chat,
         model: selectedChatModel,
@@ -1626,6 +1721,23 @@ function App() {
     })
   }
 
+  const handleRetrievalConfigChange = <K extends keyof RetrievalConfig>(
+    key: K,
+    value: RetrievalConfig[K],
+  ) => {
+    setConfig((prev) => {
+      const nextConfig = normalizeAppConfig({
+        ...prev,
+        retrieval: {
+          ...prev.retrieval,
+          [key]: value,
+        },
+      }, prev)
+      void persistConfigToBackend(nextConfig)
+      return nextConfig
+    })
+  }
+
   const handleThinkModelChange = (value: string) => {
     const nextValue = value.trim()
     setThinkModel(nextValue)
@@ -1656,6 +1768,21 @@ function App() {
       }
       return next
     })
+  }
+
+  const handleOpenCitationSource = (source: ChatSourceMetadata) => {
+    if (!source.knowledgeBaseId || !source.documentId) {
+      return
+    }
+    setSelectedKnowledgeBaseId(source.knowledgeBaseId)
+    setSelectedDocumentId(source.documentId)
+    setCitationNavigationTarget({
+      knowledgeBaseId: source.knowledgeBaseId,
+      documentId: source.documentId,
+      chunkId: source.chunkId,
+    })
+    setIsSettingsOpen(false)
+    setIsKnowledgePanelOpen(true)
   }
 
   return (
@@ -1698,10 +1825,13 @@ function App() {
         config={config}
         isSettingsOpen={isSettingsOpen}
         isKnowledgePanelOpen={isKnowledgePanelOpen}
+        citationNavigationTarget={citationNavigationTarget}
         onToggleSettings={handleToggleSettings}
         onToggleKnowledgePanel={handleToggleKnowledgePanel}
+        onCitationNavigationHandled={() => setCitationNavigationTarget(null)}
         onChatConfigChange={handleChatConfigChange}
         onEmbeddingConfigChange={handleEmbeddingConfigChange}
+        onRetrievalConfigChange={handleRetrievalConfigChange}
         chatModeSettings={chatModeSettings}
         onThinkModelChange={handleThinkModelChange}
         onCopyMcpToken={handleCopyMcpToken}
@@ -1722,6 +1852,7 @@ function App() {
         onChatModeChange={setChatMode}
         onSendMessage={handleSendMessage}
         onClearConversation={handleClearConversation}
+        onOpenCitationSource={handleOpenCitationSource}
       />
     </div>
   )

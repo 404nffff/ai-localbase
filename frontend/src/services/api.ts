@@ -49,6 +49,7 @@ export interface ConfigResponse {
   chat: AppConfig['chat']
   embedding: AppConfig['embedding']
   mcp: MCPConfig
+  retrieval: AppConfig['retrieval']
 }
 
 export interface BackendConversationListItem {
@@ -510,8 +511,13 @@ export const deleteKnowledgeBaseDocument = async (
 export const fetchKnowledgeBaseDocumentDetail = async (
   knowledgeBaseId: string,
   documentId: string,
+  focusChunkId?: string,
 ): Promise<DocumentDetailResponse> => (
-  requestJson<DocumentDetailResponse>(`/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`)
+  requestJson<DocumentDetailResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}${
+      focusChunkId ? `?focusChunkId=${encodeURIComponent(focusChunkId)}` : ''
+    }`,
+  )
 )
 
 export const fetchKnowledgeBaseHealth = async (

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
+import type {
   AppConfig,
   ChatMode,
   ChatModeSettings,
@@ -25,6 +25,7 @@ interface ChatAreaProps {
   onChatModeChange: (mode: ChatMode) => void
   onSendMessage: (content: string) => Promise<void>
   onClearConversation: () => void
+  onOpenCitationSource?: (source: ChatSourceMetadata) => void
 }
 
 const suggestedPrompts = [
@@ -78,7 +79,10 @@ const scoreLabel = (score?: string) => {
   return `分数 ${value.toFixed(4)}`
 }
 
-const MessageCitations: React.FC<{ sources: ChatSourceMetadata[] }> = ({ sources }) => {
+const MessageCitations: React.FC<{
+  sources: ChatSourceMetadata[]
+  onOpenCitationSource?: (source: ChatSourceMetadata) => void
+}> = ({ sources, onOpenCitationSource }) => {
   const visibleSources = normalizeSources(sources).slice(0, 6)
   if (visibleSources.length === 0) return null
 
@@ -96,6 +100,15 @@ const MessageCitations: React.FC<{ sources: ChatSourceMetadata[] }> = ({ sources
               <span>{sourceTypeLabel(source)}</span>
               <span>{sourceRankLabel(source, index)}</span>
               {scoreLabel(source.score) && <span>{scoreLabel(source.score)}</span>}
+              {source.documentId && (
+                <button
+                  type="button"
+                  onClick={() => onOpenCitationSource?.(source)}
+                  disabled={!onOpenCitationSource}
+                >
+                  定位
+                </button>
+              )}
             </div>
             {source.snippet && <p>{source.snippet}</p>}
           </article>
@@ -120,6 +133,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   onChatModeChange,
   onSendMessage,
   onClearConversation,
+  onOpenCitationSource,
 }) => {
   const [inputValue, setInputValue] = useState('')
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -302,7 +316,10 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                   )}
                 </div>
                 {message.role === 'assistant' && message.metadata?.sources && (
-                  <MessageCitations sources={message.metadata.sources} />
+                  <MessageCitations
+                    sources={message.metadata.sources}
+                    onOpenCitationSource={onOpenCitationSource}
+                  />
                 )}
                 <div className="message-time">{formatTime(message.timestamp)}</div>
               </div>

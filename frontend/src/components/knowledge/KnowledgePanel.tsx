@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
+import type { CitationNavigationTarget, DirectoryUploadTask, DocumentItem, KnowledgeBase } from '../../App'
 import type {
   DocumentDetailResponse,
   EvalDatasetDetail,
@@ -66,6 +66,7 @@ interface KnowledgePanelProps {
   onFetchDocumentDetail: (
     knowledgeBaseId: string,
     documentId: string,
+    focusChunkId?: string,
   ) => Promise<DocumentDetailResponse>
   onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   onDebugRetrieval: (
@@ -74,6 +75,8 @@ interface KnowledgePanelProps {
     documentId: string | null,
     searchMode?: RetrievalSearchMode,
   ) => Promise<RetrievalDebugResponse>
+  citationNavigationTarget: CitationNavigationTarget | null
+  onCitationNavigationHandled: () => void
   onClose: () => void
 }
 
@@ -105,6 +108,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onFetchDocumentDetail,
   onReindexDocument,
   onDebugRetrieval,
+  citationNavigationTarget,
+  onCitationNavigationHandled,
   onClose,
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -116,6 +121,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showSkippedItems, setShowSkippedItems] = useState(false)
   const [generatingEvalKnowledgeBaseId, setGeneratingEvalKnowledgeBaseId] = useState<string | null>(null)
   const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
+  const [documentDetailFocusChunkId, setDocumentDetailFocusChunkId] = useState<string | null>(null)
   const [evalDataset, setEvalDataset] = useState<GenerateEvalDatasetResponse | null>(null)
   const [evalDatasetScopeName, setEvalDatasetScopeName] = useState('')
   const [evalDatasetSummaries, setEvalDatasetSummaries] = useState<EvalDatasetSummary[]>([])
@@ -132,6 +138,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [healthLoadingId, setHealthLoadingId] = useState<string | null>(null)
   const [healthError, setHealthError] = useState('')
   const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
+  const [reindexError, setReindexError] = useState('')
   const [retrievalQuery, setRetrievalQuery] = useState('')
   const [retrievalSearchMode, setRetrievalSearchMode] = useState<RetrievalSearchMode>('auto')
   const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
@@ -370,22 +377,42 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     return report
   }
 
-  const handleOpenDocumentDetail = async (knowledgeBaseId: string, documentId: string) => {
+  const handleOpenDocumentDetail = useCallback(async (knowledgeBaseId: string, documentId: string, chunkId?: string) => {
     setDocumentDetail(null)
+    setDocumentDetailFocusChunkId(chunkId ?? null)
     setDocumentDetailError('')
     setDocumentDetailLoadingId(documentId)
     try {
-      const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId)
+      const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId, chunkId)
       setDocumentDetail(detail)
     } catch (error) {
       setDocumentDetailError(error instanceof Error ? error.message : '加载文档详情失败')
     } finally {
       setDocumentDetailLoadingId(null)
     }
-  }
+  }, [onFetchDocumentDetail])
+
+  useEffect(() => {
+    if (!open || !citationNavigationTarget) {
+      return
+    }
+    const { knowledgeBaseId, documentId, chunkId } = citationNavigationTarget
+    onSelectKnowledgeBase(knowledgeBaseId)
+    onSelectDocument(knowledgeBaseId, documentId)
+    void handleOpenDocumentDetail(knowledgeBaseId, documentId, chunkId)
+    onCitationNavigationHandled()
+  }, [
+    open,
+    citationNavigationTarget,
+    handleOpenDocumentDetail,
+    onCitationNavigationHandled,
+    onSelectDocument,
+    onSelectKnowledgeBase,
+  ])
 
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
     setReindexingDocumentId(documentId)
+    setReindexError('')
     try {
       const updatedDocument = await onReindexDocument(knowledgeBaseId, documentId)
       if (documentDetail?.document.id === documentId) {
@@ -403,6 +430,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         ...prev,
         [knowledgeBaseId]: health,
       }))
+    } catch (error) {
+      setReindexError(error instanceof Error ? error.message : '重建索引失败')
     } finally {
       setReindexingDocumentId(null)
     }
@@ -496,6 +525,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   const closeDocumentDetail = () => {
     setDocumentDetail(null)
+    setDocumentDetailFocusChunkId(null)
     setDocumentDetailError('')
   }
 
@@ -635,6 +665,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       />
                     )}
 
+                    {reindexError && (
+                      <div className="kb-inline-error">
+                        重建索引失败：{reindexError}
+                      </div>
+                    )}
+
                     <div className="kb-workspace-grid">
                       <KnowledgeHealthPanel
                         health={activeHealth}
@@ -681,6 +717,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
                     <DocumentList
                       documents={selectedKnowledgeBase.documents}
+                      healthDocuments={activeHealth?.documents}
                       selectedDocumentId={selectedDocumentId}
                       documentDetailLoadingId={documentDetailLoadingId}
                       reindexingDocumentId={reindexingDocumentId}
@@ -721,6 +758,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         <DocumentDetailDialog
           detail={documentDetail}
           error={documentDetailError}
+          focusChunkId={documentDetailFocusChunkId}
           onClose={closeDocumentDetail}
         />
       )}

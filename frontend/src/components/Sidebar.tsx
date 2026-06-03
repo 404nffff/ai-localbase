@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react'
-import {
+import type {
   AppConfig,
   ChatConfig,
   ChatModeSettings,
+  CitationNavigationTarget,
   Conversation,
   DocumentItem,
   DirectoryUploadTask,
   EmbeddingConfig,
   KnowledgeBase,
+  RetrievalConfig,
 } from '../App'
 import type {
   DocumentDetailResponse,
@@ -66,6 +68,7 @@ interface SidebarProps {
   onFetchDocumentDetail: (
     knowledgeBaseId: string,
     documentId: string,
+    focusChunkId?: string,
   ) => Promise<DocumentDetailResponse>
   onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   onDebugRetrieval: (
@@ -83,12 +86,18 @@ interface SidebarProps {
   config: AppConfig
   isSettingsOpen: boolean
   isKnowledgePanelOpen: boolean
+  citationNavigationTarget: CitationNavigationTarget | null
   onToggleSettings: () => void
   onToggleKnowledgePanel: () => void
+  onCitationNavigationHandled: () => void
   onChatConfigChange: <K extends keyof ChatConfig>(key: K, value: ChatConfig[K]) => void
   onEmbeddingConfigChange: <K extends keyof EmbeddingConfig>(
     key: K,
     value: EmbeddingConfig[K],
+  ) => void
+  onRetrievalConfigChange: <K extends keyof RetrievalConfig>(
+    key: K,
+    value: RetrievalConfig[K],
   ) => void
   chatModeSettings: ChatModeSettings
   onThinkModelChange: (value: string) => void
@@ -142,10 +151,13 @@ const Sidebar: React.FC<SidebarProps> = ({
   config,
   isSettingsOpen,
   isKnowledgePanelOpen,
+  citationNavigationTarget,
   onToggleSettings,
   onToggleKnowledgePanel,
+  onCitationNavigationHandled,
   onChatConfigChange,
   onEmbeddingConfigChange,
+  onRetrievalConfigChange,
   chatModeSettings,
   onThinkModelChange,
   onCopyMcpToken,
@@ -363,6 +375,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           onClose={onToggleSettings}
           onChatConfigChange={onChatConfigChange}
           onEmbeddingConfigChange={onEmbeddingConfigChange}
+          onRetrievalConfigChange={onRetrievalConfigChange}
           chatModeSettings={chatModeSettings}
           onThinkModelChange={onThinkModelChange}
           onCopyMcpToken={onCopyMcpToken}
@@ -400,6 +413,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         onFetchDocumentDetail={onFetchDocumentDetail}
         onReindexDocument={onReindexDocument}
         onDebugRetrieval={onDebugRetrieval}
+        citationNavigationTarget={citationNavigationTarget}
+        onCitationNavigationHandled={onCitationNavigationHandled}
         onClose={onToggleKnowledgePanel}
       />
     </>

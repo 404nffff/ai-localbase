@@ -355,7 +355,7 @@ func (h *AppHandler) DeleteDocument(c *gin.Context) {
 }
 
 func (h *AppHandler) GetDocumentDetail(c *gin.Context) {
-	detail, err := h.appService.GetDocumentDetail(c.Param("id"), c.Param("documentId"))
+	detail, err := h.appService.GetDocumentDetail(c.Param("id"), c.Param("documentId"), c.Query("focusChunkId"))
 	if err != nil {
 		writeError(c, http.StatusNotFound, err.Error())
 		return

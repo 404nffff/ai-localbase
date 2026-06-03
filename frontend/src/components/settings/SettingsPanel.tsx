@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { AppConfig, ChatConfig, ChatModeSettings, EmbeddingConfig } from '../../App'
+import type { AppConfig, ChatConfig, ChatModeSettings, EmbeddingConfig, RetrievalConfig } from '../../App'
 
 interface SettingsPanelProps {
   config: AppConfig
@@ -8,6 +8,10 @@ interface SettingsPanelProps {
   onEmbeddingConfigChange: <K extends keyof EmbeddingConfig>(
     key: K,
     value: EmbeddingConfig[K],
+  ) => void
+  onRetrievalConfigChange: <K extends keyof RetrievalConfig>(
+    key: K,
+    value: RetrievalConfig[K],
   ) => void
   chatModeSettings: ChatModeSettings
   onThinkModelChange: (value: string) => void
@@ -20,6 +24,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onClose,
   onChatConfigChange,
   onEmbeddingConfigChange,
+  onRetrievalConfigChange,
   chatModeSettings,
   onThinkModelChange,
   onCopyMcpToken,
@@ -202,6 +207,132 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   onChange={(event) => onEmbeddingConfigChange('apiKey', event.target.value)}
                   placeholder="选填"
                 />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-panel-block ai-config-panel single-column">
+            <div className="section-title-row knowledge-panel-header">
+              <h3>高级检索</h3>
+            </div>
+
+            <div className="ai-config-fields">
+              <label className="settings-field">
+                <span>默认模式</span>
+                <select
+                  value={config.retrieval.defaultSearchMode}
+                  onChange={(event) =>
+                    onRetrievalConfigChange(
+                      'defaultSearchMode',
+                      event.target.value as RetrievalConfig['defaultSearchMode'],
+                    )
+                  }
+                >
+                  <option value="dense">向量检索</option>
+                  <option value="hybrid">混合检索</option>
+                </select>
+              </label>
+
+              <label className="settings-field settings-field-toggle">
+                <span>允许 Hybrid</span>
+                <input
+                  type="checkbox"
+                  checked={config.retrieval.hybridSearchEnabled}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('hybridSearchEnabled', event.target.checked)
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>文档 TopK</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={config.retrieval.topKDocument}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('topKDocument', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>文档候选 TopK</span>
+                <input
+                  type="number"
+                  min={config.retrieval.topKDocument}
+                  max="80"
+                  value={config.retrieval.candidateTopKDocument}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('candidateTopKDocument', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>知识库 TopK</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="40"
+                  value={config.retrieval.topKKnowledgeBase}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('topKKnowledgeBase', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>知识库候选 TopK</span>
+                <input
+                  type="number"
+                  min={config.retrieval.topKKnowledgeBase}
+                  max="120"
+                  value={config.retrieval.candidateTopKAllDocs}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('candidateTopKAllDocs', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>每文档片段数</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={config.retrieval.maxChunksPerDocument}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('maxChunksPerDocument', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>上下文字符</span>
+                <input
+                  type="number"
+                  min="800"
+                  max="20000"
+                  step="100"
+                  value={config.retrieval.maxContextChars}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('maxContextChars', Number(event.target.value))
+                  }
+                />
+              </label>
+
+              <label className="settings-field settings-field-full settings-field-toggle">
+                <span>低置信自动扩展</span>
+                <input
+                  type="checkbox"
+                  checked={config.retrieval.enableLowConfidenceBoost}
+                  onChange={(event) =>
+                    onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)
+                  }
+                />
+                <small>当知识库范围召回置信偏低时，扩大候选并尝试补充更多片段。</small>
               </label>
             </div>
           </section>
