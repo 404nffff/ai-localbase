@@ -16,6 +16,7 @@ const (
 	defaultEvalCasesPerDocument = 5
 	maxEvalCasesPerDocument     = 20
 	maxEvalRunHistoryPerKB      = 50
+	maxCrossDocumentEvalCases   = 3
 	evalDatasetKindGenerated    = "generated"
 	evalDatasetKindReview       = "review"
 	evalReviewStatusPending     = "pending"
@@ -44,6 +45,7 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 	}
 
 	cases := make([]model.EvalGroundTruthCase, 0, len(documents)*maxPerDocument)
+	crossDocumentEvidence := make([]evalCrossDocumentEvidence, 0, len(documents))
 	for _, document := range documents {
 		text, err := util.ExtractDocumentText(document.Path)
 		if err != nil {
@@ -51,6 +53,9 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 		}
 		chunks := s.rag.BuildDocumentChunks(document, text)
 		selected := selectEvalChunkCandidates(chunks, len(chunks))
+		if evidence, ok := selectCrossDocumentEvalEvidence(document, selected); ok {
+			crossDocumentEvidence = append(crossDocumentEvidence, evidence)
+		}
 		for _, chunk := range selected {
 			generated := buildEvalCasesFromChunk(document, chunk, maxPerDocument)
 			for _, item := range generated {
@@ -68,6 +73,15 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 			}
 			if countEvalCasesForDocument(cases, document.ID) >= maxPerDocument {
 				break
+			}
+		}
+	}
+	if strings.TrimSpace(req.DocumentID) == "" && len(crossDocumentEvidence) >= 2 {
+		generated := buildCrossDocumentEvalCases(crossDocumentEvidence, maxCrossDocumentEvalCases)
+		for _, item := range generated {
+			if validateEvalCase(item, "", crossDocumentEvalEvidenceText(item, crossDocumentEvidence)) {
+				item.ID = fmt.Sprintf("auto-cross-%03d", len(cases)+1)
+				cases = append(cases, item)
 			}
 		}
 	}
@@ -647,6 +661,10 @@ func firstEvalSourceKnowledgeBaseID(item model.EvalGroundTruthCase) string {
 }
 
 func evalCaseHit(item model.EvalGroundTruthCase, chunks []model.RetrievalDebugChunk) (bool, int, string) {
+	if item.AnswerType == "cross_document" {
+		return evalCrossDocumentCaseHit(item, chunks)
+	}
+
 	for index, chunk := range chunks {
 		for _, source := range item.SourceDocuments {
 			if strings.TrimSpace(source.ChunkID) != "" && chunk.ID == source.ChunkID {
@@ -677,6 +695,44 @@ func evalCaseHit(item model.EvalGroundTruthCase, chunks []model.RetrievalDebugCh
 	}
 
 	return false, -1, ""
+}
+
+func evalCrossDocumentCaseHit(item model.EvalGroundTruthCase, chunks []model.RetrievalDebugChunk) (bool, int, string) {
+	required := map[string]model.EvalSourceDocument{}
+	for _, source := range item.SourceDocuments {
+		documentID := strings.TrimSpace(source.DocumentID)
+		if documentID == "" {
+			continue
+		}
+		if _, ok := required[documentID]; !ok {
+			required[documentID] = source
+		}
+	}
+	if len(required) < 2 {
+		return false, -1, ""
+	}
+
+	maxRank := 0
+	for documentID, source := range required {
+		rank := 0
+		for index, chunk := range chunks {
+			if strings.TrimSpace(source.ChunkID) != "" && chunk.ID == source.ChunkID {
+				rank = index + 1
+				break
+			}
+			if chunk.DocumentID == documentID {
+				rank = index + 1
+				break
+			}
+		}
+		if rank == 0 {
+			return false, -1, ""
+		}
+		if rank > maxRank {
+			maxRank = rank
+		}
+	}
+	return true, maxRank, "cross_document"
 }
 
 func buildEvalRunMetrics(results []model.EvalRunCaseResult, skippedDisabled int) model.EvalRunMetrics {
@@ -1061,6 +1117,7 @@ func buildEvalCasesFromChunk(document model.Document, chunk DocumentChunk, limit
 	default:
 		cases = append(cases, buildStructuredHeaderEvalCases(document, chunk)...)
 		cases = append(cases, buildHeadingTextEvalCases(document, chunk)...)
+		cases = append(cases, buildKeywordTextEvalCases(document, chunk)...)
 	}
 
 	if len(cases) > limit {
@@ -1191,6 +1248,237 @@ func buildHeadingTextEvalCases(document model.Document, chunk DocumentChunk) []m
 		return []model.EvalGroundTruthCase{newEvalCase(document, chunk, question, answer, []string{answer}, classifyEvalAnswerType(answer), classifyEvalDifficulty(answer), "heading section extract")}
 	}
 	return nil
+}
+
+func buildKeywordTextEvalCases(document model.Document, chunk DocumentChunk) []model.EvalGroundTruthCase {
+	text := normalizeEvalWhitespace(chunk.Text)
+	if utf8.RuneCountInString(text) < 60 {
+		return nil
+	}
+
+	keywords := selectEvalQuestionKeywords(text, 2)
+	fuzzyQuestions := selectEvalFuzzyQuestions(text, document.Name, 2)
+	if len(keywords) == 0 && len(fuzzyQuestions) == 0 {
+		return nil
+	}
+
+	answer := clipEvalRunes(text, 260)
+	if utf8.RuneCountInString(answer) < 40 {
+		return nil
+	}
+
+	cases := make([]model.EvalGroundTruthCase, 0, len(keywords)+len(fuzzyQuestions))
+	seenQuestions := map[string]struct{}{}
+	addCase := func(question, difficulty, note string) {
+		key := normalizeEvalComparable(question)
+		if key == "" {
+			return
+		}
+		if _, ok := seenQuestions[key]; ok {
+			return
+		}
+		seenQuestions[key] = struct{}{}
+		cases = append(cases, newEvalCase(document, chunk, question, answer, []string{answer}, classifyEvalAnswerType(answer), difficulty, note))
+	}
+	for _, keyword := range keywords {
+		question := fmt.Sprintf("文档《%s》中与“%s”相关的内容是什么？", document.Name, keyword)
+		addCase(question, "medium", "keyword text extract")
+	}
+	for _, question := range fuzzyQuestions {
+		addCase(question, "hard", "fuzzy intent text extract")
+	}
+	return cases
+}
+
+type evalCrossDocumentEvidence struct {
+	document model.Document
+	chunk    DocumentChunk
+	keyword  string
+	answer   string
+}
+
+func selectCrossDocumentEvalEvidence(document model.Document, chunks []DocumentChunk) (evalCrossDocumentEvidence, bool) {
+	for _, chunk := range chunks {
+		text := normalizeEvalWhitespace(chunk.Text)
+		if utf8.RuneCountInString(text) < 60 {
+			continue
+		}
+		keywords := selectEvalQuestionKeywords(text, 1)
+		if len(keywords) == 0 {
+			continue
+		}
+		answer := clipEvalRunes(text, 220)
+		if utf8.RuneCountInString(answer) < 40 {
+			continue
+		}
+		return evalCrossDocumentEvidence{
+			document: document,
+			chunk:    chunk,
+			keyword:  keywords[0],
+			answer:   answer,
+		}, true
+	}
+	return evalCrossDocumentEvidence{}, false
+}
+
+func buildCrossDocumentEvalCases(evidence []evalCrossDocumentEvidence, limit int) []model.EvalGroundTruthCase {
+	if limit <= 0 || len(evidence) < 2 {
+		return nil
+	}
+
+	cases := make([]model.EvalGroundTruthCase, 0, limit)
+	for leftIndex := 0; leftIndex < len(evidence); leftIndex++ {
+		for rightIndex := leftIndex + 1; rightIndex < len(evidence); rightIndex++ {
+			left := evidence[leftIndex]
+			right := evidence[rightIndex]
+			question := fmt.Sprintf("对比文档《%s》和《%s》中与“%s”和“%s”相关的内容，分别提到了什么？", left.document.Name, right.document.Name, left.keyword, right.keyword)
+			answer := strings.Join([]string{
+				fmt.Sprintf("《%s》：%s", left.document.Name, left.answer),
+				fmt.Sprintf("《%s》：%s", right.document.Name, right.answer),
+			}, "\n")
+			item := model.EvalGroundTruthCase{
+				Question:       question,
+				Answer:         answer,
+				AnswerSnippets: normalizeEvalSnippets([]string{left.answer, right.answer}, 220),
+				SourceDocuments: []model.EvalSourceDocument{
+					{
+						KnowledgeBaseID: left.document.KnowledgeBaseID,
+						DocumentID:      left.document.ID,
+						ChunkID:         left.chunk.ID,
+					},
+					{
+						KnowledgeBaseID: right.document.KnowledgeBaseID,
+						DocumentID:      right.document.ID,
+						ChunkID:         right.chunk.ID,
+					},
+				},
+				AnswerType:   "cross_document",
+				Difficulty:   "hard",
+				ReviewStatus: evalReviewStatusApproved,
+				Notes:        fmt.Sprintf("auto-generated from %s and %s; cross document comparison", left.document.Name, right.document.Name),
+			}
+			cases = append(cases, item)
+			if len(cases) >= limit {
+				return cases
+			}
+		}
+	}
+	return cases
+}
+
+func crossDocumentEvalEvidenceText(item model.EvalGroundTruthCase, evidence []evalCrossDocumentEvidence) string {
+	parts := []string{item.Answer}
+	for _, source := range item.SourceDocuments {
+		for _, candidate := range evidence {
+			if candidate.document.ID != source.DocumentID {
+				continue
+			}
+			parts = append(parts, candidate.document.Name, candidate.answer, candidate.chunk.Text)
+			break
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func selectEvalQuestionKeywords(text string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	patterns := []string{
+		`知识库`,
+		`检索(?:增强|调试|策略|结果|质量)?`,
+		`评估(?:集|报告|指标|运行)?`,
+		`混合检索`,
+		`向量检索`,
+		`结构化(?:数据|查询|表格)?`,
+		`MCP(?:\s*Server)?`,
+		`Docker(?:\s*Compose)?`,
+		`配置(?:项|参数)?`,
+		`权限(?:控制|配置)?`,
+		`审计(?:日志)?`,
+		`索引(?:状态|重建|任务)?`,
+		`上传(?:任务|状态)?`,
+		`低置信`,
+		`RAG`,
+		`Qdrant`,
+		`Ollama`,
+	}
+
+	keywords := make([]string, 0, limit)
+	seen := map[string]struct{}{}
+	for _, pattern := range patterns {
+		matches := regexp.MustCompile(pattern).FindAllString(text, -1)
+		for _, match := range matches {
+			keyword := normalizeEvalWhitespace(match)
+			key := normalizeEvalComparable(keyword)
+			if keyword == "" || key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keywords = append(keywords, keyword)
+			if len(keywords) >= limit {
+				return keywords
+			}
+		}
+	}
+	return keywords
+}
+
+func selectEvalFuzzyQuestions(text, documentName string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	candidates := []struct {
+		pattern  string
+		question string
+	}{
+		{
+			pattern:  `检索|向量检索|混合检索|召回|命中|低置信`,
+			question: fmt.Sprintf("文档《%s》中如何改进检索命中效果？", documentName),
+		},
+		{
+			pattern:  `评估|评估集|评估报告|指标|Hit Rate|MRR`,
+			question: fmt.Sprintf("文档《%s》中如何验证知识库回答质量？", documentName),
+		},
+		{
+			pattern:  `索引|重建|上传|文档`,
+			question: fmt.Sprintf("文档《%s》中如何维护文档索引？", documentName),
+		},
+		{
+			pattern:  `MCP|权限|审计|token|工具`,
+			question: fmt.Sprintf("文档《%s》中如何控制外部工具调用？", documentName),
+		},
+		{
+			pattern:  `结构化|表格|字段|数据`,
+			question: fmt.Sprintf("文档《%s》中如何处理结构化数据查询？", documentName),
+		},
+	}
+
+	questions := make([]string, 0, limit)
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		if !regexp.MustCompile(candidate.pattern).MatchString(text) {
+			continue
+		}
+		key := normalizeEvalComparable(candidate.question)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		questions = append(questions, candidate.question)
+		if len(questions) >= limit {
+			return questions
+		}
+	}
+	return questions
 }
 
 func classifyEvalAnswerType(text string) string {

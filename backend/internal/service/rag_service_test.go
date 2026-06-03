@@ -232,6 +232,21 @@ func TestRRFFusion(t *testing.T) {
 	if merged[0].ID == "b" && merged[1].ID != "a" {
 		t.Fatalf("expected a to rank near top, got %s", merged[1].ID)
 	}
+	byID := make(map[string]SearchResult)
+	for _, item := range merged {
+		byID[item.ID] = item
+	}
+	channels, ok := byID["a"].Payload[qdrantPayloadRetrievalChannels].([]string)
+	if !ok || len(channels) != 2 || channels[0] != "dense" || channels[1] != "sparse" {
+		t.Fatalf("expected a to carry dense and sparse channels, got %#v", byID["a"].Payload[qdrantPayloadRetrievalChannels])
+	}
+	if byID["a"].Payload[qdrantPayloadDenseRank] != 1 || byID["a"].Payload[qdrantPayloadSparseRank] != 3 {
+		t.Fatalf("expected a rank metadata, got %#v", byID["a"].Payload)
+	}
+	sparseOnlyChannels, ok := byID["d"].Payload[qdrantPayloadRetrievalChannels].([]string)
+	if !ok || len(sparseOnlyChannels) != 1 || sparseOnlyChannels[0] != "sparse" {
+		t.Fatalf("expected d to carry sparse-only channel, got %#v", byID["d"].Payload[qdrantPayloadRetrievalChannels])
+	}
 }
 
 func TestSearchHybridFallsBackToDenseResults(t *testing.T) {

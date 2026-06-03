@@ -1487,15 +1487,18 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		items = append(items, model.RetrievalDebugChunk{
-			ID:              chunk.ID,
-			KnowledgeBaseID: chunk.KnowledgeBaseID,
-			DocumentID:      chunk.DocumentID,
-			DocumentName:    chunk.DocumentName,
-			Index:           chunk.Index,
-			Kind:            chunk.Kind,
-			Score:           chunk.Score,
-			Text:            truncateRunes(strings.TrimSpace(chunk.Text), retrievalDebugChunkTextLimit),
-			MatchReasons:    buildRetrievalDebugMatchReasons(query, chunk, deterministicUsed),
+			ID:                chunk.ID,
+			KnowledgeBaseID:   chunk.KnowledgeBaseID,
+			DocumentID:        chunk.DocumentID,
+			DocumentName:      chunk.DocumentName,
+			Index:             chunk.Index,
+			Kind:              chunk.Kind,
+			Score:             chunk.Score,
+			Text:              truncateRunes(strings.TrimSpace(chunk.Text), retrievalDebugChunkTextLimit),
+			MatchReasons:      buildRetrievalDebugMatchReasons(query, chunk, deterministicUsed),
+			RetrievalChannels: chunk.RetrievalChannels,
+			DenseRank:         chunk.DenseRank,
+			SparseRank:        chunk.SparseRank,
 		})
 	}
 
@@ -2887,7 +2890,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 		}
 
 		added := 0
-		for _, item := range items {
+		for itemIndex, item := range items {
 			chunkID := payloadString(item.Payload, "chunk_id", item.ID)
 			if _, exists := seenChunkIDs[chunkID]; exists {
 				continue
@@ -2895,6 +2898,14 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 			text := payloadString(item.Payload, "text", "")
 			if strings.TrimSpace(text) == "" {
 				continue
+			}
+			retrievalChannels := payloadStringSlice(item.Payload, qdrantPayloadRetrievalChannels)
+			if len(retrievalChannels) == 0 {
+				retrievalChannels = []string{qdrantDenseVectorName}
+			}
+			denseRank := payloadInt(item.Payload, qdrantPayloadDenseRank)
+			if denseRank == 0 && containsString(retrievalChannels, qdrantDenseVectorName) {
+				denseRank = itemIndex + 1
 			}
 			seenChunkIDs[chunkID] = struct{}{}
 			results = append(results, RetrievedChunk{
@@ -2907,8 +2918,11 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 					Index:           payloadInt(item.Payload, "chunk_index"),
 					Kind:            payloadString(item.Payload, "chunk_kind", "text"),
 				},
-				Score:    item.Score,
-				RawScore: item.Score,
+				Score:             item.Score,
+				RawScore:          item.Score,
+				RetrievalChannels: retrievalChannels,
+				DenseRank:         denseRank,
+				SparseRank:        payloadInt(item.Payload, qdrantPayloadSparseRank),
 			})
 			added++
 		}
@@ -3679,6 +3693,41 @@ func payloadString(payload map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return text
+}
+
+func payloadStringSlice(payload map[string]any, key string) []string {
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" && text != "<nil>" {
+				values = append(values, text)
+			}
+		}
+		return values
+	default:
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" || text == "<nil>" {
+			return nil
+		}
+		return []string{text}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func qdrantPointID(value string) any {

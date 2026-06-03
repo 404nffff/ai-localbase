@@ -140,6 +140,104 @@ func TestBuildEvalCasesSkipsUnstructuredPlainText(t *testing.T) {
 	}
 }
 
+func TestBuildKeywordTextEvalCasesAreGrounded(t *testing.T) {
+	document := model.Document{
+		ID:              "doc-1",
+		KnowledgeBaseID: "kb-1",
+		Name:            "检索说明.md",
+	}
+	chunk := DocumentChunk{
+		ID:              "doc-1-chunk-0",
+		KnowledgeBaseID: "kb-1",
+		DocumentID:      "doc-1",
+		DocumentName:    "检索说明.md",
+		Text:            "AI LocalBase 支持知识库管理、文档上传、检索调试、低置信样本沉淀和评估报告展示。混合检索会结合向量检索与关键词信号，用于提升召回质量。",
+		Index:           0,
+		Kind:            "text",
+	}
+
+	cases := buildEvalCasesFromChunk(document, chunk, 5)
+	if len(cases) == 0 {
+		t.Fatal("expected keyword eval cases")
+	}
+	for _, item := range cases {
+		if !validateEvalCase(item, document.Name, chunk.Text) {
+			t.Fatalf("expected grounded keyword eval case, got %#v", item)
+		}
+		if strings.Contains(item.Question, "主要讲了什么") {
+			t.Fatalf("expected specific question, got %q", item.Question)
+		}
+	}
+}
+
+func TestBuildKeywordTextEvalCasesIncludeFuzzyQuestions(t *testing.T) {
+	document := model.Document{
+		ID:              "doc-1",
+		KnowledgeBaseID: "kb-1",
+		Name:            "质量验证.md",
+	}
+	chunk := DocumentChunk{
+		ID:              "doc-1-chunk-0",
+		KnowledgeBaseID: "kb-1",
+		DocumentID:      "doc-1",
+		DocumentName:    "质量验证.md",
+		Text:            "系统通过评估集、评估报告、Hit Rate、MRR 和低置信样本分析来验证知识库回答质量，并结合检索调试定位命中问题，后续还会用质量趋势持续观察优化收益。",
+		Index:           0,
+		Kind:            "text",
+	}
+
+	cases := buildEvalCasesFromChunk(document, chunk, 5)
+	var foundFuzzy bool
+	for _, item := range cases {
+		if !validateEvalCase(item, document.Name, chunk.Text) {
+			t.Fatalf("expected grounded fuzzy eval case, got %#v", item)
+		}
+		if strings.Contains(item.Question, "如何验证知识库回答质量") {
+			foundFuzzy = true
+			if item.Difficulty != "hard" {
+				t.Fatalf("expected fuzzy question difficulty hard, got %s", item.Difficulty)
+			}
+		}
+	}
+	if !foundFuzzy {
+		t.Fatalf("expected fuzzy quality question, got %#v", cases)
+	}
+}
+
+func TestBuildCrossDocumentEvalCasesAreGrounded(t *testing.T) {
+	leftDocument := model.Document{ID: "doc-1", KnowledgeBaseID: "kb-1", Name: "检索.md"}
+	rightDocument := model.Document{ID: "doc-2", KnowledgeBaseID: "kb-1", Name: "评估.md"}
+	evidence := []evalCrossDocumentEvidence{
+		{
+			document: leftDocument,
+			chunk:    DocumentChunk{ID: "chunk-1", DocumentID: "doc-1", Text: "混合检索会结合向量检索和关键词信号，用于提升知识库召回质量。"},
+			keyword:  "混合检索",
+			answer:   "混合检索会结合向量检索和关键词信号，用于提升知识库召回质量。",
+		},
+		{
+			document: rightDocument,
+			chunk:    DocumentChunk{ID: "chunk-2", DocumentID: "doc-2", Text: "评估报告通过 Hit Rate、MRR 和低置信样本分析来验证知识库回答质量。"},
+			keyword:  "评估报告",
+			answer:   "评估报告通过 Hit Rate、MRR 和低置信样本分析来验证知识库回答质量。",
+		},
+	}
+
+	cases := buildCrossDocumentEvalCases(evidence, 2)
+	if len(cases) != 1 {
+		t.Fatalf("expected one cross document case, got %#v", cases)
+	}
+	item := cases[0]
+	if item.AnswerType != "cross_document" || item.Difficulty != "hard" {
+		t.Fatalf("unexpected cross document metadata: %#v", item)
+	}
+	if len(item.SourceDocuments) != 2 {
+		t.Fatalf("expected two source documents, got %#v", item.SourceDocuments)
+	}
+	if !validateEvalCase(item, "", crossDocumentEvalEvidenceText(item, evidence)) {
+		t.Fatalf("expected grounded cross document case, got %#v", item)
+	}
+}
+
 func TestGenerateEvalDatasetPersistsDataset(t *testing.T) {
 	tempDir := t.TempDir()
 	documentPath := filepath.Join(tempDir, "teachers.csv")
@@ -416,6 +514,36 @@ func TestEvalCaseHitPrefersChunkDocumentThenSnippet(t *testing.T) {
 	hit, rank, matchedBy = evalCaseHit(item, chunks)
 	if !hit || rank != 2 || matchedBy != "snippet" {
 		t.Fatalf("expected snippet hit at rank 2, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
+	}
+}
+
+func TestEvalCaseHitRequiresAllCrossDocumentSources(t *testing.T) {
+	item := model.EvalGroundTruthCase{
+		ID:         "case-cross",
+		Question:   "两个文档分别提到了什么？",
+		Answer:     "检索文档和评估文档的答案。",
+		AnswerType: "cross_document",
+		SourceDocuments: []model.EvalSourceDocument{
+			{KnowledgeBaseID: "kb-1", DocumentID: "doc-1", ChunkID: "chunk-1"},
+			{KnowledgeBaseID: "kb-1", DocumentID: "doc-2", ChunkID: "chunk-2"},
+		},
+	}
+
+	partialChunks := []model.RetrievalDebugChunk{
+		{ID: "chunk-1", DocumentID: "doc-1", Text: "混合检索说明。"},
+	}
+	hit, rank, matchedBy := evalCaseHit(item, partialChunks)
+	if hit || rank != -1 || matchedBy != "" {
+		t.Fatalf("expected partial cross document hit to fail, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
+	}
+
+	fullChunks := []model.RetrievalDebugChunk{
+		{ID: "chunk-1", DocumentID: "doc-1", Text: "混合检索说明。"},
+		{ID: "chunk-2", DocumentID: "doc-2", Text: "评估报告说明。"},
+	}
+	hit, rank, matchedBy = evalCaseHit(item, fullChunks)
+	if !hit || rank != 2 || matchedBy != "cross_document" {
+		t.Fatalf("expected full cross document hit, got hit=%v rank=%d matchedBy=%s", hit, rank, matchedBy)
 	}
 }
 

@@ -30,6 +30,49 @@ const resolvedSearchModeLabel = (mode?: string) => {
   return '等待检索'
 }
 
+const retrievalChannelLabel = (channel: string) => {
+  if (channel === 'dense') return '向量'
+  if (channel === 'sparse') return '关键词'
+  return channel
+}
+
+const retrievalContributionSummary = (result: RetrievalDebugResponse) => {
+  const counts = result.items.reduce(
+    (acc, item) => {
+      const channels = item.retrievalChannels ?? []
+      const hasDense = channels.includes('dense')
+      const hasSparse = channels.includes('sparse')
+      if (hasDense && hasSparse) acc.both += 1
+      else if (hasSparse) acc.sparseOnly += 1
+      else if (hasDense) acc.denseOnly += 1
+      else acc.unknown += 1
+      return acc
+    },
+    { both: 0, denseOnly: 0, sparseOnly: 0, unknown: 0 },
+  )
+
+  if (result.searchMode !== 'hybrid') {
+    return [
+      `向量召回 ${counts.denseOnly + counts.both + counts.unknown}`,
+      '当前模式未启用关键词召回融合',
+    ]
+  }
+
+  return [
+    `双路共同命中 ${counts.both}`,
+    `向量独有 ${counts.denseOnly}`,
+    `关键词独有 ${counts.sparseOnly}`,
+    counts.unknown > 0 ? `未标记 ${counts.unknown}` : '',
+  ].filter(Boolean)
+}
+
+const retrievalChannelRankLabel = (item: RetrievalDebugResponse['items'][number]) => {
+  const parts = []
+  if (item.denseRank) parts.push(`向量 #${item.denseRank}`)
+  if (item.sparseRank) parts.push(`关键词 #${item.sparseRank}`)
+  return parts.join(' · ')
+}
+
 const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
   scopeLabel,
   query,
@@ -102,6 +145,15 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
           )}
         </div>
 
+        <div className="kb-retrieval-contribution">
+          <strong>召回贡献</strong>
+          <div>
+            {retrievalContributionSummary(result).map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
+        </div>
+
         {result.evalCandidate && (
           <div className="kb-retrieval-eval">
             <div>
@@ -150,6 +202,10 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
                   <span>{chunkKindLabel(item.kind)}</span>
                   <span>#{item.index + 1}</span>
                   <span>{item.score.toFixed(4)}</span>
+                  {item.retrievalChannels?.map((channel) => (
+                    <span key={channel}>{retrievalChannelLabel(channel)}</span>
+                  ))}
+                  {retrievalChannelRankLabel(item) && <span>{retrievalChannelRankLabel(item)}</span>}
                 </div>
                 {item.matchReasons && item.matchReasons.length > 0 && (
                   <div className="kb-retrieval-reasons">

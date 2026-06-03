@@ -170,6 +170,9 @@ export interface RetrievalDebugChunk {
   score: number
   text: string
   matchReasons?: string[]
+  retrievalChannels?: string[]
+  denseRank?: number
+  sparseRank?: number
 }
 
 export interface RetrievalDebugTraceStep {

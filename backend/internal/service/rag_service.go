@@ -145,8 +145,11 @@ type SparseVector struct {
 
 type RetrievedChunk struct {
 	DocumentChunk
-	Score    float64
-	RawScore float64
+	Score             float64
+	RawScore          float64
+	RetrievalChannels []string
+	DenseRank         int
+	SparseRank        int
 }
 
 type openAIEmbeddingRequest struct {

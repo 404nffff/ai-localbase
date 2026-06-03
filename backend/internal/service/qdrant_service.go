@@ -254,8 +254,11 @@ func (s *QdrantService) DeletePointsByFilter(ctx context.Context, knowledgeBaseI
 }
 
 const (
-	qdrantDenseVectorName  = "dense"
-	qdrantSparseVectorName = "sparse"
+	qdrantDenseVectorName          = "dense"
+	qdrantSparseVectorName         = "sparse"
+	qdrantPayloadRetrievalChannels = "_retrieval_channels"
+	qdrantPayloadDenseRank         = "_dense_rank"
+	qdrantPayloadSparseRank        = "_sparse_rank"
 )
 
 func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vector []float64, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
@@ -442,25 +445,37 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 
 	scores := make(map[string]float64)
 	payloads := make(map[string]map[string]any)
-	addResults := func(results []SearchResult) {
+	denseRanks := make(map[string]int)
+	sparseRanks := make(map[string]int)
+	channels := make(map[string]map[string]struct{})
+	addResults := func(results []SearchResult, channel string, ranks map[string]int) {
 		for idx, item := range results {
 			rank := float64(idx + 1)
 			scores[item.ID] += 1.0 / (k + rank)
+			ranks[item.ID] = idx + 1
+			if _, ok := channels[item.ID]; !ok {
+				channels[item.ID] = make(map[string]struct{})
+			}
+			channels[item.ID][channel] = struct{}{}
 			if _, ok := payloads[item.ID]; !ok {
-				payloads[item.ID] = item.Payload
+				payloads[item.ID] = clonePayload(item.Payload)
 			}
 		}
 	}
 
-	addResults(denseResults)
-	addResults(sparseResults)
+	addResults(denseResults, qdrantDenseVectorName, denseRanks)
+	addResults(sparseResults, qdrantSparseVectorName, sparseRanks)
 
 	merged := make([]SearchResult, 0, len(scores))
 	for id, score := range scores {
+		payload := payloads[id]
+		payload[qdrantPayloadRetrievalChannels] = sortedChannelList(channels[id])
+		payload[qdrantPayloadDenseRank] = denseRanks[id]
+		payload[qdrantPayloadSparseRank] = sparseRanks[id]
 		merged = append(merged, SearchResult{
 			ID:      id,
 			Score:   score,
-			Payload: payloads[id],
+			Payload: payload,
 		})
 	}
 
@@ -475,6 +490,23 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 		return merged[:topK]
 	}
 	return merged
+}
+
+func clonePayload(payload map[string]any) map[string]any {
+	cloned := make(map[string]any, len(payload)+3)
+	for key, value := range payload {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func sortedChannelList(channels map[string]struct{}) []string {
+	result := make([]string, 0, len(channels))
+	for channel := range channels {
+		result = append(result, channel)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func applyScoreThreshold(results []SearchResult, threshold float64) []SearchResult {

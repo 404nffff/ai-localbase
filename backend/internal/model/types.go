@@ -463,15 +463,18 @@ type RetrievalDebugRequest struct {
 }
 
 type RetrievalDebugChunk struct {
-	ID              string   `json:"id"`
-	KnowledgeBaseID string   `json:"knowledgeBaseId"`
-	DocumentID      string   `json:"documentId"`
-	DocumentName    string   `json:"documentName"`
-	Index           int      `json:"index"`
-	Kind            string   `json:"kind"`
-	Score           float64  `json:"score"`
-	Text            string   `json:"text"`
-	MatchReasons    []string `json:"matchReasons,omitempty"`
+	ID                string   `json:"id"`
+	KnowledgeBaseID   string   `json:"knowledgeBaseId"`
+	DocumentID        string   `json:"documentId"`
+	DocumentName      string   `json:"documentName"`
+	Index             int      `json:"index"`
+	Kind              string   `json:"kind"`
+	Score             float64  `json:"score"`
+	Text              string   `json:"text"`
+	MatchReasons      []string `json:"matchReasons,omitempty"`
+	RetrievalChannels []string `json:"retrievalChannels,omitempty"`
+	DenseRank         int      `json:"denseRank,omitempty"`
+	SparseRank        int      `json:"sparseRank,omitempty"`
 }
 
 type RetrievalDebugTraceStep struct {
