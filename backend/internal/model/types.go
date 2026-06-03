@@ -236,14 +236,17 @@ type EmbeddingModelConfig struct {
 }
 
 type ChatCompletionRequest struct {
-	ConversationID  string               `json:"conversationId"`
-	Model           string               `json:"model"`
-	Messages        []ChatMessage        `json:"messages"`
-	KnowledgeBaseID string               `json:"knowledgeBaseId"`
-	DocumentID      string               `json:"documentId"`
-	RetrievalMode   string               `json:"retrievalMode,omitempty"`
-	Config          ChatModelConfig      `json:"config"`
-	Embedding       EmbeddingModelConfig `json:"embedding"`
+	ConversationID          string               `json:"conversationId"`
+	Model                   string               `json:"model"`
+	Messages                []ChatMessage        `json:"messages"`
+	KnowledgeBaseID         string               `json:"knowledgeBaseId"`
+	DocumentID              string               `json:"documentId"`
+	RetrievalMode           string               `json:"retrievalMode,omitempty"`
+	RerankStrategy          string               `json:"rerankStrategy,omitempty"`
+	EnableQueryRewrite      *bool                `json:"enableQueryRewrite,omitempty"`
+	QueryRewriteMaxVariants int                  `json:"queryRewriteMaxVariants,omitempty"`
+	Config                  ChatModelConfig      `json:"config"`
+	Embedding               EmbeddingModelConfig `json:"embedding"`
 }
 
 type ChatCompletionChoice struct {
@@ -410,9 +413,12 @@ type DeleteEvalDatasetItemResponse struct {
 }
 
 type RunEvalDatasetRequest struct {
-	IncludeDisabled bool   `json:"includeDisabled,omitempty"`
-	TopK            int    `json:"topK,omitempty"`
-	SearchMode      string `json:"searchMode,omitempty"`
+	IncludeDisabled         bool   `json:"includeDisabled,omitempty"`
+	TopK                    int    `json:"topK,omitempty"`
+	SearchMode              string `json:"searchMode,omitempty"`
+	RerankStrategy          string `json:"rerankStrategy,omitempty"`
+	EnableQueryRewrite      *bool  `json:"enableQueryRewrite,omitempty"`
+	QueryRewriteMaxVariants int    `json:"queryRewriteMaxVariants,omitempty"`
 }
 
 type EvalRunMetrics struct {
@@ -443,28 +449,32 @@ type EvalRunCaseResult struct {
 }
 
 type RunEvalDatasetResponse struct {
-	RunID           string              `json:"runId"`
-	DatasetID       string              `json:"datasetId"`
-	DatasetName     string              `json:"datasetName"`
-	KnowledgeBaseID string              `json:"knowledgeBaseId,omitempty"`
-	DocumentID      string              `json:"documentId,omitempty"`
-	SearchMode      string              `json:"searchMode"`
-	StartedAt       string              `json:"startedAt"`
-	ElapsedMs       int64               `json:"elapsedMs"`
-	Metrics         EvalRunMetrics      `json:"metrics"`
-	Cases           []EvalRunCaseResult `json:"cases"`
+	RunID            string              `json:"runId"`
+	DatasetID        string              `json:"datasetId"`
+	DatasetName      string              `json:"datasetName"`
+	KnowledgeBaseID  string              `json:"knowledgeBaseId,omitempty"`
+	DocumentID       string              `json:"documentId,omitempty"`
+	SearchMode       string              `json:"searchMode"`
+	RerankStrategy   string              `json:"rerankStrategy"`
+	QueryRewriteUsed bool                `json:"queryRewriteUsed"`
+	StartedAt        string              `json:"startedAt"`
+	ElapsedMs        int64               `json:"elapsedMs"`
+	Metrics          EvalRunMetrics      `json:"metrics"`
+	Cases            []EvalRunCaseResult `json:"cases"`
 }
 
 type EvalRunSummary struct {
-	RunID           string         `json:"runId"`
-	DatasetID       string         `json:"datasetId"`
-	DatasetName     string         `json:"datasetName"`
-	KnowledgeBaseID string         `json:"knowledgeBaseId,omitempty"`
-	DocumentID      string         `json:"documentId,omitempty"`
-	SearchMode      string         `json:"searchMode"`
-	StartedAt       string         `json:"startedAt"`
-	ElapsedMs       int64          `json:"elapsedMs"`
-	Metrics         EvalRunMetrics `json:"metrics"`
+	RunID            string         `json:"runId"`
+	DatasetID        string         `json:"datasetId"`
+	DatasetName      string         `json:"datasetName"`
+	KnowledgeBaseID  string         `json:"knowledgeBaseId,omitempty"`
+	DocumentID       string         `json:"documentId,omitempty"`
+	SearchMode       string         `json:"searchMode"`
+	RerankStrategy   string         `json:"rerankStrategy"`
+	QueryRewriteUsed bool           `json:"queryRewriteUsed"`
+	StartedAt        string         `json:"startedAt"`
+	ElapsedMs        int64          `json:"elapsedMs"`
+	Metrics          EvalRunMetrics `json:"metrics"`
 }
 
 type EvalRunListResponse struct {
@@ -472,11 +482,14 @@ type EvalRunListResponse struct {
 }
 
 type RetrievalDebugRequest struct {
-	Query           string `json:"query"`
-	KnowledgeBaseID string `json:"knowledgeBaseId"`
-	DocumentID      string `json:"documentId"`
-	TopK            int    `json:"topK"`
-	SearchMode      string `json:"searchMode,omitempty"`
+	Query                   string `json:"query"`
+	KnowledgeBaseID         string `json:"knowledgeBaseId"`
+	DocumentID              string `json:"documentId"`
+	TopK                    int    `json:"topK"`
+	SearchMode              string `json:"searchMode,omitempty"`
+	RerankStrategy          string `json:"rerankStrategy,omitempty"`
+	EnableQueryRewrite      *bool  `json:"enableQueryRewrite,omitempty"`
+	QueryRewriteMaxVariants int    `json:"queryRewriteMaxVariants,omitempty"`
 }
 
 type RetrievalDebugChunk struct {

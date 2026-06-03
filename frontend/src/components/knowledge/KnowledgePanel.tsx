@@ -5,6 +5,7 @@ import type {
   EvalDatasetDetail,
   EvalGroundTruthCase,
   EvalDatasetSummary,
+  EvalRunOptions,
   EvalRunSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
@@ -57,7 +58,10 @@ interface KnowledgePanelProps {
     datasetId: string,
     itemId: string,
   ) => Promise<DeleteEvalDatasetItemResponse>
-  onRunEvalDataset: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
+  onRunEvalDataset: (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions,
+  ) => Promise<RunEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
@@ -369,8 +373,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     }
   }
 
-  const handleRunEvalDataset = async (datasetId: string, searchMode?: RetrievalSearchMode) => {
-    const report = await onRunEvalDataset(datasetId, searchMode)
+  const handleRunEvalDataset = async (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions,
+  ) => {
+    const report = await onRunEvalDataset(datasetId, options)
     if (activeKnowledgeBaseId) {
       void loadEvalRuns(activeKnowledgeBaseId)
     }

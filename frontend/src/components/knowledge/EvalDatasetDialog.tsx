@@ -2,7 +2,9 @@ import React, { useMemo, useState } from 'react'
 import type {
   EvalDatasetDetail,
   EvalGroundTruthCase,
+  EvalRunOptions,
   GenerateEvalDatasetResponse,
+  RetrievalRerankStrategy,
   RetrievalSearchMode,
   RunEvalDatasetResponse,
 } from '../../services/api'
@@ -19,7 +21,10 @@ interface EvalDatasetDialogProps {
     item: EvalGroundTruthCase,
   ) => Promise<EvalGroundTruthCase>
   onDeleteItem?: (datasetId: string, itemId: string) => Promise<void>
-  onRun?: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
+  onRun?: (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions,
+  ) => Promise<RunEvalDatasetResponse>
 }
 
 interface EvalItemDraft {
@@ -38,6 +43,13 @@ interface EvalComparisonReport {
   hybrid: RunEvalDatasetResponse
 }
 
+interface EvalStrategyComparisonReport {
+  baseline: RunEvalDatasetResponse
+  semantic: RunEvalDatasetResponse
+  rewrite: RunEvalDatasetResponse
+  semanticRewrite: RunEvalDatasetResponse
+}
+
 type EvalComparisonCaseLabel = '混合修复' | '混合退步' | '排名提升' | '排名下降' | '均未命中' | '保持稳定'
 
 interface EvalComparisonCase {
@@ -54,6 +66,12 @@ type HybridRecommendationStatus = 'enable_hybrid' | 'keep_dense' | 'need_more_sa
 
 interface HybridRecommendation {
   status: HybridRecommendationStatus
+  title: string
+  tone: 'good' | 'bad' | 'neutral'
+  reasons: string[]
+}
+
+interface StrategyRecommendation {
   title: string
   tone: 'good' | 'bad' | 'neutral'
   reasons: string[]
@@ -161,6 +179,16 @@ const searchModeLabel = (mode?: string) => {
   return '自动'
 }
 
+const rerankStrategyLabel = (strategy?: string) => {
+  if (strategy === 'semantic') return '语义重排'
+  return '关键词重排'
+}
+
+const evalStrategyLabel = (report: RunEvalDatasetResponse) => {
+  const rewrite = report.queryRewriteUsed ? '改写' : '不改写'
+  return `${rerankStrategyLabel(report.rerankStrategy)} / ${rewrite}`
+}
+
 const compareTone = (delta: number, higherIsBetter = true) => {
   if (delta === 0) return 'neutral'
   const improved = higherIsBetter ? delta > 0 : delta < 0
@@ -173,6 +201,128 @@ const formatLatencyGrowth = (value: number) => {
 }
 
 const evalCaseRankLabel = (hit: boolean, rank: number) => (hit && rank > 0 ? `命中 #${rank}` : '未命中')
+
+const evalStrategyRunOptions = (
+  searchMode: RetrievalSearchMode,
+  rerankStrategy: RetrievalRerankStrategy,
+  enableQueryRewrite: boolean,
+): EvalRunOptions => ({
+  searchMode,
+  rerankStrategy,
+  enableQueryRewrite,
+  queryRewriteMaxVariants: 3,
+})
+
+const evalStrategyReports = (comparison: EvalStrategyComparisonReport) => [
+  comparison.baseline,
+  comparison.semantic,
+  comparison.rewrite,
+  comparison.semanticRewrite,
+]
+
+const evalStrategyScore = (report: RunEvalDatasetResponse) => {
+  const totalCases = Math.max(report.metrics.totalCases, 1)
+  const lowConfidenceRate = report.metrics.lowConfidence / totalCases
+  const latencyPenalty = report.metrics.latencyP95Ms / 10000
+  return (report.metrics.hitRate * 100) + (report.metrics.mrr * 10) - (lowConfidenceRate * 5) - latencyPenalty
+}
+
+const compareStrategyReports = (
+  left: RunEvalDatasetResponse,
+  right: RunEvalDatasetResponse,
+) => {
+  const scoreDelta = evalStrategyScore(right) - evalStrategyScore(left)
+  if (Math.abs(scoreDelta) > 0.001) return scoreDelta
+  if (right.metrics.hitRate !== left.metrics.hitRate) return right.metrics.hitRate - left.metrics.hitRate
+  if (right.metrics.mrr !== left.metrics.mrr) return right.metrics.mrr - left.metrics.mrr
+  if (right.metrics.lowConfidence !== left.metrics.lowConfidence) {
+    return left.metrics.lowConfidence - right.metrics.lowConfidence
+  }
+  return left.metrics.latencyP95Ms - right.metrics.latencyP95Ms
+}
+
+const buildStrategyRecommendation = (
+  comparison: EvalStrategyComparisonReport,
+): StrategyRecommendation => {
+  const baseline = comparison.baseline
+  const totalCases = baseline.metrics.totalCases
+  if (totalCases < 5) {
+    return {
+      title: '样本不足，先不要调整排序与改写默认策略',
+      tone: 'neutral',
+      reasons: [
+        `当前只覆盖 ${totalCases} 条启用用例，建议至少 5 条后再判断默认组合。`,
+        '可以先继续补充低置信、模糊问法和跨文档样本。',
+      ],
+    }
+  }
+
+  const best = [...evalStrategyReports(comparison)]
+    .sort((left, right) => compareStrategyReports(left, right))[0]
+  const hitRateDelta = best.metrics.hitRate - baseline.metrics.hitRate
+  const mrrDelta = best.metrics.mrr - baseline.metrics.mrr
+  const lowConfidenceDelta = best.metrics.lowConfidence - baseline.metrics.lowConfidence
+  const latencyDelta = best.metrics.latencyP95Ms - baseline.metrics.latencyP95Ms
+  const latencyGrowth = baseline.metrics.latencyP95Ms > 0
+    ? latencyDelta / baseline.metrics.latencyP95Ms
+    : (latencyDelta > 0 ? Number.POSITIVE_INFINITY : 0)
+  const bestLabel = evalStrategyLabel(best)
+  const isBaseline = best === baseline
+  const blockerReasons: string[] = []
+  const positiveReasons: string[] = []
+
+  if (hitRateDelta < 0) {
+    blockerReasons.push(`Hit Rate 下降 ${formatPercent(Math.abs(hitRateDelta))}`)
+  } else if (hitRateDelta > 0) {
+    positiveReasons.push(`Hit Rate 提升 ${formatPercent(hitRateDelta)}`)
+  } else {
+    positiveReasons.push('Hit Rate 与基线持平')
+  }
+
+  if (mrrDelta < 0) {
+    blockerReasons.push(`MRR 下降 ${Math.abs(mrrDelta).toFixed(3)}`)
+  } else if (mrrDelta > 0) {
+    positiveReasons.push(`MRR 提升 ${mrrDelta.toFixed(3)}`)
+  } else {
+    positiveReasons.push('MRR 与基线持平')
+  }
+
+  if (lowConfidenceDelta > 0 && hitRateDelta <= 0) {
+    blockerReasons.push(`低置信用例增加 ${lowConfidenceDelta}`)
+  } else if (lowConfidenceDelta < 0) {
+    positiveReasons.push(`低置信用例减少 ${Math.abs(lowConfidenceDelta)}`)
+  } else if (lowConfidenceDelta === 0) {
+    positiveReasons.push('低置信数量未增加')
+  } else {
+    positiveReasons.push(`低置信用例增加 ${lowConfidenceDelta}，但召回指标同步提升`)
+  }
+
+  if (latencyGrowth > 0.3 && hitRateDelta < 0.05) {
+    blockerReasons.push(`P95 延迟增长 ${formatLatencyGrowth(latencyGrowth)}，收益不足以覆盖成本`)
+  } else {
+    positiveReasons.push(`P95 延迟变化 ${formatLatencyGrowth(latencyGrowth)}`)
+  }
+
+  if (isBaseline || blockerReasons.length > 0) {
+    return {
+      title: '建议保持关键词重排 / 不改写作为默认组合',
+      tone: blockerReasons.length > 0 ? 'bad' : 'neutral',
+      reasons: blockerReasons.length > 0 ? blockerReasons : [
+        ...positiveReasons.slice(0, 3),
+        '当前最佳结果仍是基线组合，暂不建议开启语义重排或 Query Rewrite。',
+      ],
+    }
+  }
+
+  return {
+    title: `建议默认使用 ${bestLabel}`,
+    tone: 'good',
+    reasons: [
+      ...positiveReasons.slice(0, 4),
+      '建议再用一组真实问题复跑，确认结果稳定后写入默认高级检索配置。',
+    ],
+  }
+}
 
 const evalComparisonCaseLabel = (
   denseCase: RunEvalDatasetResponse['cases'][number],
@@ -327,9 +477,11 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [comparing, setComparing] = useState(false)
+  const [strategyComparing, setStrategyComparing] = useState(false)
   const [evalSearchMode, setEvalSearchMode] = useState<RetrievalSearchMode>('auto')
   const [evalRun, setEvalRun] = useState<RunEvalDatasetResponse | null>(null)
   const [evalComparison, setEvalComparison] = useState<EvalComparisonReport | null>(null)
+  const [strategyComparison, setStrategyComparison] = useState<EvalStrategyComparisonReport | null>(null)
   const [actionError, setActionError] = useState('')
 
   const datasetId = getSavedDatasetId(dataset)
@@ -407,6 +559,31 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
   const hybridRecommendation = useMemo(() => (
     evalComparison ? buildHybridRecommendation(evalComparison, comparisonCaseStats) : null
   ), [evalComparison, comparisonCaseStats])
+  const strategyComparisonRows = useMemo(() => {
+    if (!strategyComparison) return []
+    const reports = evalStrategyReports(strategyComparison)
+    return [
+      {
+        label: 'Hit Rate',
+        values: reports.map((report) => formatPercent(report.metrics.hitRate)),
+      },
+      {
+        label: 'MRR',
+        values: reports.map((report) => report.metrics.mrr.toFixed(3)),
+      },
+      {
+        label: '低置信',
+        values: reports.map((report) => String(report.metrics.lowConfidence)),
+      },
+      {
+        label: '检索 P95',
+        values: reports.map((report) => `${report.metrics.latencyP95Ms}ms`),
+      },
+    ]
+  }, [strategyComparison])
+  const strategyRecommendation = useMemo(() => (
+    strategyComparison ? buildStrategyRecommendation(strategyComparison) : null
+  ), [strategyComparison])
   const visibleComparisonCases = useMemo(() => (
     comparisonCases
       .filter((item) => item.label !== '保持稳定')
@@ -506,9 +683,45 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
     }
   }
 
+  const runStrategyComparison = async () => {
+    if (!datasetId || !onRun) return
+    setStrategyComparing(true)
+    setActionError('')
+    setStrategyComparison(null)
+    try {
+      const baseline = await onRun(
+        datasetId,
+        evalStrategyRunOptions(evalSearchMode, 'keyword', false),
+      )
+      const semantic = await onRun(
+        datasetId,
+        evalStrategyRunOptions(evalSearchMode, 'semantic', false),
+      )
+      const rewrite = await onRun(
+        datasetId,
+        evalStrategyRunOptions(evalSearchMode, 'keyword', true),
+      )
+      const semanticRewrite = await onRun(
+        datasetId,
+        evalStrategyRunOptions(evalSearchMode, 'semantic', true),
+      )
+      setStrategyComparison({
+        baseline,
+        semantic,
+        rewrite,
+        semanticRewrite,
+      })
+      setEvalRun(semanticRewrite)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '运行策略对比失败')
+    } finally {
+      setStrategyComparing(false)
+    }
+  }
+
   const reportCases = evalRun?.cases ?? []
   const issueCases = reportCases.filter((item) => !item.hit || item.lowConfidence || item.error)
-  const actionBusy = running || comparing
+  const actionBusy = running || comparing || strategyComparing
 
   return (
     <div className="kb-dialog-backdrop" onClick={onClose}>
@@ -670,6 +883,51 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
                 ))
               )}
             </div>
+          </section>
+        )}
+
+        {strategyComparison && (
+          <section className="kb-eval-compare-report">
+            <div className="kb-eval-compare-head">
+              <div>
+                <span>排序与改写策略对比</span>
+                <strong>{searchModeLabel(strategyComparison.baseline.searchMode)}</strong>
+              </div>
+              <span>
+                {strategyComparison.baseline.metrics.totalCases} 条用例 · {[strategyComparison.baseline, strategyComparison.semantic, strategyComparison.rewrite, strategyComparison.semanticRewrite]
+                  .reduce((total, report) => total + report.elapsedMs, 0)}ms
+              </span>
+            </div>
+            <div className="kb-eval-compare-grid">
+              <div className="kb-eval-compare-row kb-eval-compare-row--head kb-eval-compare-row--strategy">
+                <span>指标</span>
+                <span>{evalStrategyLabel(strategyComparison.baseline)}</span>
+                <span>{evalStrategyLabel(strategyComparison.semantic)}</span>
+                <span>{evalStrategyLabel(strategyComparison.rewrite)}</span>
+                <span>{evalStrategyLabel(strategyComparison.semanticRewrite)}</span>
+              </div>
+              {strategyComparisonRows.map((row) => (
+                <div className="kb-eval-compare-row kb-eval-compare-row--strategy" key={row.label}>
+                  <span>{row.label}</span>
+                  {row.values.map((value, index) => (
+                    <span key={`${row.label}-${index}`}>{value}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
+            {strategyRecommendation && (
+              <div className={`kb-eval-strategy-recommendation kb-eval-hybrid-recommendation kb-eval-hybrid-recommendation--${strategyRecommendation.tone}`}>
+                <div>
+                  <span>排序默认策略建议</span>
+                  <strong>{strategyRecommendation.title}</strong>
+                </div>
+                <ul>
+                  {strategyRecommendation.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
         )}
 
@@ -857,6 +1115,11 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
             {onRun && datasetId && (
               <button onClick={() => void runComparison()} disabled={actionBusy}>
                 {comparing ? '对比中' : '运行对比'}
+              </button>
+            )}
+            {onRun && datasetId && (
+              <button onClick={() => void runStrategyComparison()} disabled={actionBusy}>
+                {strategyComparing ? '策略对比中' : '策略对比'}
               </button>
             )}
             <button onClick={() => downloadEvalDataset(dataset, true)}>下载启用 JSON</button>

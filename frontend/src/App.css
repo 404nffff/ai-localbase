@@ -2497,6 +2497,16 @@
   background: #e2e8f0;
 }
 
+.kb-eval-compare-row--strategy {
+  grid-template-columns: minmax(86px, 0.8fr) repeat(4, minmax(86px, 1fr));
+}
+
+.kb-eval-compare-row--strategy span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .kb-eval-compare-row:first-child {
   border-top: 0;
 }

@@ -222,6 +222,14 @@ export interface RetrievalDebugResponse {
 }
 
 export type RetrievalSearchMode = 'auto' | 'dense' | 'hybrid'
+export type RetrievalRerankStrategy = 'keyword' | 'semantic'
+
+export interface EvalRunOptions {
+  searchMode?: RetrievalSearchMode
+  rerankStrategy?: RetrievalRerankStrategy
+  enableQueryRewrite?: boolean
+  queryRewriteMaxVariants?: number
+}
 
 export interface GenerateEvalDatasetResponse {
   datasetId?: string
@@ -312,6 +320,8 @@ export interface RunEvalDatasetResponse {
   knowledgeBaseId?: string
   documentId?: string
   searchMode: string
+  rerankStrategy: string
+  queryRewriteUsed: boolean
   startedAt: string
   elapsedMs: number
   metrics: EvalRunMetrics
@@ -600,12 +610,13 @@ export const deleteEvalDatasetItem = async (
 
 export const runEvalDataset = async (
   datasetId: string,
-  searchMode: RetrievalSearchMode = 'auto',
+  options: RetrievalSearchMode | EvalRunOptions = 'auto',
 ): Promise<RunEvalDatasetResponse> => (
-  requestJson<RunEvalDatasetResponse>(
-    `/api/eval/datasets/${datasetId}/runs`,
-    jsonRequest({ includeDisabled: false, topK: 12, searchMode }, { method: 'POST' }),
-  )
+  requestJson<RunEvalDatasetResponse>(`/api/eval/datasets/${datasetId}/runs`, jsonRequest({
+    includeDisabled: false,
+    topK: 12,
+    ...(typeof options === 'string' ? { searchMode: options } : options),
+  }, { method: 'POST' }))
 )
 
 export const listEvalRuns = async (

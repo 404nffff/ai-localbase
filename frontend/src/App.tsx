@@ -43,6 +43,7 @@ import type {
   RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
+  EvalRunOptions,
 } from './services/api'
 
 export interface ChatMessageMetadata {
@@ -983,10 +984,10 @@ function App() {
 
   const handleRunEvalDataset = async (
     datasetId: string,
-    searchMode: RetrievalSearchMode = 'auto',
+    options: RetrievalSearchMode | EvalRunOptions = 'auto',
   ): Promise<RunEvalDatasetResponse> => {
     try {
-      return await runEvalDataset(datasetId, searchMode)
+      return await runEvalDataset(datasetId, options)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '运行评估失败，请稍后重试。'

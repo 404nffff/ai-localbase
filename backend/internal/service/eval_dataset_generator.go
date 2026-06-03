@@ -474,6 +474,10 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 		topK = 50
 	}
 	searchMode := normalizeRetrievalMode(req.SearchMode)
+	rerankStrategy := normalizeRerankStrategy(req.RerankStrategy)
+	if rerankStrategy == "" {
+		rerankStrategy = s.rerankStrategy()
+	}
 
 	startedAt := time.Now()
 	startedAtLabel := startedAt.UTC().Format(time.RFC3339)
@@ -497,11 +501,14 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 		}
 
 		debugReq := model.RetrievalDebugRequest{
-			Query:           item.Question,
-			KnowledgeBaseID: dataset.KnowledgeBaseID,
-			DocumentID:      dataset.DocumentID,
-			TopK:            topK,
-			SearchMode:      searchMode,
+			Query:                   item.Question,
+			KnowledgeBaseID:         dataset.KnowledgeBaseID,
+			DocumentID:              dataset.DocumentID,
+			TopK:                    topK,
+			SearchMode:              searchMode,
+			RerankStrategy:          rerankStrategy,
+			EnableQueryRewrite:      req.EnableQueryRewrite,
+			QueryRewriteMaxVariants: req.QueryRewriteMaxVariants,
 		}
 		if debugReq.KnowledgeBaseID == "" {
 			debugReq.KnowledgeBaseID = firstEvalSourceKnowledgeBaseID(item)
@@ -543,16 +550,18 @@ func (s *AppService) RunEvalDataset(datasetID string, req model.RunEvalDatasetRe
 	}
 
 	response := model.RunEvalDatasetResponse{
-		RunID:           util.NextID("eval-run"),
-		DatasetID:       dataset.ID,
-		DatasetName:     dataset.Name,
-		KnowledgeBaseID: dataset.KnowledgeBaseID,
-		DocumentID:      dataset.DocumentID,
-		SearchMode:      evalRunSearchModeLabel(runSearchMode, searchMode),
-		StartedAt:       startedAtLabel,
-		ElapsedMs:       time.Since(startedAt).Milliseconds(),
-		Metrics:         buildEvalRunMetrics(results, skippedDisabled),
-		Cases:           results,
+		RunID:            util.NextID("eval-run"),
+		DatasetID:        dataset.ID,
+		DatasetName:      dataset.Name,
+		KnowledgeBaseID:  dataset.KnowledgeBaseID,
+		DocumentID:       dataset.DocumentID,
+		SearchMode:       evalRunSearchModeLabel(runSearchMode, searchMode),
+		RerankStrategy:   rerankStrategy,
+		QueryRewriteUsed: evalRunQueryRewriteUsed(req, s.queryRewriteEnabled()),
+		StartedAt:        startedAtLabel,
+		ElapsedMs:        time.Since(startedAt).Milliseconds(),
+		Metrics:          buildEvalRunMetrics(results, skippedDisabled),
+		Cases:            results,
 	}
 	if err := s.saveEvalRun(response); err != nil {
 		return model.RunEvalDatasetResponse{}, fmt.Errorf("save eval run: %w", err)
@@ -583,16 +592,25 @@ func evalDatasetSortTime(dataset model.EvalDatasetSummary) string {
 
 func evalRunSummary(run model.RunEvalDatasetResponse) model.EvalRunSummary {
 	return model.EvalRunSummary{
-		RunID:           run.RunID,
-		DatasetID:       run.DatasetID,
-		DatasetName:     run.DatasetName,
-		KnowledgeBaseID: run.KnowledgeBaseID,
-		DocumentID:      run.DocumentID,
-		SearchMode:      run.SearchMode,
-		StartedAt:       run.StartedAt,
-		ElapsedMs:       run.ElapsedMs,
-		Metrics:         run.Metrics,
+		RunID:            run.RunID,
+		DatasetID:        run.DatasetID,
+		DatasetName:      run.DatasetName,
+		KnowledgeBaseID:  run.KnowledgeBaseID,
+		DocumentID:       run.DocumentID,
+		SearchMode:       run.SearchMode,
+		RerankStrategy:   run.RerankStrategy,
+		QueryRewriteUsed: run.QueryRewriteUsed,
+		StartedAt:        run.StartedAt,
+		ElapsedMs:        run.ElapsedMs,
+		Metrics:          run.Metrics,
 	}
+}
+
+func evalRunQueryRewriteUsed(req model.RunEvalDatasetRequest, defaultEnabled bool) bool {
+	if req.EnableQueryRewrite != nil {
+		return *req.EnableQueryRewrite
+	}
+	return defaultEnabled
 }
 
 func evalRunSearchModeLabel(actualMode, requestedMode string) string {

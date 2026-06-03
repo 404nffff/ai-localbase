@@ -1293,7 +1293,7 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 
 	var queryVector []float64
 	embeddingStartedAt := time.Now()
-	if !s.queryRewriteEnabled() {
+	if !s.queryRewriteEnabledForRequest(req) {
 		embedCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
@@ -1338,11 +1338,14 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 
 	startedAt := time.Now()
 	chatReq := model.ChatCompletionRequest{
-		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-		DocumentID:      strings.TrimSpace(req.DocumentID),
-		RetrievalMode:   normalizeRetrievalMode(req.SearchMode),
-		Config:          s.currentChatConfig(),
-		Embedding:       s.currentEmbeddingConfig(),
+		KnowledgeBaseID:         strings.TrimSpace(req.KnowledgeBaseID),
+		DocumentID:              strings.TrimSpace(req.DocumentID),
+		RetrievalMode:           normalizeRetrievalMode(req.SearchMode),
+		RerankStrategy:          req.RerankStrategy,
+		EnableQueryRewrite:      req.EnableQueryRewrite,
+		QueryRewriteMaxVariants: req.QueryRewriteMaxVariants,
+		Config:                  s.currentChatConfig(),
+		Embedding:               s.currentEmbeddingConfig(),
 		Messages: []model.ChatMessage{{
 			Role:    "user",
 			Content: query,
@@ -1363,13 +1366,13 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 	trace = append(trace, model.RetrievalDebugTraceStep{
 		Stage:  "rerank",
 		Status: "ok",
-		Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategy()),
+		Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategyForRequest(chatReq)),
 	})
-	if s.queryRewriteEnabled() {
+	if s.queryRewriteEnabledForRequest(chatReq) {
 		trace = append(trace, model.RetrievalDebugTraceStep{
 			Stage:  "query_rewrite",
 			Status: "ok",
-			Reason: fmt.Sprintf("已启用查询改写，最多生成 %d 个查询变体", s.queryRewriteMaxVariants()),
+			Reason: fmt.Sprintf("已启用查询改写，最多生成 %d 个查询变体", s.queryRewriteMaxVariantsForRequest(chatReq)),
 		})
 	} else {
 		trace = append(trace, model.RetrievalDebugTraceStep{
@@ -1460,8 +1463,8 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		KnowledgeBaseID:   chatReq.KnowledgeBaseID,
 		DocumentID:        chatReq.DocumentID,
 		SearchMode:        s.resolvedRetrievalSearchMode(chatReq),
-		RerankStrategy:    s.rerankStrategy(),
-		QueryRewriteUsed:  s.queryRewriteEnabled(),
+		RerankStrategy:    s.rerankStrategyForRequest(chatReq),
+		QueryRewriteUsed:  s.queryRewriteEnabledForRequest(chatReq),
 		StructuredIntent:  string(deterministicResult.Plan.Intent),
 		TargetField:       deterministicResult.Plan.TargetField,
 		DeterministicUsed: deterministicUsed,
@@ -1815,7 +1818,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		}
 	}
 
-	if s.queryRewriteEnabled() {
+	if s.queryRewriteEnabledForRequest(req) {
 		if setter, ok := s.queryRewriter.(interface {
 			SetChatConfigProvider(func() model.ChatModelConfig)
 		}); ok {
@@ -1826,7 +1829,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		if setter, ok := s.queryRewriter.(interface {
 			SetMaxVariants(int)
 		}); ok {
-			setter.SetMaxVariants(s.queryRewriteMaxVariants())
+			setter.SetMaxVariants(s.queryRewriteMaxVariantsForRequest(req))
 		}
 		history := recentConversationHistory(req.Messages, 3)
 		rewriteResult, err := s.queryRewriter.Rewrite(ctx, query, history)
@@ -2800,8 +2803,22 @@ func (s *AppService) currentRetrievalConfig() model.RetrievalConfig {
 	return normalizeRetrievalConfig(cfg, s.serverConfig)
 }
 
-func (s *AppService) resolveRetrievalParams(req model.ChatCompletionRequest) retrievalParams {
+func (s *AppService) retrievalConfigForRequest(req model.ChatCompletionRequest) model.RetrievalConfig {
 	cfg := s.currentRetrievalConfig()
+	if strategy := normalizeRerankStrategy(req.RerankStrategy); strategy != "" {
+		cfg.RerankStrategy = strategy
+	}
+	if req.EnableQueryRewrite != nil {
+		cfg.EnableQueryRewrite = *req.EnableQueryRewrite
+	}
+	if req.QueryRewriteMaxVariants > 0 {
+		cfg.QueryRewriteMaxVariants = minInt(maxInt(req.QueryRewriteMaxVariants, 1), 5)
+	}
+	return normalizeRetrievalConfig(cfg, s.serverConfig)
+}
+
+func (s *AppService) resolveRetrievalParams(req model.ChatCompletionRequest) retrievalParams {
+	cfg := s.retrievalConfigForRequest(req)
 	if strings.TrimSpace(req.DocumentID) != "" {
 		return retrievalParams{
 			candidateTopK:    cfg.CandidateTopKDocument,
@@ -2832,14 +2849,18 @@ func (s *AppService) retrievalAutoExpandEnabled() bool {
 }
 
 func (s *AppService) queryRewriteEnabled() bool {
+	return s.queryRewriteEnabledForRequest(model.ChatCompletionRequest{})
+}
+
+func (s *AppService) queryRewriteEnabledForRequest(req model.ChatCompletionRequest) bool {
 	if s == nil || s.queryRewriter == nil {
 		return false
 	}
-	return s.currentRetrievalConfig().EnableQueryRewrite
+	return s.retrievalConfigForRequest(req).EnableQueryRewrite
 }
 
-func (s *AppService) queryRewriteMaxVariants() int {
-	cfg := s.currentRetrievalConfig()
+func (s *AppService) queryRewriteMaxVariantsForRequest(req model.ChatCompletionRequest) int {
+	cfg := s.retrievalConfigForRequest(req)
 	if cfg.QueryRewriteMaxVariants < 1 {
 		return 3
 	}
@@ -2850,10 +2871,14 @@ func (s *AppService) queryRewriteMaxVariants() int {
 }
 
 func (s *AppService) rerankStrategy() string {
+	return s.rerankStrategyForRequest(model.ChatCompletionRequest{})
+}
+
+func (s *AppService) rerankStrategyForRequest(req model.ChatCompletionRequest) string {
 	if s == nil {
 		return "keyword"
 	}
-	strategy := normalizeRerankStrategy(s.currentRetrievalConfig().RerankStrategy)
+	strategy := normalizeRerankStrategy(s.retrievalConfigForRequest(req).RerankStrategy)
 	if strategy == "" {
 		return "keyword"
 	}
@@ -3032,12 +3057,12 @@ func prioritizeStructuredSummaryChunks(chunks []RetrievedChunk) []RetrievedChunk
 	return prioritized
 }
 
-func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string) []RetrievedChunk {
+func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string, req model.ChatCompletionRequest) []RetrievedChunk {
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	if s != nil && s.rerankStrategy() == "semantic" && s.reranker != nil {
+	if s != nil && s.rerankStrategyForRequest(req) == "semantic" && s.reranker != nil {
 		ranked, err := s.reranker.Rerank(ctx, query, candidates)
 		if err == nil && len(ranked) > 0 {
 			return ranked
@@ -3067,7 +3092,7 @@ func (s *AppService) applySelectionStrategy(req model.ChatCompletionRequest, que
 		})
 	} else {
 		rerankStartedAt := time.Now()
-		selected = s.rerankCandidates(ctx, candidates, query)
+		selected = s.rerankCandidates(ctx, candidates, query, req)
 		logRetrievalStageMetrics(req, query, "rerank_candidates", rerankStartedAt, map[string]any{
 			"status":       "ok",
 			"input_count":  inputCount,

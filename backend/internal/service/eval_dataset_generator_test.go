@@ -583,6 +583,17 @@ func TestEvalRunSearchModeLabel(t *testing.T) {
 	}
 }
 
+func TestEvalRunQueryRewriteUsed(t *testing.T) {
+	if !evalRunQueryRewriteUsed(model.RunEvalDatasetRequest{}, true) {
+		t.Fatal("expected default query rewrite setting to be used")
+	}
+
+	disabled := false
+	if evalRunQueryRewriteUsed(model.RunEvalDatasetRequest{EnableQueryRewrite: &disabled}, true) {
+		t.Fatal("expected explicit query rewrite override to win")
+	}
+}
+
 func TestListEvalRunsAndDeleteDatasetCleanup(t *testing.T) {
 	tempDir := t.TempDir()
 	store := NewAppStateStore(filepath.Join(tempDir, "state.json"))

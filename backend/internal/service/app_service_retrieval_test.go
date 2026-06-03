@@ -182,7 +182,7 @@ func TestRerankCandidatesBoostsKeywordCoverage(t *testing.T) {
 	}
 
 	service := &AppService{}
-	ranked := service.rerankCandidates(context.Background(), candidates, query)
+	ranked := service.rerankCandidates(context.Background(), candidates, query, model.ChatCompletionRequest{})
 	if len(ranked) != len(candidates) {
 		t.Fatalf("expected ranked size %d, got %d", len(candidates), len(ranked))
 	}

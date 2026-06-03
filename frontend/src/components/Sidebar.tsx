@@ -16,6 +16,7 @@ import type {
   EvalDatasetDetail,
   EvalGroundTruthCase,
   EvalDatasetSummary,
+  EvalRunOptions,
   EvalRunSummary,
   GenerateEvalDatasetResponse,
   KnowledgeBaseHealthResponse,
@@ -59,7 +60,10 @@ interface SidebarProps {
     datasetId: string,
     itemId: string,
   ) => Promise<DeleteEvalDatasetItemResponse>
-  onRunEvalDataset: (datasetId: string, searchMode?: RetrievalSearchMode) => Promise<RunEvalDatasetResponse>
+  onRunEvalDataset: (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions,
+  ) => Promise<RunEvalDatasetResponse>
   directoryUploadTask: DirectoryUploadTask
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
