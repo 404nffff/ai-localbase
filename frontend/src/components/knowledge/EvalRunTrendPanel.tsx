@@ -34,7 +34,7 @@ const EvalRunTrendPanel: React.FC<EvalRunTrendPanelProps> = ({
   const visibleRuns = runs.slice(0, 6)
 
   return (
-    <section className="kb-eval-trend-panel">
+    <section className={`kb-eval-trend-panel${runs.length === 0 ? ' kb-eval-trend-panel--empty' : ''}`}>
       <div className="kb-panel-section-head">
         <div>
           <h3>质量趋势</h3>
@@ -48,9 +48,9 @@ const EvalRunTrendPanel: React.FC<EvalRunTrendPanelProps> = ({
       {error && <div className="kb-eval-history-error">{error}</div>}
 
       {loading && runs.length === 0 ? (
-        <div className="kb-eval-history-empty">正在加载评估趋势</div>
+        <div className="kb-eval-trend-empty">正在加载评估趋势</div>
       ) : runs.length === 0 ? (
-        <div className="kb-eval-history-empty">暂无评估运行记录。打开评估集并点击“运行评估”后会生成趋势。</div>
+        <div className="kb-eval-trend-empty">暂无运行记录，打开评估集并点击“运行评估”后会生成趋势。</div>
       ) : (
         <>
           <div className="kb-eval-trend-summary">

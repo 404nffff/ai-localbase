@@ -52,7 +52,7 @@ const KnowledgeHealthPanel: React.FC<KnowledgeHealthPanelProps> = ({
             <div><span>失败</span><strong>{health.metrics.failedCount}</strong></div>
             <div><span>Chunks</span><strong>{health.metrics.chunkCount}</strong></div>
             <div><span>向量</span><strong>{health.metrics.vectorCount}</strong></div>
-            <div><span>结构化行</span><strong>{health.metrics.structuredRowCount}</strong></div>
+            <div><span>结构化</span><strong>{health.metrics.structuredRowCount}</strong></div>
           </div>
 
           <div className="kb-health-recommendations">

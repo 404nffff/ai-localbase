@@ -1105,13 +1105,13 @@
 
 .kb-health-stats {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
 .kb-health-stats div {
   min-width: 0;
-  padding: 10px;
+  padding: 9px 11px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
@@ -1127,7 +1127,7 @@
   display: block;
   margin-top: 4px;
   color: #0f172a;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .kb-health-recommendations {
@@ -2772,6 +2772,10 @@
   margin-bottom: 14px;
 }
 
+.kb-eval-trend-panel--empty {
+  padding-bottom: 12px;
+}
+
 .kb-panel-mini-btn {
   flex-shrink: 0;
   border: 1px solid #cbd5e1;
@@ -2813,6 +2817,18 @@
   justify-content: center;
   border: 1px dashed #cbd5e1;
   border-radius: 12px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.kb-eval-trend-empty {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
   background: #f8fafc;
   color: #64748b;
   font-size: 13px;
@@ -2870,8 +2886,28 @@
 
 .kb-eval-history-actions {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
   border-left: 1px solid #f1f5f9;
+}
+
+.kb-eval-history-actions .kb-doc-action {
+  min-width: 50px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.kb-eval-history-actions .kb-doc-remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
 }
 
 .kb-eval-trend-summary {
@@ -3115,6 +3151,12 @@
   .kb-doc-remove {
     flex: 1;
     min-height: 38px;
+  }
+
+  .kb-eval-history-actions .kb-doc-action,
+  .kb-eval-history-actions .kb-doc-remove {
+    flex: 0 0 auto;
+    min-height: 34px;
   }
 }
 
