@@ -375,6 +375,18 @@ func TestRuleBasedRetrievalQueriesForGenericFactQuestions(t *testing.T) {
 	}
 }
 
+func TestRuleBasedRetrievalQueriesForUnknownFactFields(t *testing.T) {
+	spacedQueries := strings.Join(buildRuleBasedRetrievalQueries("星河科技公司 统一社会信用代码是什么？"), "\n")
+	if !strings.Contains(spacedQueries, "星河科技公司 统一社会信用代码") {
+		t.Fatalf("expected delimited unknown field query variant, got %s", spacedQueries)
+	}
+
+	boundaryQueries := strings.Join(buildRuleBasedRetrievalQueries("青山实验学校办学许可证编号是什么？"), "\n")
+	if !strings.Contains(boundaryQueries, "青山实验学校 办学许可证编号") {
+		t.Fatalf("expected boundary unknown field query variant, got %s", boundaryQueries)
+	}
+}
+
 func TestFactQuestionKeepsFoundingTimeEvidence(t *testing.T) {
 	chunks := []RetrievedChunk{
 		{
@@ -446,6 +458,37 @@ func TestFactQuestionDropsUnrelatedHighScoreWhenDirectEvidenceExists(t *testing.
 	}
 	if filtered[0].DocumentID != "doc-evidence" {
 		t.Fatalf("expected direct evidence document, got %s", filtered[0].DocumentID)
+	}
+}
+
+func TestFactQuestionKeepsUnknownFieldEvidence(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID:   "doc-related",
+				DocumentName: "company.txt",
+				Text:         "星河科技公司的统一社会信用代码为 91310000123456789X。",
+			},
+			Score:    0.74,
+			RawScore: 0.74,
+		},
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID:   "doc-noise",
+				DocumentName: "company-news.txt",
+				Text:         "星河科技公司近期发布了产品升级公告。",
+			},
+			Score:    0.95,
+			RawScore: 0.95,
+		},
+	}
+
+	filtered := filterRelevantChunks("星河科技公司 统一社会信用代码是什么", chunks)
+	if len(filtered) != 1 {
+		t.Fatalf("expected only unknown field evidence, got %#v", filtered)
+	}
+	if filtered[0].DocumentID != "doc-related" {
+		t.Fatalf("expected related unknown field evidence, got %s", filtered[0].DocumentID)
 	}
 }
 

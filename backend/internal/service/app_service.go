@@ -3950,6 +3950,9 @@ func parseFactQuerySpecs(query string) []factQuerySpec {
 		}
 	}
 
+	specs = append(specs, parseDelimitedFactQuerySpecs(normalized)...)
+	specs = append(specs, parseBoundaryFactQuerySpecs(normalized)...)
+
 	for _, alias := range allFactAttributeAliases() {
 		index := strings.Index(normalized, alias)
 		if index <= 0 {
@@ -3963,6 +3966,68 @@ func parseFactQuerySpecs(query string) []factQuerySpec {
 	}
 
 	return deduplicateFactQuerySpecs(specs)
+}
+
+func parseDelimitedFactQuerySpecs(query string) []factQuerySpec {
+	core := cleanFactAttribute(query)
+	replacer := strings.NewReplacer(
+		"　", " ",
+		",", " ",
+		"，", " ",
+		":", " ",
+		"：", " ",
+		";", " ",
+		"；", " ",
+		"|", " ",
+		"/", " ",
+		"\\", " ",
+	)
+	parts := strings.Fields(replacer.Replace(core))
+	if len(parts) < 2 {
+		return nil
+	}
+	subject := cleanFactSubject(strings.Join(parts[:len(parts)-1], ""))
+	attribute := cleanFactAttribute(parts[len(parts)-1])
+	if subject == "" || attribute == "" {
+		return nil
+	}
+	return []factQuerySpec{newFactQuerySpec(subject, attribute)}
+}
+
+func parseBoundaryFactQuerySpecs(query string) []factQuerySpec {
+	core := cleanFactAttribute(query)
+	if strings.ContainsAny(core, " ,，:：;；|/\\") || strings.Contains(core, "的") {
+		return nil
+	}
+	runes := []rune(core)
+	if len(runes) < 5 || len(runes) > 40 {
+		return nil
+	}
+	for _, boundary := range factSubjectBoundaryTokens() {
+		index := strings.LastIndex(core, boundary)
+		if index < 0 {
+			continue
+		}
+		subjectEnd := index + len(boundary)
+		if subjectEnd <= 0 || subjectEnd >= len(core) {
+			continue
+		}
+		subject := cleanFactSubject(core[:subjectEnd])
+		attribute := cleanFactAttribute(core[subjectEnd:])
+		if subject != "" && attribute != "" {
+			return []factQuerySpec{newFactQuerySpec(subject, attribute)}
+		}
+	}
+	return nil
+}
+
+func factSubjectBoundaryTokens() []string {
+	return []string{
+		"有限公司", "股份公司", "集团公司", "实验学校", "技术学院",
+		"公司", "集团", "学校", "大学", "学院", "中学", "小学", "医院",
+		"银行", "中心", "平台", "系统", "项目", "产品", "部门", "团队",
+		"机构", "基地", "园区", "工厂", "门店", "网点",
+	}
 }
 
 func newFactQuerySpec(subject, attribute string) factQuerySpec {

@@ -227,8 +227,16 @@ const evalStrategyReports = (comparison: EvalStrategyComparisonReport) => [
 const evalStrategyScore = (report: RunEvalDatasetResponse) => {
   const totalCases = Math.max(report.metrics.totalCases, 1)
   const lowConfidenceRate = report.metrics.lowConfidence / totalCases
+  const citationMismatchRate = (report.metrics.citationMismatchCount ?? 0) / totalCases
   const latencyPenalty = report.metrics.latencyP95Ms / 10000
-  return (report.metrics.hitRate * 100) + (report.metrics.mrr * 10) - (lowConfidenceRate * 5) - latencyPenalty
+  return (
+    (report.metrics.hitRate * 100)
+    + (report.metrics.evidenceSupportRate ?? 0) * 18
+    + (report.metrics.mrr * 10)
+    - (lowConfidenceRate * 5)
+    - (citationMismatchRate * 12)
+    - latencyPenalty
+  )
 }
 
 const compareStrategyReports = (
@@ -238,7 +246,13 @@ const compareStrategyReports = (
   const scoreDelta = evalStrategyScore(right) - evalStrategyScore(left)
   if (Math.abs(scoreDelta) > 0.001) return scoreDelta
   if (right.metrics.hitRate !== left.metrics.hitRate) return right.metrics.hitRate - left.metrics.hitRate
+  if ((right.metrics.evidenceSupportRate ?? 0) !== (left.metrics.evidenceSupportRate ?? 0)) {
+    return (right.metrics.evidenceSupportRate ?? 0) - (left.metrics.evidenceSupportRate ?? 0)
+  }
   if (right.metrics.mrr !== left.metrics.mrr) return right.metrics.mrr - left.metrics.mrr
+  if ((right.metrics.citationMismatchCount ?? 0) !== (left.metrics.citationMismatchCount ?? 0)) {
+    return (left.metrics.citationMismatchCount ?? 0) - (right.metrics.citationMismatchCount ?? 0)
+  }
   if (right.metrics.lowConfidence !== left.metrics.lowConfidence) {
     return left.metrics.lowConfidence - right.metrics.lowConfidence
   }
@@ -266,6 +280,8 @@ const buildStrategyRecommendation = (
   const hitRateDelta = best.metrics.hitRate - baseline.metrics.hitRate
   const mrrDelta = best.metrics.mrr - baseline.metrics.mrr
   const lowConfidenceDelta = best.metrics.lowConfidence - baseline.metrics.lowConfidence
+  const evidenceSupportDelta = (best.metrics.evidenceSupportRate ?? 0) - (baseline.metrics.evidenceSupportRate ?? 0)
+  const citationMismatchDelta = (best.metrics.citationMismatchCount ?? 0) - (baseline.metrics.citationMismatchCount ?? 0)
   const latencyDelta = best.metrics.latencyP95Ms - baseline.metrics.latencyP95Ms
   const latencyGrowth = baseline.metrics.latencyP95Ms > 0
     ? latencyDelta / baseline.metrics.latencyP95Ms
@@ -299,6 +315,22 @@ const buildStrategyRecommendation = (
     positiveReasons.push('低置信数量未增加')
   } else {
     positiveReasons.push(`低置信用例增加 ${lowConfidenceDelta}，但召回指标同步提升`)
+  }
+
+  if (evidenceSupportDelta < 0) {
+    blockerReasons.push(`证据支撑率下降 ${formatPercent(Math.abs(evidenceSupportDelta))}`)
+  } else if (evidenceSupportDelta > 0) {
+    positiveReasons.push(`证据支撑率提升 ${formatPercent(evidenceSupportDelta)}`)
+  } else {
+    positiveReasons.push('证据支撑率未下降')
+  }
+
+  if (citationMismatchDelta > 0) {
+    blockerReasons.push(`引用不准增加 ${citationMismatchDelta}`)
+  } else if (citationMismatchDelta < 0) {
+    positiveReasons.push(`引用不准减少 ${Math.abs(citationMismatchDelta)}`)
+  } else {
+    positiveReasons.push('引用不准数量未增加')
   }
 
   if (latencyGrowth > 0.3 && hitRateDelta < 0.05) {
@@ -365,6 +397,8 @@ const buildHybridRecommendation = (
   const hitRateDelta = hybridMetrics.hitRate - denseMetrics.hitRate
   const mrrDelta = hybridMetrics.mrr - denseMetrics.mrr
   const lowConfidenceDelta = hybridMetrics.lowConfidence - denseMetrics.lowConfidence
+  const evidenceSupportDelta = (hybridMetrics.evidenceSupportRate ?? 0) - (denseMetrics.evidenceSupportRate ?? 0)
+  const citationMismatchDelta = (hybridMetrics.citationMismatchCount ?? 0) - (denseMetrics.citationMismatchCount ?? 0)
   const latencyDelta = hybridMetrics.latencyP95Ms - denseMetrics.latencyP95Ms
   const latencyGrowth = denseMetrics.latencyP95Ms > 0
     ? latencyDelta / denseMetrics.latencyP95Ms
@@ -406,6 +440,22 @@ const buildHybridRecommendation = (
     positiveReasons.push(`低置信用例减少 ${Math.abs(lowConfidenceDelta)}`)
   } else {
     positiveReasons.push('低置信数量未增加')
+  }
+
+  if (evidenceSupportDelta < 0) {
+    blockerReasons.push(`证据支撑率下降 ${formatPercent(Math.abs(evidenceSupportDelta))}`)
+  } else if (evidenceSupportDelta > 0) {
+    positiveReasons.push(`证据支撑率提升 ${formatPercent(evidenceSupportDelta)}`)
+  } else {
+    positiveReasons.push('证据支撑率未下降')
+  }
+
+  if (citationMismatchDelta > 0) {
+    blockerReasons.push(`引用不准增加 ${citationMismatchDelta}`)
+  } else if (citationMismatchDelta < 0) {
+    positiveReasons.push(`引用不准减少 ${Math.abs(citationMismatchDelta)}`)
+  } else {
+    positiveReasons.push('引用不准数量未增加')
   }
 
   if (latencyGrowth > 0.3) {
