@@ -32,6 +32,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 }) => {
   const [mcpFeedback, setMcpFeedback] = useState('')
   const [isMcpTokenVisible, setIsMcpTokenVisible] = useState(false)
+  const chatProviderLabel = config.chat.provider === 'ollama' ? 'Ollama' : 'OpenAI Compatible'
+  const embeddingProviderLabel = config.embedding.provider === 'ollama' ? 'Ollama' : 'OpenAI Compatible'
+  const retrievalModeLabel = config.retrieval.defaultSearchMode === 'hybrid' ? '混合检索' : '向量检索'
+  const mcpStatusLabel = config.mcp.enabled ? '已启用' : '未启用'
 
   const handleCopyToken = async () => {
     try {
@@ -64,9 +68,35 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         </div>
 
         <div className="settings-modal-scroll">
+          <div className="settings-summary-grid">
+            <div className="settings-summary-item">
+              <span>聊天模型</span>
+              <strong>{config.chat.model || '未配置'}</strong>
+              <small>{chatProviderLabel}</small>
+            </div>
+            <div className="settings-summary-item">
+              <span>Embedding</span>
+              <strong>{config.embedding.model || '未配置'}</strong>
+              <small>{embeddingProviderLabel}</small>
+            </div>
+            <div className="settings-summary-item">
+              <span>检索策略</span>
+              <strong>{retrievalModeLabel}</strong>
+              <small>{config.retrieval.rerankStrategy === 'semantic' ? '语义重排' : '关键词融合'}</small>
+            </div>
+            <div className="settings-summary-item">
+              <span>MCP</span>
+              <strong>{mcpStatusLabel}</strong>
+              <small>{config.mcp.basePath || '未配置路径'}</small>
+            </div>
+          </div>
+
           <section className="settings-panel-block ai-config-panel single-column">
-            <div className="section-title-row knowledge-panel-header">
-              <h3>聊天模型</h3>
+            <div className="settings-section-head">
+              <div>
+                <h3>聊天模型</h3>
+                <p>控制普通对话、上下文窗口和思考模式使用的模型。</p>
+              </div>
             </div>
 
             <div className="ai-config-fields">
@@ -156,8 +186,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </section>
 
           <section className="settings-panel-block ai-config-panel single-column">
-            <div className="section-title-row knowledge-panel-header">
-              <h3>Embedding 模型</h3>
+            <div className="settings-section-head">
+              <div>
+                <h3>Embedding 模型</h3>
+                <p>控制文档索引和语义召回使用的向量模型。</p>
+              </div>
             </div>
 
             <div className="ai-config-fields">
@@ -212,174 +245,204 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </section>
 
           <section className="settings-panel-block ai-config-panel single-column">
-            <div className="section-title-row knowledge-panel-header">
-              <h3>高级检索</h3>
+            <div className="settings-section-head">
+              <div>
+                <h3>高级检索</h3>
+                <p>调整召回、重排、改写和低置信补强策略。</p>
+              </div>
             </div>
 
             <div className="ai-config-fields">
-              <label className="settings-field">
-                <span>默认模式</span>
-                <select
-                  value={config.retrieval.defaultSearchMode}
-                  onChange={(event) =>
-                    onRetrievalConfigChange(
-                      'defaultSearchMode',
-                      event.target.value as RetrievalConfig['defaultSearchMode'],
-                    )
-                  }
-                >
-                  <option value="dense">向量检索</option>
-                  <option value="hybrid">混合检索</option>
-                </select>
-              </label>
+              <div className="settings-field-full settings-form-group">
+                <div className="settings-form-group-head">
+                  <strong>召回策略</strong>
+                  <span>决定先用什么方式召回，再如何排序。</span>
+                </div>
+                <div className="settings-group-grid">
+                  <label className="settings-field">
+                    <span>默认模式</span>
+                    <select
+                      value={config.retrieval.defaultSearchMode}
+                      onChange={(event) =>
+                        onRetrievalConfigChange(
+                          'defaultSearchMode',
+                          event.target.value as RetrievalConfig['defaultSearchMode'],
+                        )
+                      }
+                    >
+                      <option value="dense">向量检索</option>
+                      <option value="hybrid">混合检索</option>
+                    </select>
+                  </label>
 
-              <label className="settings-field settings-field-toggle">
-                <span>允许 Hybrid</span>
-                <input
-                  type="checkbox"
-                  checked={config.retrieval.hybridSearchEnabled}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('hybridSearchEnabled', event.target.checked)
-                  }
-                />
-              </label>
+                  <label className="settings-field settings-field-toggle settings-field-toggle--inline">
+                    <span>启用混合检索</span>
+                    <input
+                      type="checkbox"
+                      checked={config.retrieval.hybridSearchEnabled}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('hybridSearchEnabled', event.target.checked)
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>重排策略</span>
-                <select
-                  value={config.retrieval.rerankStrategy}
-                  onChange={(event) =>
-                    onRetrievalConfigChange(
-                      'rerankStrategy',
-                      event.target.value as RetrievalConfig['rerankStrategy'],
-                    )
-                  }
-                >
-                  <option value="keyword">关键词融合</option>
-                  <option value="semantic">语义重排</option>
-                </select>
-              </label>
+                  <label className="settings-field">
+                    <span>重排策略</span>
+                    <select
+                      value={config.retrieval.rerankStrategy}
+                      onChange={(event) =>
+                        onRetrievalConfigChange(
+                          'rerankStrategy',
+                          event.target.value as RetrievalConfig['rerankStrategy'],
+                        )
+                      }
+                    >
+                      <option value="keyword">关键词融合</option>
+                      <option value="semantic">语义重排</option>
+                    </select>
+                  </label>
 
-              <label className="settings-field settings-field-toggle">
-                <span>Query Rewrite</span>
-                <input
-                  type="checkbox"
-                  checked={config.retrieval.enableQueryRewrite}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('enableQueryRewrite', event.target.checked)
-                  }
-                />
-              </label>
+                  <label className="settings-field settings-field-toggle settings-field-toggle--inline">
+                    <span>启用问题改写</span>
+                    <input
+                      type="checkbox"
+                      checked={config.retrieval.enableQueryRewrite}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('enableQueryRewrite', event.target.checked)
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>改写数量</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="5"
-                  value={config.retrieval.queryRewriteMaxVariants}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('queryRewriteMaxVariants', Number(event.target.value))
-                  }
-                />
-              </label>
+                  <label className="settings-field">
+                    <span>改写数量</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      value={config.retrieval.queryRewriteMaxVariants}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('queryRewriteMaxVariants', Number(event.target.value))
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
 
-              <label className="settings-field">
-                <span>文档 TopK</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={config.retrieval.topKDocument}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('topKDocument', Number(event.target.value))
-                  }
-                />
-              </label>
+              <div className="settings-field-full settings-form-group">
+                <div className="settings-form-group-head">
+                  <strong>召回规模</strong>
+                  <span>控制候选集大小和最终进入上下文的片段数量。</span>
+                </div>
+                <div className="settings-group-grid">
+                  <label className="settings-field">
+                    <span>文档 TopK</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={config.retrieval.topKDocument}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('topKDocument', Number(event.target.value))
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>文档候选 TopK</span>
-                <input
-                  type="number"
-                  min={config.retrieval.topKDocument}
-                  max="80"
-                  value={config.retrieval.candidateTopKDocument}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('candidateTopKDocument', Number(event.target.value))
-                  }
-                />
-              </label>
+                  <label className="settings-field">
+                    <span>文档候选 TopK</span>
+                    <input
+                      type="number"
+                      min={config.retrieval.topKDocument}
+                      max="80"
+                      value={config.retrieval.candidateTopKDocument}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('candidateTopKDocument', Number(event.target.value))
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>知识库 TopK</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="40"
-                  value={config.retrieval.topKKnowledgeBase}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('topKKnowledgeBase', Number(event.target.value))
-                  }
-                />
-              </label>
+                  <label className="settings-field">
+                    <span>知识库 TopK</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="40"
+                      value={config.retrieval.topKKnowledgeBase}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('topKKnowledgeBase', Number(event.target.value))
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>知识库候选 TopK</span>
-                <input
-                  type="number"
-                  min={config.retrieval.topKKnowledgeBase}
-                  max="120"
-                  value={config.retrieval.candidateTopKAllDocs}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('candidateTopKAllDocs', Number(event.target.value))
-                  }
-                />
-              </label>
+                  <label className="settings-field">
+                    <span>知识库候选 TopK</span>
+                    <input
+                      type="number"
+                      min={config.retrieval.topKKnowledgeBase}
+                      max="120"
+                      value={config.retrieval.candidateTopKAllDocs}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('candidateTopKAllDocs', Number(event.target.value))
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field">
-                <span>每文档片段数</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={config.retrieval.maxChunksPerDocument}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('maxChunksPerDocument', Number(event.target.value))
-                  }
-                />
-              </label>
+                  <label className="settings-field">
+                    <span>每文档片段数</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={config.retrieval.maxChunksPerDocument}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('maxChunksPerDocument', Number(event.target.value))
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
 
-              <label className="settings-field">
-                <span>上下文字符</span>
-                <input
-                  type="number"
-                  min="800"
-                  max="20000"
-                  step="100"
-                  value={config.retrieval.maxContextChars}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('maxContextChars', Number(event.target.value))
-                  }
-                />
-              </label>
+              <div className="settings-field-full settings-form-group">
+                <div className="settings-form-group-head">
+                  <strong>上下文与补强</strong>
+                  <span>控制进入回答前的证据长度和低置信兜底。</span>
+                </div>
+                <div className="settings-group-grid settings-group-grid--context">
+                  <label className="settings-field">
+                    <span>上下文字符</span>
+                    <input
+                      type="number"
+                      min="800"
+                      max="20000"
+                      step="100"
+                      value={config.retrieval.maxContextChars}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('maxContextChars', Number(event.target.value))
+                      }
+                    />
+                  </label>
 
-              <label className="settings-field settings-field-full settings-field-toggle">
-                <span>低置信自动扩展</span>
-                <input
-                  type="checkbox"
-                  checked={config.retrieval.enableLowConfidenceBoost}
-                  onChange={(event) =>
-                    onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)
-                  }
-                />
-                <small>当知识库范围召回置信偏低时，扩大候选并尝试补充更多片段。</small>
-              </label>
+                  <label className="settings-field settings-field-toggle settings-field-toggle--described">
+                    <span>低置信自动扩展</span>
+                    <input
+                      type="checkbox"
+                      checked={config.retrieval.enableLowConfidenceBoost}
+                      onChange={(event) =>
+                        onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)
+                      }
+                    />
+                    <small>当知识库范围召回置信偏低时，扩大候选并尝试补充更多片段。</small>
+                  </label>
+                </div>
+              </div>
             </div>
           </section>
 
           <section className="settings-panel-block ai-config-panel single-column">
-            <div className="section-title-row knowledge-panel-header">
-              <h3>MCP 设置</h3>
+            <div className="settings-section-head">
+              <div>
+                <h3>MCP 设置</h3>
+                <p>管理外部工具调用入口和访问 Token。</p>
+              </div>
             </div>
 
             <div className="ai-config-fields">
@@ -409,7 +472,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     aria-label={isMcpTokenVisible ? '隐藏 Token' : '显示 Token'}
                     title={isMcpTokenVisible ? '隐藏 Token' : '显示 Token'}
                   >
-                    {isMcpTokenVisible ? '🙈' : '👁'}
+                    {isMcpTokenVisible ? '隐藏' : '显示'}
                   </button>
                   <button type="button" className="ghost-btn" onClick={() => void handleCopyToken()}>
                     复制

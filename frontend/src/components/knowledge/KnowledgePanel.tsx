@@ -572,6 +572,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   const totalDocuments = knowledgeBases.reduce((sum, knowledgeBase) => sum + knowledgeBase.documents.length, 0)
   const activeHealth = activeKnowledgeBaseId ? healthByKnowledgeBase[activeKnowledgeBaseId] : undefined
+  const activeMetrics = activeHealth?.metrics
+  const activeIndexedCount =
+    activeMetrics?.indexedCount ??
+    selectedKnowledgeBase?.documents.filter((document) => document.status === 'indexed').length ??
+    0
 
   return (
     <>
@@ -619,10 +624,38 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 {selectedKnowledgeBase && activeKnowledgeBaseId ? (
                   <>
                     <section className="kb-workspace-hero">
-                      <div className="kb-workspace-title">
-                        <span className="kb-workspace-kicker">当前知识库</span>
-                        <h3>{selectedKnowledgeBase.name}</h3>
-                        <p>{selectedKnowledgeBase.description || '未填写描述'}</p>
+                      <div className="kb-workspace-overview">
+                        <div className="kb-workspace-title">
+                          <span className="kb-workspace-kicker">当前知识库</span>
+                          <h3>{selectedKnowledgeBase.name}</h3>
+                          <p>{selectedKnowledgeBase.description || '未填写描述'}</p>
+                        </div>
+                        <div className="kb-workspace-metrics" aria-label="知识库索引概览">
+                          <div>
+                            <span>文档</span>
+                            <strong>{activeMetrics?.documentCount ?? selectedKnowledgeBase.documents.length}</strong>
+                          </div>
+                          <div>
+                            <span>已索引</span>
+                            <strong>{activeIndexedCount}</strong>
+                          </div>
+                          <div>
+                            <span>Chunks</span>
+                            <strong>{activeMetrics?.chunkCount ?? '-'}</strong>
+                          </div>
+                          <div>
+                            <span>向量</span>
+                            <strong>{activeMetrics?.vectorCount ?? '-'}</strong>
+                          </div>
+                          <div>
+                            <span>结构化</span>
+                            <strong>{activeMetrics?.structuredRowCount ?? '-'}</strong>
+                          </div>
+                          <div>
+                            <span>范围</span>
+                            <strong>{selectedScopeLabel}</strong>
+                          </div>
+                        </div>
                       </div>
                       <div className="kb-workspace-actions">
                         <label className="kb-upload-btn" title="上传文档">
