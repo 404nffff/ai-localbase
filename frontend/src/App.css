@@ -2970,7 +2970,7 @@
   height: min(90vh, 900px);
   max-height: none;
   border-radius: 18px;
-  background: #f8fafc;
+  background: #ffffff;
 }
 
 .kb-modal--workspace .kb-header {
@@ -2999,15 +2999,15 @@
 .kb-workbench {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(230px, 270px) minmax(0, 1fr);
   min-height: 0;
 }
 
 .kb-rail {
   min-width: 0;
   overflow: hidden;
-  border-right: 1px solid #e2e8f0;
-  background: #ffffff;
+  border-right: 1px solid #e8eef6;
+  background: #fbfdff;
   display: flex;
   flex-direction: column;
 }
@@ -3064,16 +3064,16 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: 8px;
 }
 
 .kb-rail-item {
   display: flex;
   align-items: stretch;
   gap: 4px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  border-radius: 8px;
+  border: 0;
+  transition: background 0.15s ease;
 }
 
 .kb-rail-item:hover {
@@ -3081,8 +3081,8 @@
 }
 
 .kb-rail-item--active {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
+  background: #eef2f7;
+  box-shadow: inset 3px 0 0 #0f172a;
 }
 
 .kb-rail-main {
@@ -3149,7 +3149,8 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px;
+  padding: 20px 24px 24px;
+  background: #ffffff;
 }
 
 .kb-workspace-hero,
@@ -3158,19 +3159,19 @@
 .kb-eval-history-panel,
 .kb-eval-trend-panel,
 .kb-docs-panel {
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .kb-workspace-hero {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 14px;
-  padding: 18px;
+  gap: 24px;
+  margin-bottom: 0;
+  padding: 2px 0 18px;
 }
 
 .kb-workspace-overview {
@@ -3184,7 +3185,7 @@
   color: #64748b;
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .kb-workspace-title {
@@ -3197,19 +3198,42 @@
   word-break: break-word;
 }
 
+.kb-workspace-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.kb-workspace-health {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .kb-workspace-metrics {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
   margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f7;
 }
 
 .kb-workspace-metrics div {
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #f8fafc;
+  max-width: 180px;
+  padding: 0 16px;
+  border: 0;
+  border-left: 1px solid #eef2f7;
+  background: transparent;
+}
+
+.kb-workspace-metrics div:first-child {
+  padding-left: 0;
+  border-left: 0;
 }
 
 .kb-workspace-metrics span,
@@ -3244,8 +3268,10 @@
 
 .kb-workspace .kb-upload-btn,
 .kb-workspace .kb-eval-btn {
-  border-color: #cbd5e1;
-  background: #ffffff;
+  min-height: 34px;
+  border-color: #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
   color: #334155;
 }
 
@@ -3267,9 +3293,10 @@
 .kb-workspace-grid {
   display: grid;
   grid-template-columns: minmax(320px, 0.85fr) minmax(360px, 1.15fr);
-  gap: 14px;
+  gap: 28px;
   align-items: start;
-  margin-bottom: 14px;
+  margin-bottom: 0;
+  border-top: 1px solid #eef2f7;
 }
 
 .kb-panel-section-head {
@@ -3286,14 +3313,20 @@
 .kb-eval-trend-panel,
 .kb-docs-panel {
   margin: 0;
-  padding: 14px;
+  padding: 16px 0;
+}
+
+.kb-eval-history-panel,
+.kb-eval-trend-panel,
+.kb-docs-panel {
+  border-top: 1px solid #eef2f7;
 }
 
 .kb-docs-panel .kb-scope-bar {
   margin: 0 0 12px;
-  padding: 0;
+  padding: 0 0 12px;
   background: transparent;
-  border-bottom: 0;
+  border-bottom: 1px solid #eef2f7;
 }
 
 .kb-docs-panel .kb-docs {
@@ -3301,19 +3334,130 @@
 }
 
 .kb-docs-panel {
-  margin-bottom: 6px;
+  margin-bottom: 0;
 }
 
 .kb-eval-history-panel {
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .kb-eval-trend-panel {
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .kb-eval-trend-panel--empty {
   padding-bottom: 12px;
+}
+
+.kb-health-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid #eef2f7;
+}
+
+.kb-health-stats div {
+  min-width: 86px;
+  padding: 0 14px;
+  border: 0;
+  border-left: 1px solid #eef2f7;
+  border-radius: 0;
+  background: transparent;
+}
+
+.kb-health-stats div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.kb-health-recommendations {
+  margin-top: 14px;
+}
+
+.kb-health-recommendation {
+  padding: 0 0 0 10px;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 0;
+  background: transparent;
+}
+
+.kb-scope-btn {
+  border-color: transparent;
+  background: transparent;
+  color: #475569;
+}
+
+.kb-scope-btn:hover {
+  background: #f1f5f9;
+  border-color: transparent;
+}
+
+.kb-scope-btn--active {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.kb-doc-item {
+  border: 0;
+  border-top: 1px solid #eef2f7;
+  border-radius: 0;
+  background: transparent;
+}
+
+.kb-doc-item:first-child {
+  border-top: 0;
+}
+
+.kb-doc-item:hover {
+  border-color: #eef2f7;
+  box-shadow: none;
+  transform: none;
+}
+
+.kb-doc-item--active {
+  background: #f8fafc;
+  box-shadow: inset 3px 0 0 #0f172a;
+}
+
+.kb-doc-item--attention {
+  background: #fffaf5;
+}
+
+.kb-doc-main {
+  padding: 11px 12px 11px 0;
+}
+
+.kb-doc-actions {
+  border-left-color: #eef2f7;
+}
+
+.kb-doc-action {
+  background: transparent;
+}
+
+.kb-doc-health-row span {
+  border-color: transparent;
+  background: #f8fafc;
+}
+
+.kb-eval-trend-summary div {
+  border: 0;
+  border-left: 1px solid #eef2f7;
+  border-radius: 0;
+  background: transparent;
+}
+
+.kb-eval-trend-summary div:first-child {
+  border-left: 0;
+}
+
+.kb-eval-history-item,
+.kb-eval-trend-item {
+  border-color: #eef2f7;
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 .kb-panel-mini-btn {
@@ -3545,6 +3689,24 @@
   color: #1d4ed8;
   font-size: 11px;
   font-weight: 800;
+}
+
+.kb-eval-trend-summary div {
+  border: 0;
+  border-left: 1px solid #eef2f7;
+  border-radius: 0;
+  background: transparent;
+}
+
+.kb-eval-trend-summary div:first-child {
+  border-left: 0;
+}
+
+.kb-eval-history-item,
+.kb-eval-trend-item {
+  border-color: #eef2f7;
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 .kb-empty--workspace {

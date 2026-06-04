@@ -25,6 +25,7 @@ import EvalDatasetDialog from './EvalDatasetDialog'
 import KnowledgeBaseRail from './KnowledgeBaseRail'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
 import RetrievalDebugPanel from './RetrievalDebugPanel'
+import { healthStatusLabel } from './knowledgeLabels'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -573,6 +574,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const totalDocuments = knowledgeBases.reduce((sum, knowledgeBase) => sum + knowledgeBase.documents.length, 0)
   const activeHealth = activeKnowledgeBaseId ? healthByKnowledgeBase[activeKnowledgeBaseId] : undefined
   const activeMetrics = activeHealth?.metrics
+  const activeHealthBadge = activeHealth ? healthStatusLabel(activeHealth.status) : null
   const activeIndexedCount =
     activeMetrics?.indexedCount ??
     selectedKnowledgeBase?.documents.filter((document) => document.status === 'indexed').length ??
@@ -627,7 +629,17 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       <div className="kb-workspace-overview">
                         <div className="kb-workspace-title">
                           <span className="kb-workspace-kicker">当前知识库</span>
-                          <h3>{selectedKnowledgeBase.name}</h3>
+                          <div className="kb-workspace-title-row">
+                            <h3>{selectedKnowledgeBase.name}</h3>
+                            {activeHealthBadge && (
+                              <span
+                                className="kb-workspace-health"
+                                style={{ color: activeHealthBadge.color, background: activeHealthBadge.bg }}
+                              >
+                                {activeHealthBadge.text} · {activeHealth?.score}
+                              </span>
+                            )}
+                          </div>
                           <p>{selectedKnowledgeBase.description || '未填写描述'}</p>
                         </div>
                         <div className="kb-workspace-metrics" aria-label="知识库索引概览">
