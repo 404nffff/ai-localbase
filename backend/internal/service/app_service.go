@@ -3612,9 +3612,20 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 	}
 	factSpecs := parseFactQuerySpecs(query)
 
+	// 检测是否为结构化数据查询（包含文件名或表格相关关键词）
+	isStructuredQuery := strings.Contains(query, ".xlsx") || strings.Contains(query, ".csv") ||
+	                     strings.Contains(query, ".xls") || strings.Contains(query, "工作表") ||
+	                     strings.Contains(query, "表格") || len(factSpecs) > 0
+
+	// 对于结构化数据查询，完全信任向量检索结果，不进行词汇过滤
+	if isStructuredQuery {
+		return chunks
+	}
+
 	filtered := make([]RetrievedChunk, 0, len(chunks))
 	factFiltered := make([]RetrievedChunk, 0, len(chunks))
 	preferStructuredSummary := shouldPreferStructuredSummary(query)
+
 	for _, chunk := range chunks {
 		if preferStructuredSummary && (chunk.Kind == "structured_summary" || chunk.Kind == "structured_row") {
 			filtered = append(filtered, chunk)
@@ -3627,6 +3638,8 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 		hits := evidenceHitCount(terms, chunk.Text)
 		coverage := float64(hits) / float64(len(terms))
 		rawScore := chunkRawScore(chunk)
+
+		// 原有的严格过滤逻辑（仅用于非结构化查询）
 		switch {
 		case hits >= 2:
 			filtered = append(filtered, chunk)
