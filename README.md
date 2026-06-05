@@ -500,6 +500,7 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }
 - `chat.ask`
 - `knowledge_base.search`
 - `knowledge_base.create`
+- `knowledge_base.list`
 - `document.upload`
 - `document.append`
 - `document.update`
@@ -541,6 +542,14 @@ curl -s "$MCP_URL" \
 
 #### 2. 查询当前可用工具
 
+`tools/list` 会返回当前可调用的 MCP 工具清单。每个工具都包含：
+
+- `name` / `description`：工具名与用途说明
+- `invocation`：两种调用方式，分别是 JSON-RPC `tools/call` 和普通 HTTP API `/api/mcp/tools/:name/call`
+- `parameters`：参数清单，包含 `name`、`type`、`required`、`description`
+- `inputSchema`：兼容 MCP 客户端的 JSON Schema
+- `response`：工具执行成功后 `structuredContent` 中的关键响应字段
+
 ```bash
 curl -s "$MCP_URL" \
   -H 'Content-Type: application/json' \
@@ -551,6 +560,51 @@ curl -s "$MCP_URL" \
     "method": "tools/list",
     "params": {}
   }'
+```
+
+响应结构示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "tools": [
+      {
+        "name": "knowledge_base.list",
+        "description": "列出当前系统中的知识库名称和知识库 ID",
+        "invocation": {
+          "jsonrpc": {
+            "method": "tools/call",
+            "params": {
+              "name": "knowledge_base.list",
+              "arguments": {}
+            }
+          },
+          "http": {
+            "method": "POST",
+            "path": "/api/mcp/tools/knowledge_base.list/call",
+            "body": {
+              "arguments": {}
+            }
+          }
+        },
+        "parameters": [],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "response": [
+          {
+            "name": "items",
+            "type": "array<object>",
+            "description": "知识库列表，每项包含 id、knowledgeBaseId、name、description、createdAt、documentCount"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 如果你想读取资源能力，也可以继续调用：
@@ -657,7 +711,7 @@ curl -s "$MCP_URL" \
 
 `knowledge_base.create` 会先按名称检查是否已存在；若已存在则直接返回现有 `knowledgeBaseId`，若新建成功也会显式返回 `knowledgeBaseId` 供后续上传文档使用。
 
-完整 `initialize`、`tools/list`、`chat.ask`、`knowledge_base.search`、`knowledge_base.create`、`document.upload`、`document.append`、`document.update`、`document.delete` 调用样例见 [docs/mcp-http-server/access-examples.md](./docs/mcp-http-server/access-examples.md)。
+完整 `initialize`、`tools/list`、`chat.ask`、`knowledge_base.search`、`knowledge_base.create`、`knowledge_base.list`、`document.upload`、`document.append`、`document.update`、`document.delete` 调用样例见 [docs/mcp-http-server/access-examples.md](./docs/mcp-http-server/access-examples.md)。
 
 ### MCP API 调用方式
 
@@ -780,15 +834,21 @@ curl -s "$MCP_API_BASE_URL/tools/chat.ask/call" \
 
 #### 3. 工具清单
 
-| 工具名 | 说明 | 必填参数 | 可选参数 |
-|--------|------|----------|----------|
-| `chat.ask` | 基于当前知识库上下文执行一次非流式问答 | `message` | `knowledgeBaseId`、`documentId`、`conversationId` |
-| `knowledge_base.search` | 对知识库执行检索并返回命中的片段 | `query` | `knowledgeBaseId`、`documentId`、`topK` |
-| `knowledge_base.create` | 创建一个新的知识库；同名时复用已有知识库 | `name` | `description` |
-| `document.upload` | 向指定知识库上传文本内容文档并建立索引 | `knowledgeBaseId`、`content` | `filename` |
-| `document.append` | 向指定知识库中的文档追加文本内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 |
-| `document.update` | 用完整文本覆盖指定知识库中的文档内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 |
-| `document.delete` | 删除指定知识库中的文档 | `knowledgeBaseId`、`documentId` | 无 |
+调用方式统一支持两种：
+
+- JSON-RPC：`POST /mcp` 或 `POST /api/mcp`，`method=tools/call`，`params.name=<工具名>`，`params.arguments=<参数对象>`
+- 普通 HTTP：`POST /api/mcp/tools/<工具名>/call`，请求体为 `{"arguments": {...}}`
+
+| 工具名 | 说明 | 必填参数 | 可选参数 | `structuredContent` 响应数据 |
+|--------|------|----------|----------|------------------------------|
+| `chat.ask` | 基于当前知识库上下文执行一次非流式问答 | `message` | `knowledgeBaseId`、`documentId`、`conversationId` | `content`、`sources`、`knowledgeBaseId`、`documentId`、`degraded`、`model` |
+| `knowledge_base.search` | 对知识库执行检索并返回命中的片段 | `query` | `knowledgeBaseId`、`documentId`、`topK` | `items[]`，每项含 `knowledgeBaseId`、`documentId`、`documentName`、`chunkId`、`text`、`score`、`index` |
+| `knowledge_base.create` | 创建一个新的知识库；同名时复用已有知识库 | `name` | `description` | `id`、`knowledgeBaseId`、`name`、`description`、`documents`、`createdAt`、`created` |
+| `knowledge_base.list` | 列出当前系统中的知识库名称和知识库 ID | 无 | 无 | `items[]`，每项含 `id`、`knowledgeBaseId`、`name`、`description`、`createdAt`、`documentCount` |
+| `document.upload` | 向指定知识库上传文本内容文档并建立索引 | `knowledgeBaseId`、`content` | `filename` | `message`、`knowledgeBaseId`、`uploaded` |
+| `document.append` | 向指定知识库中的文档追加文本内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 | `message`、`knowledgeBaseId`、`updated` |
+| `document.update` | 用完整文本覆盖指定知识库中的文档内容并重建索引 | `knowledgeBaseId`、`documentId`、`content` | 无 | `message`、`knowledgeBaseId`、`updated` |
+| `document.delete` | 删除指定知识库中的文档 | `knowledgeBaseId`、`documentId` | 无 | `message`、`knowledgeBaseId`、`deleted` |
 
 ## 检索流程说明
 

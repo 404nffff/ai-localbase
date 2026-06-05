@@ -818,6 +818,59 @@ func TestMCPResourcesReadReturnsKnowledgeBaseListJSON(t *testing.T) {
 	}
 }
 
+func TestMCPToolsCallKnowledgeBaseListReturnsNamesAndIDs(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
+	defer cleanup()
+
+	resp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      104,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "knowledge_base.list",
+			"arguments": map[string]any{},
+		},
+	}, "app-access-token")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected knowledge_base.list to return 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var rpcResp struct {
+		Result struct {
+			StructuredContent struct {
+				Items []struct {
+					ID              string `json:"id"`
+					KnowledgeBaseID string `json:"knowledgeBaseId"`
+					Name            string `json:"name"`
+					DocumentCount   int    `json:"documentCount"`
+				} `json:"items"`
+			} `json:"structuredContent"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *model.JSONRPCError `json:"error"`
+	}
+	decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
+	if rpcResp.Error != nil {
+		t.Fatalf("expected knowledge_base.list to return result, got error=%+v", *rpcResp.Error)
+	}
+	if len(rpcResp.Result.StructuredContent.Items) == 0 {
+		t.Fatal("expected knowledge_base.list to return at least one knowledge base")
+	}
+	first := rpcResp.Result.StructuredContent.Items[0]
+	if first.ID == "" || first.KnowledgeBaseID != first.ID {
+		t.Fatalf("expected item to include matching id and knowledgeBaseId, got %#v", first)
+	}
+	if first.Name == "" {
+		t.Fatalf("expected item to include knowledge base name, got %#v", first)
+	}
+	if len(rpcResp.Result.Content) == 0 || !strings.Contains(rpcResp.Result.Content[0].Text, first.ID) || !strings.Contains(rpcResp.Result.Content[0].Text, first.Name) {
+		t.Fatalf("expected text summary to include knowledge base name and id, got %#v", rpcResp.Result.Content)
+	}
+}
+
 func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
 	defer cleanup()
@@ -846,8 +899,8 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	if rpcResp.JSONRPC != "2.0" {
 		t.Fatalf("expected jsonrpc version 2.0, got %q", rpcResp.JSONRPC)
 	}
-	if len(rpcResp.Result.Tools) != 7 {
-		t.Fatalf("expected 7 tools, got %d", len(rpcResp.Result.Tools))
+	if len(rpcResp.Result.Tools) != 8 {
+		t.Fatalf("expected 8 tools, got %d", len(rpcResp.Result.Tools))
 	}
 	if rpcResp.Result.Tools[0].Name != "chat.ask" {
 		t.Fatalf("expected first tool chat.ask, got %q", rpcResp.Result.Tools[0].Name)
@@ -869,6 +922,39 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	}
 	if rpcResp.Result.Tools[6].Name != "document.delete" {
 		t.Fatalf("expected seventh tool document.delete, got %q", rpcResp.Result.Tools[6].Name)
+	}
+	if rpcResp.Result.Tools[7].Name != "knowledge_base.list" {
+		t.Fatalf("expected eighth tool knowledge_base.list, got %q", rpcResp.Result.Tools[7].Name)
+	}
+	for _, tool := range rpcResp.Result.Tools {
+		if tool.Invocation.JSONRPC.Method != "tools/call" {
+			t.Fatalf("expected tool %s to include jsonrpc tools/call invocation, got %#v", tool.Name, tool.Invocation.JSONRPC)
+		}
+		if tool.Invocation.JSONRPC.Params["name"] != tool.Name {
+			t.Fatalf("expected tool %s jsonrpc params to include tool name, got %#v", tool.Name, tool.Invocation.JSONRPC.Params)
+		}
+		if tool.Invocation.HTTP.Method != http.MethodPost {
+			t.Fatalf("expected tool %s to use POST api invocation, got %#v", tool.Name, tool.Invocation.HTTP)
+		}
+		if !strings.Contains(tool.Invocation.HTTP.Path, tool.Name) {
+			t.Fatalf("expected tool %s api path to include tool name, got %q", tool.Name, tool.Invocation.HTTP.Path)
+		}
+		if tool.Response == nil {
+			t.Fatalf("expected tool %s to include response fields", tool.Name)
+		}
+	}
+	chatTool := rpcResp.Result.Tools[0]
+	if len(chatTool.Parameters) != 4 {
+		t.Fatalf("expected chat.ask to include 4 parameters, got %#v", chatTool.Parameters)
+	}
+	if chatTool.Parameters[0].Name != "message" || !chatTool.Parameters[0].Required {
+		t.Fatalf("expected chat.ask message to be required, got %#v", chatTool.Parameters[0])
+	}
+	if chatTool.Parameters[1].Name != "knowledgeBaseId" || chatTool.Parameters[1].Required {
+		t.Fatalf("expected chat.ask knowledgeBaseId to be optional, got %#v", chatTool.Parameters[1])
+	}
+	if len(chatTool.Response) == 0 || chatTool.Response[0].Name != "content" {
+		t.Fatalf("expected chat.ask response to describe content field, got %#v", chatTool.Response)
 	}
 }
 

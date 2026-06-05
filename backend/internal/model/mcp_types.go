@@ -35,9 +35,46 @@ type JSONRPCError struct {
 
 // MCPTool 描述 MCP tools/list 返回的单个工具元信息。
 type MCPTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	InputSchema map[string]any     `json:"inputSchema"`
+	Invocation  MCPToolInvocation  `json:"invocation"`
+	Parameters  []MCPToolParameter `json:"parameters"`
+	Response    []MCPToolResponse  `json:"response"`
+}
+
+// MCPToolInvocation 描述工具在 JSON-RPC MCP 和普通 HTTP API 下的调用方式。
+type MCPToolInvocation struct {
+	JSONRPC MCPToolJSONRPCInvocation `json:"jsonrpc"`
+	HTTP    MCPToolHTTPInvocation    `json:"http"`
+}
+
+// MCPToolJSONRPCInvocation 描述通过 /mcp 或 /api/mcp 调用 tools/call 的固定格式。
+type MCPToolJSONRPCInvocation struct {
+	Method string         `json:"method"`
+	Params map[string]any `json:"params"`
+}
+
+// MCPToolHTTPInvocation 描述通过 /api/mcp/tools/:name/call 调用工具的固定格式。
+type MCPToolHTTPInvocation struct {
+	Method string         `json:"method"`
+	Path   string         `json:"path"`
+	Body   map[string]any `json:"body"`
+}
+
+// MCPToolParameter 描述单个工具参数，明确是否必填，便于客户端自动生成表单。
+type MCPToolParameter struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Required    bool   `json:"required"`
+	Description string `json:"description"`
+}
+
+// MCPToolResponse 描述工具 structuredContent 中的关键响应字段。
+type MCPToolResponse struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
 }
 
 // MCPChatAskArguments 描述 chat.ask 工具的输入参数。

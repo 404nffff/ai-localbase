@@ -5,38 +5,51 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
-var idCounter atomic.Uint64
+var idCounters sync.Map
 
 func NextID(prefix string) string {
-	id := idCounter.Add(1)
+	id := idCounterForPrefix(prefix).Add(1)
 	return fmt.Sprintf("%s-%d", prefix, id)
 }
 
 // ObserveID 用持久化状态中的现有 ID 推进计数器，避免服务重启后再次分配旧编号。
 func ObserveID(id string) {
-	parts := strings.Split(strings.TrimSpace(id), "-")
-	if len(parts) < 2 {
+	normalizedID := strings.TrimSpace(id)
+	index := strings.LastIndex(normalizedID, "-")
+	if index <= 0 || index == len(normalizedID)-1 {
 		return
 	}
 
-	sequence, err := strconv.ParseUint(parts[len(parts)-1], 10, 64)
+	prefix := normalizedID[:index]
+	sequence, err := strconv.ParseUint(normalizedID[index+1:], 10, 64)
 	if err != nil {
 		return
 	}
 
+	counter := idCounterForPrefix(prefix)
 	for {
-		current := idCounter.Load()
+		current := counter.Load()
 		if sequence <= current {
 			return
 		}
-		if idCounter.CompareAndSwap(current, sequence) {
+		if counter.CompareAndSwap(current, sequence) {
 			return
 		}
 	}
+}
+
+func idCounterForPrefix(prefix string) *atomic.Uint64 {
+	normalizedPrefix := strings.TrimSpace(prefix)
+	if normalizedPrefix == "" {
+		normalizedPrefix = "id"
+	}
+	counter, _ := idCounters.LoadOrStore(normalizedPrefix, &atomic.Uint64{})
+	return counter.(*atomic.Uint64)
 }
 
 func NowUnixNano() int64 {

@@ -211,97 +211,163 @@ func (s *MCPService) ReadResource(params map[string]any) (map[string]any, error)
 // ToolsList 返回当前阶段已开放的 MCP tools 元数据。
 func (s *MCPService) ToolsList() []model.MCPTool {
 	return []model.MCPTool{
-		{
-			Name:        "chat.ask",
-			Description: "基于当前知识库上下文执行一次非流式问答",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"message":         map[string]any{"type": "string"},
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"documentId":      map[string]any{"type": "string"},
-					"conversationId":  map[string]any{"type": "string"},
+		newMCPTool(
+			"chat.ask",
+			"基于当前知识库上下文执行一次非流式问答",
+			[]model.MCPToolParameter{
+				{Name: "message", Type: "string", Required: true, Description: "用户问题或指令"},
+				{Name: "knowledgeBaseId", Type: "string", Required: false, Description: "限定检索的知识库 ID；为空时跨全部知识库"},
+				{Name: "documentId", Type: "string", Required: false, Description: "限定检索的文档 ID"},
+				{Name: "conversationId", Type: "string", Required: false, Description: "用于复用或记录上下文的会话 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "content", Type: "string", Description: "模型回答正文"},
+				{Name: "sources", Type: "array<object>", Description: "回答引用的检索来源"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "本次请求指定的知识库 ID"},
+				{Name: "documentId", Type: "string", Description: "本次请求指定的文档 ID"},
+				{Name: "degraded", Type: "boolean", Description: "模型调用是否进入降级响应"},
+				{Name: "model", Type: "string", Description: "实际使用的模型名称"},
+			},
+		),
+		newMCPTool(
+			"knowledge_base.search",
+			"对知识库执行检索并返回命中的片段",
+			[]model.MCPToolParameter{
+				{Name: "query", Type: "string", Required: true, Description: "检索关键词或自然语言问题"},
+				{Name: "knowledgeBaseId", Type: "string", Required: false, Description: "限定检索的知识库 ID；为空时跨全部知识库"},
+				{Name: "documentId", Type: "string", Required: false, Description: "限定检索的文档 ID"},
+				{Name: "topK", Type: "integer", Required: false, Description: "返回条数上限；为空时使用服务默认值"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "items", Type: "array<object>", Description: "命中的片段列表，包含 knowledgeBaseId、documentId、documentName、chunkId、text、score、index"},
+			},
+		),
+		newMCPTool(
+			"knowledge_base.create",
+			"创建一个新的知识库；同名时复用已有知识库",
+			[]model.MCPToolParameter{
+				{Name: "name", Type: "string", Required: true, Description: "知识库名称"},
+				{Name: "description", Type: "string", Required: false, Description: "知识库描述"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "id", Type: "string", Description: "知识库 ID"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "知识库 ID，供后续工具调用使用"},
+				{Name: "name", Type: "string", Description: "知识库名称"},
+				{Name: "description", Type: "string", Description: "知识库描述"},
+				{Name: "documents", Type: "array<object>", Description: "知识库下的文档元数据"},
+				{Name: "createdAt", Type: "string", Description: "知识库创建时间，RFC3339 格式"},
+				{Name: "created", Type: "boolean", Description: "true 表示新建，false 表示复用同名知识库"},
+			},
+		),
+		newMCPTool(
+			"document.upload",
+			"向指定知识库上传文本内容文档并建立索引",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "目标知识库 ID"},
+				{Name: "content", Type: "string", Required: true, Description: "要写入并索引的文本内容"},
+				{Name: "filename", Type: "string", Required: false, Description: "文档文件名；为空时自动生成 Markdown 文件名"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "message", Type: "string", Description: "上传结果消息"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "实际写入的知识库 ID"},
+				{Name: "uploaded", Type: "object", Description: "上传后的文档元数据"},
+			},
+		),
+		newMCPTool(
+			"document.append",
+			"向指定知识库中的文档追加文本内容并重建索引",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "目标知识库 ID"},
+				{Name: "documentId", Type: "string", Required: true, Description: "目标文档 ID"},
+				{Name: "content", Type: "string", Required: true, Description: "追加到原文末尾的文本内容"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "message", Type: "string", Description: "追加结果消息"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "目标知识库 ID"},
+				{Name: "updated", Type: "object", Description: "更新后的文档元数据"},
+			},
+		),
+		newMCPTool(
+			"document.update",
+			"用完整文本覆盖指定知识库中的文档内容并重建索引",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "目标知识库 ID"},
+				{Name: "documentId", Type: "string", Required: true, Description: "目标文档 ID"},
+				{Name: "content", Type: "string", Required: true, Description: "覆盖原文的完整文本内容"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "message", Type: "string", Description: "更新结果消息"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "目标知识库 ID"},
+				{Name: "updated", Type: "object", Description: "更新后的文档元数据"},
+			},
+		),
+		newMCPTool(
+			"document.delete",
+			"删除指定知识库中的文档",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "目标知识库 ID"},
+				{Name: "documentId", Type: "string", Required: true, Description: "目标文档 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "message", Type: "string", Description: "删除结果消息"},
+				{Name: "knowledgeBaseId", Type: "string", Description: "目标知识库 ID"},
+				{Name: "deleted", Type: "object", Description: "被删除的文档元数据"},
+			},
+		),
+		newMCPTool(
+			"knowledge_base.list",
+			"列出当前系统中的知识库名称和知识库 ID",
+			[]model.MCPToolParameter{},
+			[]model.MCPToolResponse{
+				{Name: "items", Type: "array<object>", Description: "知识库列表，每项包含 id、knowledgeBaseId、name、description、createdAt、documentCount"},
+			},
+		),
+	}
+}
+
+func newMCPTool(name string, description string, parameters []model.MCPToolParameter, response []model.MCPToolResponse) model.MCPTool {
+	properties := make(map[string]any, len(parameters))
+	required := make([]string, 0, len(parameters))
+	for _, parameter := range parameters {
+		properties[parameter.Name] = map[string]any{
+			"type":        parameter.Type,
+			"description": parameter.Description,
+		}
+		if parameter.Required {
+			required = append(required, parameter.Name)
+		}
+	}
+
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(required) > 0 {
+		inputSchema["required"] = required
+	}
+
+	return model.MCPTool{
+		Name:        name,
+		Description: description,
+		InputSchema: inputSchema,
+		Invocation: model.MCPToolInvocation{
+			JSONRPC: model.MCPToolJSONRPCInvocation{
+				Method: "tools/call",
+				Params: map[string]any{
+					"name":      name,
+					"arguments": map[string]any{},
 				},
-				"required": []string{"message"},
+			},
+			HTTP: model.MCPToolHTTPInvocation{
+				Method: "POST",
+				Path:   fmt.Sprintf("/api/mcp/tools/%s/call", name),
+				Body: map[string]any{
+					"arguments": map[string]any{},
+				},
 			},
 		},
-		{
-			Name:        "knowledge_base.search",
-			Description: "对知识库执行检索并返回命中的片段",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query":           map[string]any{"type": "string"},
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"documentId":      map[string]any{"type": "string"},
-					"topK":            map[string]any{"type": "integer"},
-				},
-				"required": []string{"query"},
-			},
-		},
-		{
-			Name:        "knowledge_base.create",
-			Description: "创建一个新的知识库",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name":        map[string]any{"type": "string"},
-					"description": map[string]any{"type": "string"},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "document.upload",
-			Description: "向指定知识库上传文本内容文档并建立索引",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"filename":        map[string]any{"type": "string"},
-					"content":         map[string]any{"type": "string"},
-				},
-				"required": []string{"knowledgeBaseId", "content"},
-			},
-		},
-		{
-			Name:        "document.append",
-			Description: "向指定知识库中的文档追加文本内容并重建索引",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"documentId":      map[string]any{"type": "string"},
-					"content":         map[string]any{"type": "string"},
-				},
-				"required": []string{"knowledgeBaseId", "documentId", "content"},
-			},
-		},
-		{
-			Name:        "document.update",
-			Description: "用完整文本覆盖指定知识库中的文档内容并重建索引",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"documentId":      map[string]any{"type": "string"},
-					"content":         map[string]any{"type": "string"},
-				},
-				"required": []string{"knowledgeBaseId", "documentId", "content"},
-			},
-		},
-		{
-			Name:        "document.delete",
-			Description: "删除指定知识库中的文档",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"knowledgeBaseId": map[string]any{"type": "string"},
-					"documentId":      map[string]any{"type": "string"},
-				},
-				"required": []string{"knowledgeBaseId", "documentId"},
-			},
-		},
+		Parameters: parameters,
+		Response:   response,
 	}
 }
 
@@ -423,6 +489,12 @@ func (s *MCPService) CallTool(name string, arguments map[string]any) (map[string
 			return nil, err
 		}
 		return buildMCPToolResult("document.delete", result)
+	case "knowledge_base.list":
+		result, err := s.CallKnowledgeBaseList(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("knowledge_base.list", result)
 	default:
 		return nil, fmt.Errorf("tool not found")
 	}
@@ -515,6 +587,23 @@ func (s *MCPService) CallKnowledgeBaseCreate(arguments map[string]any) (map[stri
 		"createdAt":       knowledgeBase.CreatedAt,
 		"created":         true,
 	}, nil
+}
+
+// CallKnowledgeBaseList 返回知识库名称和 ID 的结构化清单，供客户端复核当前映射。
+func (s *MCPService) CallKnowledgeBaseList(arguments map[string]any) (map[string]any, error) {
+	knowledgeBases := s.appService.ListKnowledgeBases()
+	items := make([]map[string]any, 0, len(knowledgeBases))
+	for _, knowledgeBase := range knowledgeBases {
+		items = append(items, map[string]any{
+			"id":              knowledgeBase.ID,
+			"knowledgeBaseId": knowledgeBase.ID,
+			"name":            knowledgeBase.Name,
+			"description":     knowledgeBase.Description,
+			"createdAt":       knowledgeBase.CreatedAt,
+			"documentCount":   len(knowledgeBase.Documents),
+		})
+	}
+	return map[string]any{"items": items}, nil
 }
 
 // CallDocumentUpload 执行 document.upload 工具，客户端可通过多次调用实现目录上传。
@@ -851,6 +940,19 @@ func summarizeMCPToolResult(toolName string, structuredContent map[string]any) (
 			return fmt.Sprintf("已创建知识库 %s（%s）", name, knowledgeBaseID), nil
 		}
 		return fmt.Sprintf("已复用已有知识库 %s（%s）", name, knowledgeBaseID), nil
+	case "knowledge_base.list":
+		if items, ok := structuredContent["items"].([]map[string]any); ok {
+			names := make([]string, 0, len(items))
+			for _, item := range items {
+				name, _ := item["name"].(string)
+				knowledgeBaseID, _ := item["knowledgeBaseId"].(string)
+				if strings.TrimSpace(name) == "" || strings.TrimSpace(knowledgeBaseID) == "" {
+					continue
+				}
+				names = append(names, fmt.Sprintf("%s（%s）", name, knowledgeBaseID))
+			}
+			return fmt.Sprintf("共 %d 个知识库：%s", len(items), strings.Join(names, "、")), nil
+		}
 	case "document.upload":
 		if uploaded, ok := structuredContent["uploaded"].(model.Document); ok {
 			return fmt.Sprintf("已上传文档 %s", uploaded.Name), nil

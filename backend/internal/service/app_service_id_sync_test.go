@@ -43,8 +43,8 @@ func TestNewAppServiceSyncsIDCounterFromPersistedState(t *testing.T) {
 		t.Fatalf("create knowledge base: %v", err)
 	}
 
-	if suffix := numericIDSuffix(t, created.ID); suffix <= 4 {
-		t.Fatalf("expected created knowledge base id suffix > 4, got %s", created.ID)
+	if suffix := numericIDSuffix(t, created.ID); suffix != 4 {
+		t.Fatalf("expected created knowledge base id suffix to continue from kb prefix, got %s", created.ID)
 	}
 }
 

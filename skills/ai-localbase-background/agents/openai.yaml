@@ -1,0 +1,7 @@
+interface:
+  display_name: "AI LocalBase Background"
+  short_description: "先列工具和知识库，再初始化后台版 ai_localbase 项目知识库"
+  default_prompt: "使用 $ai-localbase-background 时，进入启用 ai_localbase 的项目后应立即加载本 skill；init 会先调用 tools/list 罗列工具能力，再通过 knowledge_base.list 按项目名匹配已有知识库，没有匹配时才创建。需要立即写入时直接用 upload/append/update/delete，需要异步写入时用 queue-* 按需启动后台 worker；search/chat 继续同步执行。"
+
+policy:
+  allow_implicit_invocation: false
