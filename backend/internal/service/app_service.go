@@ -10,6 +10,7 @@ import (
 	"math"
 	"mime/multipart"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -3021,6 +3022,22 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 	results := make([]RetrievedChunk, 0)
 	seenChunkIDs := make(map[string]struct{})
 	preferStructuredSummary := shouldPreferStructuredSummary(query)
+
+	// 尝试从查询中提取文件名并找到对应文档
+	var filenameDetectedDocID string
+	if strings.TrimSpace(req.DocumentID) == "" {
+		filenames := extractFilenamesFromQuery(query)
+		if len(filenames) > 0 && len(knowledgeBaseIDs) > 0 {
+			// 使用第一个知识库和第一个文件名来查找
+			filenameDetectedDocID = s.findDocumentByFilename(knowledgeBaseIDs[0], filenames[0])
+			if filenameDetectedDocID != "" {
+				log.Printf("[filename-detection] query=%q detected_filename=%q matched_doc_id=%q", query, filenames[0], filenameDetectedDocID)
+			} else {
+				log.Printf("[filename-detection] query=%q detected_filename=%q matched_doc_id=<none>", query, filenames[0])
+			}
+		}
+	}
+
 	for _, knowledgeBaseID := range knowledgeBaseIDs {
 		kbStartedAt := time.Now()
 		filter := map[string]any{}
@@ -3029,6 +3046,14 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 				"must": []map[string]any{{
 					"key":   "document_id",
 					"match": map[string]any{"value": req.DocumentID},
+				}},
+			}
+		} else if filenameDetectedDocID != "" {
+			// 如果从查询中检测到文件名，限制检索范围到该文档
+			filter = map[string]any{
+				"must": []map[string]any{{
+					"key":   "document_id",
+					"match": map[string]any{"value": filenameDetectedDocID},
 				}},
 			}
 		}
@@ -3312,6 +3337,91 @@ func prioritizeStructuredSummaryChunks(chunks []RetrievedChunk) []RetrievedChunk
 		return false
 	})
 	return prioritized
+}
+
+// extractFilenamesFromQuery 从查询中提取文件名
+// 支持格式：《文件名》、"文件名"、'文件名'、以及带扩展名的裸文件名
+func extractFilenamesFromQuery(query string) []string {
+	filenames := make([]string, 0)
+
+	// 提取《》包裹的文件名
+	re1 := regexp.MustCompile(`《([^》]+\.(xlsx|xls|csv|pdf|txt|md))》`)
+	matches := re1.FindAllStringSubmatch(query, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			filenames = append(filenames, match[1])
+		}
+	}
+
+	// 提取引号包裹的文件名
+	re2 := regexp.MustCompile(`["']([^"']+\.(xlsx|xls|csv|pdf|txt|md))["']`)
+	matches = re2.FindAllStringSubmatch(query, -1)
+	for _, match := range matches {
+		if len(match) > 1 && !containsString(filenames, match[1]) {
+			filenames = append(filenames, match[1])
+		}
+	}
+
+	// 如果没有找到任何包裹的文件名，才提取裸文件名（带扩展名的）
+	// 这避免了误匹配中文文件名中的数字部分（如"工作簿1.xlsx"中的"1.xlsx"）
+	if len(filenames) == 0 {
+		re3 := regexp.MustCompile(`\b([a-zA-Z0-9_\-\.]+\.(xlsx|xls|csv|pdf|txt|md))\b`)
+		matches = re3.FindAllStringSubmatch(query, -1)
+		for _, match := range matches {
+			if len(match) > 1 && !containsString(filenames, match[1]) {
+				filenames = append(filenames, match[1])
+			}
+		}
+	}
+
+	return filenames
+}
+
+// findDocumentByFilename 根据文件名查找文档 ID
+// 支持多种匹配策略：精确匹配、部分匹配、扩展名匹配
+func (s *AppService) findDocumentByFilename(knowledgeBaseID string, filename string) string {
+	if s.state == nil || strings.TrimSpace(filename) == "" {
+		return ""
+	}
+
+	kb, exists := s.state.KnowledgeBases[knowledgeBaseID]
+	if !exists {
+		return ""
+	}
+
+	cleanFilename := strings.TrimSpace(filename)
+
+	// 先尝试精确匹配
+	for _, doc := range kb.Documents {
+		if doc.Name == cleanFilename {
+			return doc.ID
+		}
+	}
+
+	// 再尝试部分匹配（文档名包含查询中的文件名，或反之）
+	for _, doc := range kb.Documents {
+		if strings.Contains(doc.Name, cleanFilename) || strings.Contains(cleanFilename, doc.Name) {
+			return doc.ID
+		}
+	}
+
+	// 最后尝试扩展名匹配：如果知识库中只有一个该扩展名的文档，返回它
+	// 这处理了临时文件名（如 1780210994576679459____1.xlsx）被重命名为实际文件名（如 工作簿1.xlsx）的情况
+	ext := filepath.Ext(cleanFilename)
+	if ext != "" {
+		var matchedDocs []model.Document
+		for _, doc := range kb.Documents {
+			if filepath.Ext(doc.Name) == ext {
+				matchedDocs = append(matchedDocs, doc)
+			}
+		}
+		// 只有当该扩展名唯一时才返回，避免歧义
+		if len(matchedDocs) == 1 {
+			return matchedDocs[0].ID
+		}
+	}
+
+	return ""
 }
 
 func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string, req model.ChatCompletionRequest) []RetrievedChunk {
