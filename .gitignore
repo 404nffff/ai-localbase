@@ -46,6 +46,7 @@ yarn.lock
 # IDE / Editor
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -55,6 +56,8 @@ Thumbs.db
 
 # Environment variables
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
@@ -66,6 +69,23 @@ backend/data/*
 !backend/data/.gitkeep
 backend/data/*.json
 backend/internal/router/data/
+
+# Local database files
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.duckdb
+*.duckdb.*
+
+# Local credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Evaluation artifacts (generated locally, do not commit)
 backend/eval/results/
@@ -113,4 +133,6 @@ plans/
 data/*
 
 # 测试文件可能包含本地知识库数据，不上传
-*_test.go
+*test*
+*Test*
+*TEST*
