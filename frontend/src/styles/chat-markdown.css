@@ -1,0 +1,491 @@
+/* ==============================================
+   Markdown 消息渲染样式（统一版）
+   ============================================== */
+
+/* AI 消息气泡 */
+.message.assistant .message-content {
+  background: #ffffff;
+  border: 1px solid #e8ecf4;
+  border-radius: 16px 16px 16px 4px;
+  padding: 16px 20px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  white-space: normal;
+}
+
+/* ── 基础排版 ── */
+.message-content-markdown {
+  line-height: 1.72;
+  font-size: 14px;
+  color: #1e293b;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.message-content-markdown p {
+  margin: 0 0 10px;
+  line-height: 1.7;
+}
+
+.message-content-markdown > *:first-child {
+  margin-top: 0 !important;
+}
+
+.message-content-markdown > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+.message-content-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+/* ── 标题层级（整体缩小） ── */
+/* 兼容模型偶尔输出 h1 的情况，避免标题过大 */
+.message-content-markdown h1 {
+  font-size: 1.08em;
+  font-weight: 700;
+  color: #1e293b;
+  padding: 0;
+  margin: 14px 0 8px;
+  border: 0;
+  background: transparent;
+  letter-spacing: 0;
+}
+
+.message-content-markdown h1:first-child {
+  margin-top: 0;
+}
+
+/* h2：主标题 */
+.message-content-markdown h2 {
+  font-size: 1.02em;
+  font-weight: 700;
+  color: #1e293b;
+  padding: 0 0 6px;
+  margin: 18px 0 10px;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  background: transparent;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+/* h2 首个不加顶部间距 */
+.message-content-markdown h2:first-child {
+  margin-top: 0;
+}
+
+/* h3：小节 */
+.message-content-markdown h3 {
+  font-size: 0.98em;
+  font-weight: 700;
+  color: #334155;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 14px 0 8px;
+}
+
+/* h4+：细分标题 */
+.message-content-markdown h4,
+.message-content-markdown h5,
+.message-content-markdown h6 {
+  font-size: 0.92em;
+  font-weight: 600;
+  color: #4b5563;
+  margin: 8px 0 4px;
+}
+
+/* ── 强调 ── */
+.message-content-markdown strong {
+  font-weight: 700;
+  color: #111827;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.message-content-markdown .md-strong-plain {
+  font-weight: 500;
+  color: inherit;
+}
+
+.message-content-markdown em {
+  font-style: italic;
+  color: #64748b;
+}
+
+/* ── 列表：去除装饰性图标，保留朴素文档感 ── */
+.message-content-markdown ul {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 8px 0 12px;
+}
+
+.message-content-markdown ul > li {
+  margin-bottom: 6px;
+  line-height: 1.72;
+}
+
+.message-content-markdown ul > li::before {
+  content: none;
+}
+
+/* ── 有序列表：使用普通数字，不使用圆形编号图标 ── */
+.message-content-markdown ol {
+  list-style: decimal;
+  padding-left: 22px;
+  margin: 8px 0 12px;
+}
+
+.message-content-markdown ol > li {
+  padding-left: 0;
+  margin-bottom: 6px;
+  line-height: 1.72;
+}
+
+.message-content-markdown ol > li::before {
+  content: none;
+}
+
+.message-content-markdown li::marker {
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* 嵌套列表缩进 */
+.message-content-markdown li > ul,
+.message-content-markdown li > ol {
+  margin: 4px 0 4px 4px;
+}
+
+/* ── 引用块：渐变背景 + 彩色边框 ── */
+.message-content-markdown blockquote {
+  margin: 10px 0;
+  padding: 4px 0 4px 14px;
+  border-left: 3px solid #cbd5e1;
+  background: transparent;
+  border-radius: 0;
+  color: #475569;
+  font-style: normal;
+}
+
+.message-content-markdown blockquote p {
+  margin: 0;
+  font-style: normal;
+}
+
+/* ── 行内代码 ── */
+.md-inline-code {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+  font-size: 0.88em;
+  color: #dc2626;
+}
+
+/* ── 代码块 ── */
+.md-code-block {
+  margin: 12px 0;
+  background: #1e293b;
+  border-radius: 10px;
+  overflow-x: auto;
+  max-width: 100%;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.md-code-block code {
+  display: block;
+  min-width: max-content;
+  padding: 14px 18px;
+  font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #e2e8f0;
+  white-space: pre;
+}
+
+/* ── 链接 ── */
+.md-link {
+  color: #6366f1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-link:hover {
+  color: #4338ca;
+}
+
+.md-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid #e6ebf5;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.04);
+}
+
+.md-spreadsheet-note {
+  margin: 12px 0 8px;
+  padding: 8px 12px;
+  border-left: 4px solid #6366f1;
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.1) 0%, rgba(255, 255, 255, 0) 100%);
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ── 表格 ── */
+.message-content-markdown table,
+.md-data-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0;
+  font-size: 12px;
+  table-layout: auto;
+}
+
+.message-content-markdown th,
+.md-data-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%);
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 800;
+  color: #312e81;
+  border-bottom: 1px solid #dbe4ff;
+  font-size: 12px;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.message-content-markdown td,
+.md-data-table-cell {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eef2f7;
+  color: #334155;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.45;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.message-content-markdown tr:last-child td,
+.md-data-table tr:last-child .md-data-table-cell {
+  border-bottom: none;
+}
+
+.message-content-markdown tr:nth-child(even) td,
+.md-data-table tr:nth-child(even) .md-data-table-cell {
+  background: #fafbff;
+}
+
+.message-content-markdown tr:hover td,
+.md-data-table tr:hover .md-data-table-cell {
+  background: #f4f7ff;
+}
+
+.md-data-table-cell-highlight {
+  color: #4338ca;
+  font-weight: 600;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.08) 0%, rgba(255, 255, 255, 0.96) 100%) !important;
+}
+
+.md-data-table th,
+.md-data-table td {
+  min-width: 84px;
+}
+
+.md-data-table th:first-child,
+.md-data-table td:first-child {
+  min-width: 64px;
+}
+
+.md-advice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.md-advice-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.md-advice-card-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #edf2ff;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.1) 0%, rgba(255, 255, 255, 0) 100%);
+}
+
+.md-advice-card-header h4 {
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.md-advice-card-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.md-advice-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.md-advice-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #edf2f7;
+}
+
+.md-advice-row-emphasis {
+  background: linear-gradient(135deg, #eef2ff, #f8fafc);
+  border-color: #c7d2fe;
+}
+
+.md-advice-row-warning {
+  background: linear-gradient(135deg, #fff7ed, #fff);
+  border-color: #fed7aa;
+}
+
+.md-advice-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.md-advice-value {
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.72;
+  word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .kb-health-head,
+  .kb-health-doc-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kb-health-badge,
+  .kb-health-doc-item button {
+    align-self: flex-start;
+  }
+
+  .kb-health-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .md-table-wrap {
+    margin: 12px 0;
+    border-radius: 14px;
+  }
+
+  .message-content-markdown table,
+  .md-data-table {
+    min-width: 560px;
+    font-size: 12px;
+  }
+
+  .message-content-markdown th,
+  .md-data-table-head,
+  .message-content-markdown td,
+  .md-data-table-cell {
+    padding: 10px 12px;
+  }
+
+  .md-advice-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .message-citations {
+    width: 100%;
+  }
+
+  .message-citation-head strong {
+    min-width: 100%;
+  }
+}
+
+.md-mermaid {
+  margin: 12px 0;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow-x: auto;
+}
+
+.md-mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.md-mermaid-loading,
+.md-mermaid-error {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.md-mermaid-loading {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.md-mermaid-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.md-mermaid-fallback .md-code-block {
+  margin-top: 8px;
+}
+
+/* ── 分隔线 ── */
+.message-content-markdown hr {
+  border: none;
+  height: 0;
+  border-top: 1px solid #e5e7eb;
+  margin: 18px 0;
+  position: static;
+}
+
+.message-content-markdown hr::after {
+  content: none;
+}
