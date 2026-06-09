@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import type { AppConfig, ChatConfig, ChatModeSettings, EmbeddingConfig, RetrievalConfig } from '../../App'
-import { ModelConfigTest } from './ModelConfigTest.tsx'
+import { ModelConfigTest } from './ModelConfigProbe.tsx'
 
 interface SettingsPanelProps {
   config: AppConfig

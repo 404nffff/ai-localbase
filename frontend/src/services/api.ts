@@ -24,6 +24,7 @@ export interface HealthResponse {
 export interface BackendDocumentItem {
   id: string
   name: string
+  size?: number
   sizeLabel: string
   uploadedAt: string
   status: 'indexed' | 'ready' | 'processing' | 'failed'
@@ -50,6 +51,14 @@ export interface ConfigResponse {
   embedding: AppConfig['embedding']
   mcp: MCPConfig
   retrieval: AppConfig['retrieval']
+}
+
+export interface TestModelResponse {
+  success: boolean
+  latency_ms?: number
+  error_message?: string
+  vector_size?: number
+  model_info?: string
 }
 
 export interface BackendConversationListItem {
@@ -370,6 +379,7 @@ export interface EvalRunListResponse {
 export const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
   id: document.id,
   name: document.name,
+  size: document.size,
   sizeLabel: document.sizeLabel,
   uploadedAt: document.uploadedAt,
   status: document.status,
@@ -489,6 +499,24 @@ export const resetMcpToken = async (): Promise<MCPConfig> => {
   })
   return payload.mcp
 }
+
+export const testChatModelConfig = async (
+  config: AppConfig['chat'],
+): Promise<TestModelResponse> => (
+  requestJson<TestModelResponse>(
+    '/api/config/test-chat-model',
+    jsonRequest(config, { method: 'POST' }),
+  )
+)
+
+export const testEmbeddingModelConfig = async (
+  config: AppConfig['embedding'],
+): Promise<TestModelResponse> => (
+  requestJson<TestModelResponse>(
+    '/api/config/test-embedding-model',
+    jsonRequest(config, { method: 'POST' }),
+  )
+)
 
 export const fetchConversationDetail = async (conversationId: string): Promise<Conversation> => (
   normalizeConversation(await requestJson<BackendConversation>(`/api/conversations/${conversationId}`))

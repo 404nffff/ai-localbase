@@ -95,6 +95,7 @@ export interface Conversation {
 export interface DocumentItem {
   id: string
   name: string
+  size?: number
   sizeLabel: string
   uploadedAt: string
   status: 'indexed' | 'ready' | 'processing' | 'failed'
@@ -1329,6 +1330,7 @@ function App() {
       const newDocuments = batchResult.documents.map((doc) => ({
         id: doc.id,
         name: doc.name,
+        size: doc.size,
         sizeLabel: doc.sizeLabel,
         uploadedAt: doc.uploadedAt,
         status: doc.status,
