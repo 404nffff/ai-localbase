@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, mcpServer *mcp.Server, frontendFS fs.FS) *gin.Engine {
+func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHandler, serverConfig model.ServerConfig, mcpServer *mcp.Server, frontendFS fs.FS) *gin.Engine {
 	r := gin.New()
 	r.Use(requestIDMiddleware(), accessLogMiddleware(), gin.Recovery(), corsMiddleware())
 
@@ -27,6 +27,9 @@ func NewRouter(appHandler *handler.AppHandler, serverConfig model.ServerConfig, 
 		api.GET("/config", appHandler.GetConfig)
 		api.PUT("/config", appHandler.UpdateConfig)
 		api.POST("/config/mcp/reset-token", appHandler.ResetMCPToken)
+		api.POST("/config/test-chat-model", configHandler.TestChatModel)
+		api.POST("/config/test-embedding-model", configHandler.TestEmbeddingModel)
+		api.GET("/config/health-summary", configHandler.HealthSummary)
 		api.GET("/conversations", appHandler.ListConversations)
 		api.GET("/conversations/:id", appHandler.GetConversation)
 		api.PUT("/conversations/:id", appHandler.SaveConversation)

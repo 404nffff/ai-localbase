@@ -379,3 +379,104 @@
     flex-basis: 100%;
   }
 }
+
+/* =====================
+   Model Config Test
+   ===================== */
+
+.model-config-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.test-connection-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.test-connection-btn:hover:not(:disabled) {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.test-connection-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.test-result.test-success {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+}
+
+.test-result.test-error {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+
+.test-icon {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.test-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.test-message {
+  font-weight: 600;
+}
+
+.test-latency {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.test-info {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.test-error-msg {
+  font-size: 12px;
+  color: #dc2626;
+  margin-top: 2px;
+}
+
+@media (max-width: 768px) {
+  .model-config-test {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .test-connection-btn {
+    width: 100%;
+  }
+
+  .test-result {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

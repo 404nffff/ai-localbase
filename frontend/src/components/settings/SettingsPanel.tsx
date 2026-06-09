@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import type { AppConfig, ChatConfig, ChatModeSettings, EmbeddingConfig, RetrievalConfig } from '../../App'
+import { ModelConfigTest } from './ModelConfigTest'
 
 interface SettingsPanelProps {
   config: AppConfig
@@ -173,6 +174,18 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 />
                 <small>限制每次发送给模型的最近消息条数，范围 1-100。</small>
               </label>
+
+              <div className="settings-field settings-field-full">
+                <ModelConfigTest
+                  type="chat"
+                  provider={config.chat.provider}
+                  baseUrl={config.chat.baseUrl}
+                  modelName={config.chat.model}
+                  apiKey={config.chat.apiKey}
+                  temperature={config.chat.temperature}
+                />
+              </div>
+
               <label className="settings-field settings-field-full">
                 <span>思考模式模型</span>
                 <input
@@ -241,6 +254,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   placeholder="选填"
                 />
               </label>
+
+              <div className="settings-field settings-field-full">
+                <ModelConfigTest
+                  type="embedding"
+                  provider={config.embedding.provider}
+                  baseUrl={config.embedding.baseUrl}
+                  modelName={config.embedding.model}
+                  apiKey={config.embedding.apiKey}
+                />
+              </div>
             </div>
           </section>
 

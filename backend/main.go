@@ -44,8 +44,9 @@ func main() {
 	mcpRegistry := mcp.DefaultRegistry(appService)
 	toolPlanner := mcp.NewToolUsePlanner(mcpRegistry)
 	appHandler := handler.NewAppHandler(serverConfig, appService, llmService, toolPlanner)
+	configHandler := handler.NewConfigHandler(appService, qdrantService)
 	mcpServer := mcp.NewServer(mcpRegistry, appService, serverConfig)
-	r := router.NewRouter(appHandler, serverConfig, mcpServer, frontendFS())
+	r := router.NewRouter(appHandler, configHandler, serverConfig, mcpServer, frontendFS())
 
 	log.Printf("backend server listening on :%s", serverConfig.Port)
 	if err := r.Run(":" + serverConfig.Port); err != nil {
