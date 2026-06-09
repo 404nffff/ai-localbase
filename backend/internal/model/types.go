@@ -316,6 +316,10 @@ type SaveConversationRequest struct {
 	Messages        []StoredChatMessage `json:"messages"`
 }
 
+type EditMessageRequest struct {
+	Content string `json:"content"`
+}
+
 type ErrorDetail struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
@@ -499,6 +503,7 @@ type RetrievalDebugRequest struct {
 	RerankStrategy          string `json:"rerankStrategy,omitempty"`
 	EnableQueryRewrite      *bool  `json:"enableQueryRewrite,omitempty"`
 	QueryRewriteMaxVariants int    `json:"queryRewriteMaxVariants,omitempty"`
+	Verbose                 bool   `json:"verbose,omitempty"`
 }
 
 type RetrievalDebugChunk struct {
@@ -517,11 +522,13 @@ type RetrievalDebugChunk struct {
 }
 
 type RetrievalDebugTraceStep struct {
-	Stage       string `json:"stage"`
-	Status      string `json:"status"`
-	Reason      string `json:"reason,omitempty"`
-	InputCount  int    `json:"inputCount,omitempty"`
-	OutputCount int    `json:"outputCount,omitempty"`
+	Stage       string         `json:"stage"`
+	Status      string         `json:"status"`
+	Reason      string         `json:"reason,omitempty"`
+	InputCount  int            `json:"inputCount,omitempty"`
+	OutputCount int            `json:"outputCount,omitempty"`
+	ElapsedMs   int64          `json:"elapsedMs,omitempty"`
+	Details     map[string]any `json:"details,omitempty"`
 }
 
 type RetrievalDebugConfidence struct {
@@ -553,6 +560,7 @@ type RetrievalDebugResponse struct {
 	SearchMode        string                          `json:"searchMode"`
 	RerankStrategy    string                          `json:"rerankStrategy"`
 	QueryRewriteUsed  bool                            `json:"queryRewriteUsed"`
+	QueryVariants     []string                        `json:"queryVariants,omitempty"`
 	StructuredIntent  string                          `json:"structuredIntent,omitempty"`
 	TargetField       string                          `json:"targetField,omitempty"`
 	DeterministicUsed bool                            `json:"deterministicUsed"`
@@ -566,4 +574,46 @@ type RetrievalDebugResponse struct {
 	EvalCandidate     *EvalGroundTruthCase            `json:"evalCandidate,omitempty"`
 	Trace             []RetrievalDebugTraceStep       `json:"trace,omitempty"`
 	Items             []RetrievalDebugChunk           `json:"items"`
+	VerboseDetails    *RetrievalDebugVerboseDetails   `json:"verboseDetails,omitempty"`
+}
+
+type RetrievalDebugVerboseDetails struct {
+	QueryEmbeddingMs    int64                     `json:"queryEmbeddingMs,omitempty"`
+	VectorSearchMs      int64                     `json:"vectorSearchMs,omitempty"`
+	RerankMs            int64                     `json:"rerankMs,omitempty"`
+	MMRMs               int64                     `json:"mmrMs,omitempty"`
+	CandidatesCount     int                       `json:"candidatesCount"`
+	AfterRerankCount    int                       `json:"afterRerankCount"`
+	AfterMMRCount       int                       `json:"afterMMRCount"`
+	TopCandidates       []RetrievalDebugChunk     `json:"topCandidates,omitempty"`
+	TopAfterRerank      []RetrievalDebugChunk     `json:"topAfterRerank,omitempty"`
+	TopAfterMMR         []RetrievalDebugChunk     `json:"topAfterMMR,omitempty"`
+	MMREffect           *MMREffectAnalysis        `json:"mmrEffect,omitempty"`
+	QueryRewriteDetails *QueryRewriteDebugDetails `json:"queryRewriteDetails,omitempty"`
+}
+
+type MMREffectAnalysis struct {
+	RemovedDuplicates int                       `json:"removedDuplicates"`
+	ReorderedItems    int                       `json:"reorderedItems"`
+	DiversityScore    float64                   `json:"diversityScore"`
+	BeforeMMR         []RetrievalDebugChunk     `json:"beforeMMR,omitempty"`
+	AfterMMR          []RetrievalDebugChunk     `json:"afterMMR,omitempty"`
+	RankingChanges    []RankingChange           `json:"rankingChanges,omitempty"`
+}
+
+type RankingChange struct {
+	ChunkID      string  `json:"chunkId"`
+	DocumentName string  `json:"documentName"`
+	BeforeRank   int     `json:"beforeRank"`
+	AfterRank    int     `json:"afterRank"`
+	ScoreBefore  float64 `json:"scoreBefore"`
+	ScoreAfter   float64 `json:"scoreAfter"`
+}
+
+type QueryRewriteDebugDetails struct {
+	OriginalQuery     string   `json:"originalQuery"`
+	RewrittenQueries  []string `json:"rewrittenQueries"`
+	RewriteMs         int64    `json:"rewriteMs"`
+	TotalQueries      int      `json:"totalQueries"`
+	HitsPerQuery      []int    `json:"hitsPerQuery,omitempty"`
 }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
   addEvalDatasetCandidate,
+  batchIndexDocuments,
   createKnowledgeBase,
   debugKnowledgeBaseRetrieval,
   deleteConversation,
@@ -19,6 +20,7 @@ import {
   fetchConversationDetail,
   fetchInitialAppData,
   generateEvalDataset,
+  getDocumentIndexStatus,
   getEvalDataset,
   listEvalDatasets,
   listEvalRuns,
@@ -26,6 +28,7 @@ import {
   resetMcpToken,
   runEvalDataset,
   saveConversation,
+  stageUpload,
   updateAppConfig,
   updateEvalDatasetItem,
   uploadKnowledgeBaseFile,
@@ -237,6 +240,8 @@ export type DirectoryUploadStatus =
   | 'idle'
   | 'scanning'
   | 'uploading'
+  | 'indexing'
+  | 'polling-index'
   | 'canceling'
   | 'canceled'
   | 'done'
@@ -253,6 +258,9 @@ export interface DirectoryUploadTask {
   failedFiles: number
   pendingFiles: number
   processedFiles: number
+  indexingFiles: number
+  indexedFiles: number
+  indexFailedFiles: number
   currentFileName: string
   currentFilePath: string
   failedItems: DirectoryUploadIssueItem[]
@@ -272,6 +280,9 @@ const createEmptyDirectoryUploadTask = (): DirectoryUploadTask => ({
   failedFiles: 0,
   pendingFiles: 0,
   processedFiles: 0,
+  indexingFiles: 0,
+  indexedFiles: 0,
+  indexFailedFiles: 0,
   currentFileName: '',
   currentFilePath: '',
   failedItems: [],
@@ -409,6 +420,14 @@ const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
     `失败 ${task.failedFiles}`,
     `跳过 ${task.skippedFiles}`,
   ]
+
+  if (task.indexingFiles > 0 || task.indexedFiles > 0) {
+    parts.push(`已索引 ${task.indexedFiles}`)
+  }
+
+  if (task.indexFailedFiles > 0) {
+    parts.push(`索引失败 ${task.indexFailedFiles}`)
+  }
 
   if (task.pendingFiles > 0) {
     parts.push(`未执行 ${task.pendingFiles}`)
@@ -1162,6 +1181,9 @@ function App() {
       failedFiles: 0,
       pendingFiles: 0,
       processedFiles: 0,
+      indexingFiles: 0,
+      indexedFiles: 0,
+      indexFailedFiles: 0,
       currentFileName: '',
       currentFilePath: '',
       failedItems: [],
@@ -1194,6 +1216,9 @@ function App() {
       failedFiles: 0,
       pendingFiles: eligibleItems.length,
       processedFiles: 0,
+      indexingFiles: 0,
+      indexedFiles: 0,
+      indexFailedFiles: 0,
       currentFileName: '',
       currentFilePath: '',
       failedItems: [],
@@ -1211,7 +1236,210 @@ function App() {
       return
     }
 
-    await processDirectoryUploadQueue(knowledgeBaseId, eligibleItems, 'new')
+    directoryUploadCancelRef.current = false
+    setSelectedKnowledgeBaseId(knowledgeBaseId)
+
+    const uploadIds: string[] = []
+    const failedUploads: DirectoryUploadIssueItem[] = []
+
+    for (let index = 0; index < eligibleItems.length; index += 1) {
+      if (directoryUploadCancelRef.current) {
+        setDirectoryUploadPendingFiles(eligibleItems.slice(index))
+        break
+      }
+
+      const item = eligibleItems[index]
+
+      setDirectoryUploadTask((prev) => ({
+        ...prev,
+        status: prev.status === 'canceling' ? 'canceling' : 'uploading',
+        currentFileName: item.name,
+        currentFilePath: item.path,
+        pendingFiles: eligibleItems.length - index,
+      }))
+
+      try {
+        const uploaded = await stageUpload(item.file)
+        uploadIds.push(uploaded.uploadId)
+
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          successFiles: prev.successFiles + 1,
+          processedFiles: prev.processedFiles + 1,
+          pendingFiles: Math.max(eligibleItems.length - index - 1, 0),
+        }))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '暂存文件失败，请稍后重试。'
+        failedUploads.push({ name: item.name, path: item.path, reason })
+
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          failedFiles: prev.failedFiles + 1,
+          processedFiles: prev.processedFiles + 1,
+          pendingFiles: Math.max(eligibleItems.length - index - 1, 0),
+          failedItems: [...prev.failedItems, { name: item.name, path: item.path, reason }],
+        }))
+      }
+    }
+
+    if (directoryUploadCancelRef.current) {
+      setDirectoryUploadTask((prev) => {
+        const nextTask: DirectoryUploadTask = {
+          ...prev,
+          status: 'canceled',
+          currentFileName: '',
+          currentFilePath: '',
+        }
+        return {
+          ...nextTask,
+          summaryMessage: buildDirectoryUploadSummary(nextTask),
+        }
+      })
+      return
+    }
+
+    if (uploadIds.length === 0) {
+      setDirectoryUploadTask((prev) => {
+        const nextTask: DirectoryUploadTask = {
+          ...prev,
+          status: 'failed',
+          currentFileName: '',
+          currentFilePath: '',
+        }
+        return {
+          ...nextTask,
+          summaryMessage: buildDirectoryUploadSummary(nextTask),
+        }
+      })
+      return
+    }
+
+    setDirectoryUploadTask((prev) => ({
+      ...prev,
+      status: 'indexing',
+      currentFileName: '',
+      currentFilePath: '',
+      indexingFiles: uploadIds.length,
+      summaryMessage: `正在批量索引 ${uploadIds.length} 个文件...`,
+    }))
+
+    try {
+      const batchResult = await batchIndexDocuments(knowledgeBaseId, uploadIds)
+
+      const newDocuments = batchResult.documents.map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        sizeLabel: doc.sizeLabel,
+        uploadedAt: doc.uploadedAt,
+        status: doc.status,
+        contentPreview: doc.contentPreview,
+        chunkCount: doc.chunkCount,
+        indexedAt: doc.indexedAt,
+        indexError: doc.indexError,
+      }))
+
+      setKnowledgeBases((prev) =>
+        prev.map((kb) =>
+          kb.id === knowledgeBaseId
+            ? {
+                ...kb,
+                documents: [...newDocuments, ...kb.documents],
+              }
+            : kb,
+        ),
+      )
+
+      if (newDocuments.length > 0) {
+        setSelectedDocumentId((current) => current ?? newDocuments[0].id)
+      }
+
+      setDirectoryUploadTask((prev) => ({
+        ...prev,
+        status: 'polling-index',
+        summaryMessage: `批量索引已触发，正在轮询索引状态...`,
+      }))
+
+      const documentIds = newDocuments.map((doc) => doc.id)
+      const maxPolls = 60
+      const pollInterval = 2000
+
+      for (let poll = 0; poll < maxPolls; poll += 1) {
+        if (directoryUploadCancelRef.current) {
+          break
+        }
+
+        await sleep(pollInterval)
+
+        const statuses = await Promise.all(
+          documentIds.map((docId) => getDocumentIndexStatus(knowledgeBaseId, docId)),
+        )
+
+        const indexedCount = statuses.filter((s) => s.status === 'indexed').length
+        const processingCount = statuses.filter((s) => s.status === 'processing').length
+        const failedCount = statuses.filter((s) => s.status === 'failed').length
+
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          indexedFiles: indexedCount,
+          indexFailedFiles: failedCount,
+          summaryMessage: `索引中: ${indexedCount}/${documentIds.length} 已完成`,
+        }))
+
+        setKnowledgeBases((prev) =>
+          prev.map((kb) =>
+            kb.id === knowledgeBaseId
+              ? {
+                  ...kb,
+                  documents: kb.documents.map((doc) => {
+                    const statusUpdate = statuses.find((s) => s.documentId === doc.id)
+                    return statusUpdate
+                      ? {
+                          ...doc,
+                          status: statusUpdate.status,
+                          indexedAt: statusUpdate.indexedAt ?? doc.indexedAt,
+                          indexError: statusUpdate.indexError ?? doc.indexError,
+                        }
+                      : doc
+                  }),
+                }
+              : kb,
+          ),
+        )
+
+        if (processingCount === 0) {
+          break
+        }
+      }
+
+      setDirectoryUploadTask((prev) => {
+        const finalStatus =
+          prev.indexFailedFiles > 0 && prev.indexedFiles === 0
+            ? 'failed'
+            : prev.indexFailedFiles > 0
+              ? 'partial-failed'
+              : 'done'
+
+        const nextTask: DirectoryUploadTask = {
+          ...prev,
+          status: finalStatus,
+          currentFileName: '',
+          currentFilePath: '',
+        }
+        return {
+          ...nextTask,
+          summaryMessage: buildDirectoryUploadSummary(nextTask),
+        }
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '批量索引失败，请稍后重试。'
+      setDirectoryUploadTask((prev) => ({
+        ...prev,
+        status: 'failed',
+        currentFileName: '',
+        currentFilePath: '',
+        summaryMessage: `批量索引失败: ${message}`,
+      }))
+    }
   }
 
   const handleCancelDirectoryUpload = () => {

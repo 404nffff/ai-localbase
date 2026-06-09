@@ -114,6 +114,185 @@ func (h *AppHandler) DeleteConversation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "conversation deleted", "id": c.Param("id")})
 }
 
+func (h *AppHandler) EditMessage(c *gin.Context) {
+	var req model.EditMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid edit message request body")
+		return
+	}
+
+	conversation, err := h.appService.EditMessage(c.Param("id"), c.Param("msgId"), req)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, conversation)
+}
+
+func (h *AppHandler) RegenerateMessage(c *gin.Context) {
+	conversationID := c.Param("id")
+	messageID := c.Param("msgId")
+
+	conversation, err := h.appService.GetConversation(conversationID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if conversation == nil {
+		writeError(c, http.StatusNotFound, "conversation not found")
+		return
+	}
+
+	messageIndex := -1
+	for i, msg := range conversation.Messages {
+		if msg.ID == messageID {
+			messageIndex = i
+			break
+		}
+	}
+	if messageIndex == -1 {
+		writeError(c, http.StatusNotFound, "message not found")
+		return
+	}
+	if messageIndex == 0 {
+		writeError(c, http.StatusBadRequest, "cannot regenerate first message")
+		return
+	}
+
+	previousMessage := conversation.Messages[messageIndex-1]
+	if strings.ToLower(strings.TrimSpace(previousMessage.Role)) != "user" {
+		writeError(c, http.StatusBadRequest, "can only regenerate assistant responses following user messages")
+		return
+	}
+
+	truncatedMessages := conversation.Messages[:messageIndex]
+	chatMessages := make([]model.ChatMessage, 0, len(truncatedMessages))
+	for _, msg := range truncatedMessages {
+		if strings.ToLower(strings.TrimSpace(msg.Role)) == "system" {
+			continue
+		}
+		chatMessages = append(chatMessages, model.ChatMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	req := model.ChatCompletionRequest{
+		ConversationID:  conversationID,
+		KnowledgeBaseID: conversation.KnowledgeBaseID,
+		DocumentID:      conversation.DocumentID,
+		Messages:        chatMessages,
+	}
+
+	if content, ok := buildIdentityAnswer(req); ok {
+		metadata := localResponseMetadata("identity-template")
+		response := buildLocalChatResponse(req, content, metadata)
+		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              conversationID,
+			Title:           conversation.Title,
+			KnowledgeBaseID: conversation.KnowledgeBaseID,
+			DocumentID:      conversation.DocumentID,
+			Messages:        buildStoredConversationMessages(chatMessages, content, metadata),
+		})
+		if saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"conversation": updatedConversation,
+			"response":     response,
+		})
+		return
+	}
+
+	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	} else if ok {
+		metadata := localResponseMetadata("structured-data-query")
+		metadata["sources"] = sources
+		metadata["knowledgeBaseId"] = req.KnowledgeBaseID
+		metadata["documentId"] = req.DocumentID
+		response := buildLocalChatResponse(req, content, metadata)
+		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              conversationID,
+			Title:           conversation.Title,
+			KnowledgeBaseID: conversation.KnowledgeBaseID,
+			DocumentID:      conversation.DocumentID,
+			Messages:        buildStoredConversationMessages(chatMessages, content, metadata),
+		})
+		if saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"conversation": updatedConversation,
+			"response":     response,
+		})
+		return
+	}
+
+	preparedReq, sources, err := h.prepareChatRequest(c.Request.Context(), req)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response, err := h.llmService.Chat(preparedReq)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	if response.Metadata == nil {
+		response.Metadata = map[string]any{}
+	}
+	assistantMessage := firstAssistantChoice(response)
+	if assistantMessage != nil {
+		sources = calibrateCitationSources(latestUserQuestion(req.Messages), assistantMessage.Content, sources)
+	}
+	response.Metadata["sources"] = sources
+	response.Metadata["knowledgeBaseId"] = req.KnowledgeBaseID
+	response.Metadata["documentId"] = req.DocumentID
+	response.Metadata["toolUse"] = buildToolUseMetadata(sources)
+
+	if assistantMessage != nil {
+		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              conversationID,
+			Title:           conversation.Title,
+			KnowledgeBaseID: conversation.KnowledgeBaseID,
+			DocumentID:      conversation.DocumentID,
+			Messages:        buildStoredConversationMessages(chatMessages, assistantMessage.Content, response.Metadata),
+		})
+		if saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"conversation": updatedConversation,
+			"response":     response,
+		})
+		return
+	}
+
+	writeError(c, http.StatusInternalServerError, "failed to regenerate response")
+}
+
+func (h *AppHandler) ExportConversation(c *gin.Context) {
+	conversationID := c.Param("id")
+
+	markdown, err := h.appService.ExportConversation(conversationID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Header("Content-Type", "text/markdown; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"conversation-%s.md\"", conversationID))
+	c.String(http.StatusOK, markdown)
+}
+
 func (h *AppHandler) UpdateConfig(c *gin.Context) {
 	var req model.ConfigUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

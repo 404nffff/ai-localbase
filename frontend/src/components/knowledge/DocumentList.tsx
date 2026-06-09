@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useMemo } from 'react'
 import type { DocumentItem } from '../../App'
 import type { KnowledgeBaseDocumentHealth } from '../../services/api'
 import { documentStatusLabel } from './knowledgeLabels'
@@ -15,6 +15,9 @@ interface DocumentListProps {
   onRemoveDocument: (documentId: string) => void
 }
 
+type SortField = 'name' | 'size' | 'uploadedAt'
+type SortOrder = 'asc' | 'desc'
+
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
   healthDocuments = [],
@@ -26,7 +29,83 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onReindexDocument,
   onRemoveDocument,
 }) => {
+  const [sortField, setSortField] = useState<SortField>('uploadedAt')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false)
+
   const healthByDocumentId = new Map(healthDocuments.map((item) => [item.documentId, item]))
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortOrder('asc')
+    }
+  }
+
+  const filteredAndSortedDocuments = useMemo(() => {
+    let filtered = documents
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      filtered = documents.filter(
+        (doc) =>
+          doc.name.toLowerCase().includes(query) ||
+          (doc.contentPreview && doc.contentPreview.toLowerCase().includes(query))
+      )
+    }
+
+    const sorted = [...filtered].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortField) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name)
+          break
+        case 'size':
+          comparison = (a.size || 0) - (b.size || 0)
+          break
+        case 'uploadedAt':
+          comparison = new Date(a.uploadedAt).getTime() - new Date(b.uploadedAt).getTime()
+          break
+      }
+
+      return sortOrder === 'asc' ? comparison : -comparison
+    })
+
+    return sorted
+  }, [documents, searchQuery, sortField, sortOrder])
+
+  const handleToggleSelectAll = () => {
+    if (selectedIds.size === filteredAndSortedDocuments.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredAndSortedDocuments.map((doc) => doc.id)))
+    }
+  }
+
+  const handleToggleSelect = (documentId: string) => {
+    const newSelected = new Set(selectedIds)
+    if (newSelected.has(documentId)) {
+      newSelected.delete(documentId)
+    } else {
+      newSelected.add(documentId)
+    }
+    setSelectedIds(newSelected)
+  }
+
+  const handleBulkDelete = () => {
+    selectedIds.forEach((id) => {
+      onRemoveDocument(id)
+    })
+    setSelectedIds(new Set())
+    setShowBulkConfirm(false)
+  }
+
+  const allSelected = filteredAndSortedDocuments.length > 0 && selectedIds.size === filteredAndSortedDocuments.length
 
   return (
     <section className="kb-docs-panel">
@@ -55,21 +134,103 @@ const DocumentList: React.FC<DocumentListProps> = ({
         ))}
       </div>
 
+      <div className="kb-docs-toolbar">
+        <div className="kb-docs-search-wrapper">
+          <input
+            type="text"
+            className="kb-docs-search"
+            placeholder="搜索文档名称或内容..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="kb-docs-sort">
+          <button
+            className={`kb-sort-btn${sortField === 'name' ? ' kb-sort-btn--active' : ''}`}
+            onClick={() => handleSort('name')}
+            title="按名称排序"
+          >
+            名称 {sortField === 'name' && (sortOrder === 'asc' ? '↑' : '↓')}
+          </button>
+          <button
+            className={`kb-sort-btn${sortField === 'size' ? ' kb-sort-btn--active' : ''}`}
+            onClick={() => handleSort('size')}
+            title="按大小排序"
+          >
+            大小 {sortField === 'size' && (sortOrder === 'asc' ? '↑' : '↓')}
+          </button>
+          <button
+            className={`kb-sort-btn${sortField === 'uploadedAt' ? ' kb-sort-btn--active' : ''}`}
+            onClick={() => handleSort('uploadedAt')}
+            title="按上传时间排序"
+          >
+            时间 {sortField === 'uploadedAt' && (sortOrder === 'asc' ? '↑' : '↓')}
+          </button>
+        </div>
+
+        {filteredAndSortedDocuments.length > 0 && (
+          <div className="kb-docs-bulk">
+            <label className="kb-bulk-checkbox">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={handleToggleSelectAll}
+              />
+              <span>全选</span>
+            </label>
+            {selectedIds.size > 0 && (
+              <>
+                {!showBulkConfirm ? (
+                  <button
+                    className="kb-bulk-delete-btn"
+                    onClick={() => setShowBulkConfirm(true)}
+                  >
+                    删除 ({selectedIds.size})
+                  </button>
+                ) : (
+                  <div className="kb-bulk-confirm">
+                    <span>确认删除 {selectedIds.size} 份文档?</span>
+                    <button className="kb-bulk-yes" onClick={handleBulkDelete}>
+                      确认
+                    </button>
+                    <button className="kb-bulk-no" onClick={() => setShowBulkConfirm(false)}>
+                      取消
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="kb-docs">
-        {documents.length === 0 ? (
+        {filteredAndSortedDocuments.length === 0 ? (
           <div className="kb-docs-empty">
-            <span>暂无文档，点击上传添加文件</span>
+            <span>{searchQuery ? '未找到匹配的文档' : '暂无文档，点击上传添加文件'}</span>
           </div>
         ) : (
-          documents.map((document) => {
+          filteredAndSortedDocuments.map((document) => {
             const badge = documentStatusLabel(document.status)
             const health = healthByDocumentId.get(document.id)
             const needsReindex = Boolean(health?.needsReindex || document.status === 'failed')
+            const isSelected = selectedIds.has(document.id)
+
             return (
               <div
                 key={document.id}
-                className={`kb-doc-item${selectedDocumentId === document.id ? ' kb-doc-item--active' : ''}${needsReindex ? ' kb-doc-item--attention' : ''}`}
+                className={`kb-doc-item${selectedDocumentId === document.id ? ' kb-doc-item--active' : ''}${needsReindex ? ' kb-doc-item--attention' : ''}${isSelected ? ' kb-doc-item--selected' : ''}`}
               >
+                <div className="kb-doc-checkbox-wrapper">
+                  <input
+                    type="checkbox"
+                    className="kb-doc-checkbox"
+                    checked={isSelected}
+                    onChange={() => handleToggleSelect(document.id)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
                 <button className="kb-doc-main" onClick={() => onSelectDocument(document.id)}>
                   <div className="kb-doc-top">
                     <span className="kb-doc-name">{document.name}</span>

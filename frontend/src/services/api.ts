@@ -674,3 +674,128 @@ export const debugKnowledgeBaseRetrieval = async (
     jsonRequest({ query, documentId: documentId ?? '', topK: 12, searchMode }, { method: 'POST' }),
   )
 )
+
+export interface StageUploadResponse {
+  uploadId: string
+  fileName: string
+  filePath: string
+  status: string
+}
+
+export interface BatchIndexRequest {
+  uploadIds: string[]
+}
+
+export interface BatchIndexResponse {
+  knowledgeBaseId: string
+  documents: BackendDocumentItem[]
+  totalCount: number
+  successCount: number
+  failedCount: number
+}
+
+export interface DocumentIndexStatusResponse {
+  documentId: string
+  status: 'indexed' | 'ready' | 'processing' | 'failed'
+  indexedAt?: string
+  indexError?: string
+}
+
+export const stageUpload = async (file: File): Promise<StageUploadResponse> => {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  return requestJson<StageUploadResponse>('/api/uploads', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export const batchIndexDocuments = async (
+  knowledgeBaseId: string,
+  uploadIds: string[],
+): Promise<BatchIndexResponse> => (
+  requestJson<BatchIndexResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/documents/batch-index`,
+    jsonRequest({ uploadIds }, { method: 'POST' }),
+  )
+)
+
+export const getDocumentIndexStatus = async (
+  knowledgeBaseId: string,
+  documentId: string,
+): Promise<DocumentIndexStatusResponse> => (
+  requestJson<DocumentIndexStatusResponse>(
+    `/api/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/index-status`,
+  )
+)
+
+export interface EditMessageRequest {
+  messageId: string
+  newContent: string
+}
+
+export interface EditMessageResponse {
+  conversation: BackendConversation
+}
+
+export const editMessage = async (
+  conversationId: string,
+  messageId: string,
+  newContent: string,
+): Promise<Conversation> => {
+  const response = await requestJson<EditMessageResponse>(
+    `/api/conversations/${conversationId}/messages/${messageId}`,
+    jsonRequest({ newContent }, { method: 'PUT' }),
+  )
+  return normalizeConversation(response.conversation)
+}
+
+export interface RegenerateMessageRequest {
+  messageId: string
+}
+
+export interface RegenerateMessageResponse {
+  conversation: BackendConversation
+}
+
+export const regenerateMessage = async (
+  conversationId: string,
+  messageId: string,
+): Promise<Conversation> => {
+  const response = await requestJson<RegenerateMessageResponse>(
+    `/api/conversations/${conversationId}/messages/${messageId}/regenerate`,
+    jsonRequest({}, { method: 'POST' }),
+  )
+  return normalizeConversation(response.conversation)
+}
+
+export interface DeleteMessageResponse {
+  conversation: BackendConversation
+}
+
+export const deleteMessage = async (
+  conversationId: string,
+  messageId: string,
+): Promise<Conversation> => {
+  const response = await requestJson<DeleteMessageResponse>(
+    `/api/conversations/${conversationId}/messages/${messageId}`,
+    { method: 'DELETE' },
+  )
+  return normalizeConversation(response.conversation)
+}
+
+export interface ExportConversationResponse {
+  content: string
+  format: string
+}
+
+export const exportConversation = async (
+  conversationId: string,
+  format: 'markdown' = 'markdown',
+): Promise<string> => {
+  const response = await requestJson<ExportConversationResponse>(
+    `/api/conversations/${conversationId}/export?format=${format}`,
+  )
+  return response.content
+}

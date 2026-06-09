@@ -28,6 +28,7 @@ go.work
 backend/main
 backend/cmd
 backend/eval/cmd/eval_main
+backend/ai-localbase
 
 # Node.js / npm
 frontend/node_modules/

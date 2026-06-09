@@ -1354,7 +1354,16 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		}},
 	}
 
-	chunks, err := s.EvaluateRetrieve(chatReq)
+	var verboseDetails *model.RetrievalDebugVerboseDetails
+	var chunks []RetrievedChunk
+	var queryVariants []string
+	var err error
+
+	if req.Verbose {
+		chunks, verboseDetails, queryVariants, err = s.debugRetrieveVerbose(chatReq, query)
+	} else {
+		chunks, err = s.EvaluateRetrieve(chatReq)
+	}
 	if err != nil {
 		return model.RetrievalDebugResponse{}, err
 	}
@@ -1456,6 +1465,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		SearchMode:        s.resolvedRetrievalSearchMode(chatReq),
 		RerankStrategy:    s.rerankStrategyForRequest(chatReq),
 		QueryRewriteUsed:  s.queryRewriteEnabledForRequest(chatReq),
+		QueryVariants:     queryVariants,
 		StructuredIntent:  string(deterministicResult.Plan.Intent),
 		TargetField:       deterministicResult.Plan.TargetField,
 		DeterministicUsed: deterministicUsed,
@@ -1469,7 +1479,211 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		EvalCandidate:     evalCandidate,
 		Trace:             trace,
 		Items:             items,
+		VerboseDetails:    verboseDetails,
 	}, nil
+}
+
+func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
+	verboseDetails := &model.RetrievalDebugVerboseDetails{}
+	ctx := context.Background()
+
+	knowledgeBaseIDs, err := s.resolveRetrievalKnowledgeBaseIDs(req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	params := s.resolveRetrievalParams(req)
+	useHybrid := s.shouldUseHybridSearch(req)
+	var queryVariants []string
+	var candidates []RetrievedChunk
+
+	embeddingStart := time.Now()
+	var queryVector []float64
+	if s.queryRewriteEnabledForRequest(req) {
+		if setter, ok := s.queryRewriter.(interface {
+			SetChatConfigProvider(func() model.ChatModelConfig)
+		}); ok {
+			setter.SetChatConfigProvider(func() model.ChatModelConfig {
+				return s.resolveChatConfig(req)
+			})
+		}
+		if setter, ok := s.queryRewriter.(interface {
+			SetMaxVariants(int)
+		}); ok {
+			setter.SetMaxVariants(s.queryRewriteMaxVariantsForRequest(req))
+		}
+
+		rewriteStart := time.Now()
+		history := recentConversationHistory(req.Messages, 3)
+		rewriteResult, err := s.queryRewriter.Rewrite(ctx, query, history)
+		rewriteMs := time.Since(rewriteStart).Milliseconds()
+
+		if err == nil && len(rewriteResult.RewrittenQueries) > 0 {
+			queryVariants = rewriteResult.RewrittenQueries
+			queries := mergeRetrievalQueries([]string{query}, rewriteResult.RewrittenQueries, buildRuleBasedRetrievalQueries(query))
+			embeddingConfig := s.resolveEmbeddingConfig(req)
+
+			searchStart := time.Now()
+			seenChunkIDs := make(map[string]struct{})
+			for _, knowledgeBaseID := range knowledgeBaseIDs {
+				results, err := s.rag.MultiQuerySearch(ctx, queries, knowledgeBaseID, params.candidateTopK, 0, embeddingConfig)
+				if err != nil {
+					continue
+				}
+				for _, item := range results {
+					if strings.TrimSpace(req.DocumentID) != "" && item.DocumentID != req.DocumentID {
+						continue
+					}
+					if _, exists := seenChunkIDs[item.ID]; exists {
+						continue
+					}
+					seenChunkIDs[item.ID] = struct{}{}
+					candidates = append(candidates, item)
+				}
+			}
+			candidates = mergeRetrievedChunks(candidates, s.collectLexicalFactCandidates(req, knowledgeBaseIDs, query, params.candidateTopK))
+			verboseDetails.VectorSearchMs = time.Since(searchStart).Milliseconds()
+			verboseDetails.QueryRewriteDetails = &model.QueryRewriteDebugDetails{
+				OriginalQuery:    query,
+				RewrittenQueries: rewriteResult.RewrittenQueries,
+				RewriteMs:        rewriteMs,
+				TotalQueries:     len(queries),
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		defer cancel()
+		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
+		if err != nil || len(vectors) == 0 {
+			return nil, nil, nil, err
+		}
+		queryVector = vectors[0]
+		verboseDetails.QueryEmbeddingMs = time.Since(embeddingStart).Milliseconds()
+
+		searchQueries := buildRuleBasedRetrievalQueries(query)
+		searchStart := time.Now()
+		candidates, err = s.collectCandidatesForQueries(ctx, knowledgeBaseIDs, req, queryVector, searchQueries, params.candidateTopK, useHybrid, query)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		verboseDetails.VectorSearchMs = time.Since(searchStart).Milliseconds()
+	}
+
+	verboseDetails.CandidatesCount = len(candidates)
+	verboseDetails.TopCandidates = convertToDebugChunks(candidates, query, 5)
+
+	rerankStart := time.Now()
+	var afterRerank []RetrievedChunk
+	if s.shouldBypassRerank(candidates) {
+		afterRerank = candidates
+		verboseDetails.RerankMs = 0
+	} else {
+		afterRerank = s.rerankCandidates(ctx, candidates, query, req)
+		verboseDetails.RerankMs = time.Since(rerankStart).Milliseconds()
+	}
+	verboseDetails.AfterRerankCount = len(afterRerank)
+	verboseDetails.TopAfterRerank = convertToDebugChunks(afterRerank, query, 5)
+
+	mmrStart := time.Now()
+	var selected []RetrievedChunk
+	beforeMMR := afterRerank
+	if s.shouldBypassMMR(afterRerank, params) {
+		selected = takeTopChunks(afterRerank, params.finalTopK, params.perDocumentLimit)
+		verboseDetails.MMRMs = 0
+	} else {
+		selected = selectWithMMR(afterRerank, params.finalTopK, params.perDocumentLimit)
+		verboseDetails.MMRMs = time.Since(mmrStart).Milliseconds()
+	}
+	verboseDetails.AfterMMRCount = len(selected)
+	verboseDetails.TopAfterMMR = convertToDebugChunks(selected, query, 5)
+	verboseDetails.MMREffect = analyzeMMREffect(beforeMMR, selected, query)
+
+	gatedSelected := filterRelevantChunks(query, selected)
+
+	return gatedSelected, verboseDetails, queryVariants, nil
+}
+
+func convertToDebugChunks(chunks []RetrievedChunk, query string, limit int) []model.RetrievalDebugChunk {
+	if len(chunks) == 0 {
+		return nil
+	}
+	count := minInt(len(chunks), limit)
+	result := make([]model.RetrievalDebugChunk, count)
+	for i := 0; i < count; i++ {
+		result[i] = buildRetrievalDebugChunk(query, chunks[i], false)
+	}
+	return result
+}
+
+func analyzeMMREffect(before, after []RetrievedChunk, query string) *model.MMREffectAnalysis {
+	if len(before) == 0 || len(after) == 0 {
+		return nil
+	}
+
+	beforeMap := make(map[string]int)
+	for i, chunk := range before {
+		beforeMap[chunk.ID] = i
+	}
+
+	afterMap := make(map[string]int)
+	for i, chunk := range after {
+		afterMap[chunk.ID] = i
+	}
+
+	var rankingChanges []model.RankingChange
+	reorderedCount := 0
+	for _, chunk := range after {
+		beforeRank, existedBefore := beforeMap[chunk.ID]
+		afterRank := afterMap[chunk.ID]
+
+		if existedBefore && beforeRank != afterRank {
+			reorderedCount++
+			rankingChanges = append(rankingChanges, model.RankingChange{
+				ChunkID:      chunk.ID,
+				DocumentName: chunk.DocumentName,
+				BeforeRank:   beforeRank + 1,
+				AfterRank:    afterRank + 1,
+				ScoreBefore:  before[beforeRank].Score,
+				ScoreAfter:   chunk.Score,
+			})
+		}
+	}
+
+	removedCount := len(before) - len(after)
+	diversityScore := calculateDiversityScore(after)
+
+	return &model.MMREffectAnalysis{
+		RemovedDuplicates: removedCount,
+		ReorderedItems:    reorderedCount,
+		DiversityScore:    diversityScore,
+		BeforeMMR:         convertToDebugChunks(before, query, 10),
+		AfterMMR:          convertToDebugChunks(after, query, 10),
+		RankingChanges:    rankingChanges,
+	}
+}
+
+func calculateDiversityScore(chunks []RetrievedChunk) float64 {
+	if len(chunks) <= 1 {
+		return 1.0
+	}
+
+	totalSimilarity := 0.0
+	count := 0
+	for i := 0; i < len(chunks)-1; i++ {
+		for j := i + 1; j < len(chunks); j++ {
+			sim := textJaccardSimilarity(chunks[i].Text, chunks[j].Text)
+			totalSimilarity += sim
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 1.0
+	}
+	avgSimilarity := totalSimilarity / float64(count)
+	return 1.0 - avgSimilarity
 }
 
 func buildRetrievalDebugChunk(query string, chunk RetrievedChunk, deterministicUsed bool) model.RetrievalDebugChunk {
@@ -1818,6 +2032,147 @@ func (s *AppService) DeleteConversation(id string) error {
 		return nil
 	}
 	return s.chatHistory.DeleteConversation(id)
+}
+
+func (s *AppService) EditMessage(conversationID, messageID string, req model.EditMessageRequest) (*model.Conversation, error) {
+	if s == nil {
+		return nil, fmt.Errorf("app service is nil")
+	}
+	if s.chatHistory == nil {
+		return nil, fmt.Errorf("chat history store is not configured")
+	}
+
+	conversationID = strings.TrimSpace(conversationID)
+	messageID = strings.TrimSpace(messageID)
+	newContent := strings.TrimSpace(req.Content)
+
+	if conversationID == "" {
+		return nil, fmt.Errorf("conversation id is required")
+	}
+	if messageID == "" {
+		return nil, fmt.Errorf("message id is required")
+	}
+	if newContent == "" {
+		return nil, fmt.Errorf("message content cannot be empty")
+	}
+
+	conversation, err := s.chatHistory.GetConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if conversation == nil {
+		return nil, fmt.Errorf("conversation not found")
+	}
+
+	messageIndex := -1
+	for i, msg := range conversation.Messages {
+		if msg.ID == messageID {
+			messageIndex = i
+			break
+		}
+	}
+	if messageIndex == -1 {
+		return nil, fmt.Errorf("message not found")
+	}
+
+	conversation.Messages[messageIndex].Content = newContent
+	conversation.Messages[messageIndex].CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	conversation.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if err := s.chatHistory.SaveConversation(*conversation); err != nil {
+		return nil, err
+	}
+
+	return conversation, nil
+}
+
+func (s *AppService) ExportConversation(conversationID string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("app service is nil")
+	}
+	if s.chatHistory == nil {
+		return "", fmt.Errorf("chat history store is not configured")
+	}
+
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return "", fmt.Errorf("conversation id is required")
+	}
+
+	conversation, err := s.chatHistory.GetConversation(conversationID)
+	if err != nil {
+		return "", err
+	}
+	if conversation == nil {
+		return "", fmt.Errorf("conversation not found")
+	}
+
+	var builder strings.Builder
+	builder.WriteString("# ")
+	builder.WriteString(conversation.Title)
+	builder.WriteString("\n\n")
+
+	if conversation.KnowledgeBaseID != "" || conversation.DocumentID != "" {
+		builder.WriteString("**对话信息**\n\n")
+		if conversation.KnowledgeBaseID != "" {
+			builder.WriteString("- 知识库ID: ")
+			builder.WriteString(conversation.KnowledgeBaseID)
+			builder.WriteString("\n")
+		}
+		if conversation.DocumentID != "" {
+			builder.WriteString("- 文档ID: ")
+			builder.WriteString(conversation.DocumentID)
+			builder.WriteString("\n")
+		}
+		builder.WriteString("- 创建时间: ")
+		builder.WriteString(conversation.CreatedAt)
+		builder.WriteString("\n")
+		builder.WriteString("- 更新时间: ")
+		builder.WriteString(conversation.UpdatedAt)
+		builder.WriteString("\n\n")
+	}
+
+	builder.WriteString("---\n\n")
+
+	for _, msg := range conversation.Messages {
+		role := strings.TrimSpace(msg.Role)
+		if role == "system" {
+			continue
+		}
+
+		if role == "user" {
+			builder.WriteString("## 用户\n\n")
+		} else if role == "assistant" {
+			builder.WriteString("## 助手\n\n")
+		} else {
+			builder.WriteString("## ")
+			builder.WriteString(strings.Title(role))
+			builder.WriteString("\n\n")
+		}
+
+		builder.WriteString(msg.Content)
+		builder.WriteString("\n\n")
+
+		if len(msg.Metadata) > 0 {
+			if sources, ok := msg.Metadata["sources"].([]interface{}); ok && len(sources) > 0 {
+				builder.WriteString("**来源**\n\n")
+				for _, source := range sources {
+					if sourceMap, ok := source.(map[string]interface{}); ok {
+						if docName, ok := sourceMap["documentName"].(string); ok && docName != "" {
+							builder.WriteString("- ")
+							builder.WriteString(docName)
+							builder.WriteString("\n")
+						}
+					}
+				}
+				builder.WriteString("\n")
+			}
+		}
+
+		builder.WriteString("---\n\n")
+	}
+
+	return builder.String(), nil
 }
 
 func (s *AppService) SetReranker(reranker SemanticReranker) {
