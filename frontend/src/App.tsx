@@ -1241,7 +1241,6 @@ function App() {
     setSelectedKnowledgeBaseId(knowledgeBaseId)
 
     const uploadIds: string[] = []
-    const failedUploads: DirectoryUploadIssueItem[] = []
 
     for (let index = 0; index < eligibleItems.length; index += 1) {
       if (directoryUploadCancelRef.current) {
@@ -1265,13 +1264,12 @@ function App() {
 
         setDirectoryUploadTask((prev) => ({
           ...prev,
-          successFiles: prev.successFiles + 1,
           processedFiles: prev.processedFiles + 1,
           pendingFiles: Math.max(eligibleItems.length - index - 1, 0),
+          summaryMessage: `已暂存 ${uploadIds.length}/${eligibleItems.length} 个文件，等待批量索引...`,
         }))
       } catch (error) {
         const reason = error instanceof Error ? error.message : '暂存文件失败，请稍后重试。'
-        failedUploads.push({ name: item.name, path: item.path, reason })
 
         setDirectoryUploadTask((prev) => ({
           ...prev,
@@ -1326,19 +1324,33 @@ function App() {
 
     try {
       const batchResult = await batchIndexDocuments(knowledgeBaseId, uploadIds)
+      const successfulResults = batchResult.results.filter(
+        (result) => result.success && result.document,
+      )
+      const failedIndexResults = batchResult.results.filter((result) => !result.success)
 
-      const newDocuments = batchResult.documents.map((doc) => ({
-        id: doc.id,
-        name: doc.name,
-        size: doc.size,
-        sizeLabel: doc.sizeLabel,
-        uploadedAt: doc.uploadedAt,
-        status: doc.status,
-        contentPreview: doc.contentPreview,
-        chunkCount: doc.chunkCount,
-        indexedAt: doc.indexedAt,
-        indexError: doc.indexError,
+      const newDocuments = successfulResults.map((result) => {
+        const doc = result.document!
+        return {
+          id: doc.id,
+          name: doc.name,
+          size: doc.size,
+          sizeLabel: doc.sizeLabel,
+          uploadedAt: doc.uploadedAt,
+          status: doc.status,
+          contentPreview: doc.contentPreview,
+          chunkCount: doc.chunkCount,
+          indexedAt: doc.indexedAt,
+          indexError: doc.indexError,
+        }
+      })
+
+      const failedIndexItems: DirectoryUploadIssueItem[] = failedIndexResults.map((result) => ({
+        name: result.fileName || result.uploadId,
+        path: result.fileName || result.uploadId,
+        reason: result.error || '批量索引失败',
       }))
+      const batchIndexFailedCount = failedIndexItems.length
 
       setKnowledgeBases((prev) =>
         prev.map((kb) =>
@@ -1353,6 +1365,30 @@ function App() {
 
       if (newDocuments.length > 0) {
         setSelectedDocumentId((current) => current ?? newDocuments[0].id)
+      }
+
+      setDirectoryUploadTask((prev) => ({
+        ...prev,
+        successFiles: newDocuments.length,
+        failedFiles: prev.failedFiles + failedIndexItems.length,
+        indexFailedFiles: failedIndexItems.length,
+        failedItems: [...prev.failedItems, ...failedIndexItems],
+      }))
+
+      if (newDocuments.length === 0) {
+        setDirectoryUploadTask((prev) => {
+          const nextTask: DirectoryUploadTask = {
+            ...prev,
+            status: 'failed',
+            currentFileName: '',
+            currentFilePath: '',
+          }
+          return {
+            ...nextTask,
+            summaryMessage: buildDirectoryUploadSummary(nextTask),
+          }
+        })
+        return
       }
 
       setDirectoryUploadTask((prev) => ({
@@ -1382,8 +1418,9 @@ function App() {
 
         setDirectoryUploadTask((prev) => ({
           ...prev,
+          failedFiles: prev.failedItems.length + failedCount,
           indexedFiles: indexedCount,
-          indexFailedFiles: failedCount,
+          indexFailedFiles: batchIndexFailedCount + failedCount,
           summaryMessage: `索引中: ${indexedCount}/${documentIds.length} 已完成`,
         }))
 

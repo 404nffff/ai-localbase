@@ -714,12 +714,21 @@ export interface BatchIndexRequest {
   uploadIds: string[]
 }
 
+export interface BatchIndexResult {
+  uploadId: string
+  documentId?: string
+  fileName: string
+  success: boolean
+  error?: string
+  document?: BackendDocumentItem
+}
+
 export interface BatchIndexResponse {
-  knowledgeBaseId: string
-  documents: BackendDocumentItem[]
-  totalCount: number
-  successCount: number
-  failedCount: number
+  total: number
+  successful: number
+  failed: number
+  results: BatchIndexResult[]
+  duration_ms: number
 }
 
 export interface DocumentIndexStatusResponse {
