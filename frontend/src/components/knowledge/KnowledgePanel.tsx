@@ -26,6 +26,7 @@ import KnowledgeBaseRail from './KnowledgeBaseRail'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
 import RetrievalDebugPanel from './RetrievalDebugPanel'
 import ConfirmDialog from '../common/ConfirmDialog'
+import UploadDropZone from '../common/UploadDropZone'
 import { healthStatusLabel } from './knowledgeLabels'
 
 interface KnowledgePanelProps {

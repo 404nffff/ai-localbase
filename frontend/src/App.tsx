@@ -1,6 +1,15 @@
 import './App.css'
+import './styles/settings-panel.css'
+import './styles/knowledge-panel.css'
+import './styles/confirm-dialog.css'
+import './styles/toast.css'
+import './styles/loading-bar.css'
+import './styles/drop-zone.css'
+import './styles/skeleton.css'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
+import { ToastProvider } from './components/common/Toast'
+import LoadingBar from './components/common/LoadingBar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
@@ -448,6 +457,7 @@ function App() {
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
   const [backendReady, setBackendReady] = useState(false)
   const [backendWarmupRequired, setBackendWarmupRequired] = useState(true)
+  const [globalLoading, setGlobalLoading] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const initialConversation = createWelcomeConversation()
     return [initialConversation]
@@ -2069,29 +2079,31 @@ function App() {
   }
 
   return (
-    <div className="chat-page">
-      <Sidebar
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
-        knowledgeBases={knowledgeBases}
-        selectedKnowledgeBaseId={selectedKnowledgeBase?.id ?? null}
-        selectedDocumentId={selectedDocumentId}
-        onSelectKnowledgeBase={handleSelectKnowledgeBase}
-        onSelectDocument={handleSelectDocument}
-        onCreateKnowledgeBase={handleCreateKnowledgeBase}
-        onDeleteKnowledgeBase={handleDeleteKnowledgeBase}
-        onUploadFiles={handleUploadFiles}
-        onUploadDirectory={handleUploadDirectory}
-        onGenerateEvalDataset={handleGenerateEvalDataset}
-        onListEvalDatasets={handleListEvalDatasets}
-        onListEvalRuns={handleListEvalRuns}
-        onFetchEvalDataset={handleFetchEvalDataset}
-        onDeleteEvalDataset={handleDeleteEvalDataset}
-        onAddEvalDatasetCandidate={handleAddEvalDatasetCandidate}
-        onUpdateEvalDatasetItem={handleUpdateEvalDatasetItem}
-        onDeleteEvalDatasetItem={handleDeleteEvalDatasetItem}
-        onRunEvalDataset={handleRunEvalDataset}
-        directoryUploadTask={directoryUploadTask}
+    <ToastProvider>
+      <LoadingBar loading={globalLoading} />
+      <div className="chat-page">
+        <Sidebar
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+          knowledgeBases={knowledgeBases}
+          selectedKnowledgeBaseId={selectedKnowledgeBase?.id ?? null}
+          selectedDocumentId={selectedDocumentId}
+          onSelectKnowledgeBase={handleSelectKnowledgeBase}
+          onSelectDocument={handleSelectDocument}
+          onCreateKnowledgeBase={handleCreateKnowledgeBase}
+          onDeleteKnowledgeBase={handleDeleteKnowledgeBase}
+          onUploadFiles={handleUploadFiles}
+          onUploadDirectory={handleUploadDirectory}
+          onGenerateEvalDataset={handleGenerateEvalDataset}
+          onListEvalDatasets={handleListEvalDatasets}
+          onListEvalRuns={handleListEvalRuns}
+          onFetchEvalDataset={handleFetchEvalDataset}
+          onDeleteEvalDataset={handleDeleteEvalDataset}
+          onAddEvalDatasetCandidate={handleAddEvalDatasetCandidate}
+          onUpdateEvalDatasetItem={handleUpdateEvalDatasetItem}
+          onDeleteEvalDatasetItem={handleDeleteEvalDatasetItem}
+          onRunEvalDataset={handleRunEvalDataset}
+          directoryUploadTask={directoryUploadTask}
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
@@ -2137,7 +2149,8 @@ function App() {
         onClearConversation={handleClearConversation}
         onOpenCitationSource={handleOpenCitationSource}
       />
-    </div>
+      </div>
+    </ToastProvider>
   )
 }
 
