@@ -25,6 +25,7 @@ import EvalDatasetDialog from './EvalDatasetDialog'
 import KnowledgeBaseRail from './KnowledgeBaseRail'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
 import RetrievalDebugPanel from './RetrievalDebugPanel'
+import ConfirmDialog from '../common/ConfirmDialog'
 import { healthStatusLabel } from './knowledgeLabels'
 
 interface KnowledgePanelProps {
@@ -151,6 +152,19 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [retrievalDebugError, setRetrievalDebugError] = useState('')
   const [savingEvalCandidate, setSavingEvalCandidate] = useState(false)
   const [evalCandidateSaveMessage, setEvalCandidateSaveMessage] = useState('')
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+  }>({
+    open: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  })
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const evalDatasetLoadSeq = useRef(0)
   const evalRunLoadSeq = useRef(0)
@@ -323,20 +337,25 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   const handleDeleteSavedEvalDataset = async (datasetId: string) => {
     const target = evalDatasetSummaries.find((dataset) => dataset.id === datasetId)
-    if (!window.confirm(`确认删除「${target?.name || datasetId}」？`)) {
-      return
-    }
 
-    setDeletingEvalDatasetId(datasetId)
-    try {
-      await onDeleteEvalDataset(datasetId)
-      setEvalDatasetSummaries((prev) => prev.filter((dataset) => dataset.id !== datasetId))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '删除评估集失败'
-      window.alert(`删除评估集失败：${message}`)
-    } finally {
-      setDeletingEvalDatasetId(null)
-    }
+    setConfirmDialog({
+      open: true,
+      title: '删除评估集',
+      message: `确认删除「${target?.name || datasetId}」？`,
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, open: false })
+        setDeletingEvalDatasetId(datasetId)
+        try {
+          await onDeleteEvalDataset(datasetId)
+          setEvalDatasetSummaries((prev) => prev.filter((dataset) => dataset.id !== datasetId))
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '删除评估集失败'
+          window.alert(`删除评估集失败：${message}`)
+        } finally {
+          setDeletingEvalDatasetId(null)
+        }
+      }
+    })
   }
 
   const handleUpdateEvalDatasetItem = async (
@@ -825,6 +844,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           onRun={handleRunEvalDataset}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ ...confirmDialog, open: false })}
+      />
     </>
   )
 }

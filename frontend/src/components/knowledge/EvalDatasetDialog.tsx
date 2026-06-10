@@ -8,6 +8,7 @@ import type {
   RetrievalSearchMode,
   RunEvalDatasetResponse,
 } from '../../services/api'
+import ConfirmDialog from '../common/ConfirmDialog'
 
 type EvalDatasetDialogDataset = GenerateEvalDatasetResponse | EvalDatasetDetail
 
@@ -538,6 +539,17 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
   const [strategyComparison, setStrategyComparison] = useState<EvalStrategyComparisonReport | null>(null)
   const [actionError, setActionError] = useState('')
 
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    message: string
+    onConfirm: () => void
+  }>({
+    open: false,
+    message: '',
+    onConfirm: () => {},
+  })
+
   const datasetId = getSavedDatasetId(dataset)
   const editable = Boolean(datasetId && onUpdateItem && onDeleteItem)
   const previewItems = dataset.items
@@ -709,20 +721,27 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
 
   const deleteItem = async (item: EvalGroundTruthCase) => {
     if (!datasetId || !onDeleteItem) return
-    if (!window.confirm(`确认删除样本「${getEvalQuestion(item)}」？`)) return
-    setDeletingItemId(item.id)
-    setActionError('')
-    try {
-      await onDeleteItem(datasetId, item.id)
-      if (editingItemId === item.id) {
-        setEditingItemId(null)
-        setDraft(null)
+
+    setConfirmDialog({
+      open: true,
+      message: `确认删除样本「${getEvalQuestion(item)}」？`,
+      onConfirm: async () => {
+        setConfirmDialog({ ...confirmDialog, open: false })
+        setDeletingItemId(item.id)
+        setActionError('')
+        try {
+          await onDeleteItem(datasetId, item.id)
+          if (editingItemId === item.id) {
+            setEditingItemId(null)
+            setDraft(null)
+          }
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : '删除评估样本失败')
+        } finally {
+          setDeletingItemId(null)
+        }
       }
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : '删除评估样本失败')
-    } finally {
-      setDeletingItemId(null)
-    }
+    })
   }
 
   const runDataset = async () => {
@@ -1221,6 +1240,14 @@ const EvalDatasetDialog: React.FC<EvalDatasetDialogProps> = ({
           </div>
         </footer>
       </div>
+
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title="删除评估样本"
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ ...confirmDialog, open: false })}
+      />
     </div>
   )
 }
