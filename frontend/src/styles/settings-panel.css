@@ -1,32 +1,39 @@
-/* =====================
-   Settings Panel Fields
-   ===================== */
+/* ==========================================================================
+   设置面板样式 (Settings Panel)
+   使用设计代币系统 — 支持亮色/暗色主题
+   ========================================================================== */
 
+/* ==========================================================================
+   1. 知识面板头部 (Knowledge Panel Header)
+   ========================================================================== */
 .knowledge-panel-header {
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .knowledge-panel-header h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 700;
-  color: #1e293b;
+  color: var(--text-primary);
 }
 
+/* ==========================================================================
+   2. 摘要统计网格 (Summary Grid)
+   ========================================================================== */
 .settings-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
-  margin-bottom: 16px;
-  padding: 4px 0 14px;
-  border-bottom: 1px solid #eef2f7;
+  margin-bottom: var(--space-4);
+  padding: var(--space-1) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .settings-summary-item {
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 var(--space-4);
   background: transparent;
 }
 
@@ -35,7 +42,7 @@
 }
 
 .settings-summary-item + .settings-summary-item {
-  border-left: 1px solid #eef2f7;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .settings-summary-item span,
@@ -43,109 +50,123 @@
 .settings-form-group-head span {
   display: block;
   overflow: hidden;
-  color: #64748b;
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .settings-summary-item span {
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .settings-summary-item strong {
   display: block;
-  margin: 5px 0 3px;
+  margin: var(--space-1) 0 var(--space-2);
   overflow: hidden;
-  color: #0f172a;
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: var(--text-base);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* ==========================================================================
+   3. 区块头部 (Section Head)
+   ========================================================================== */
 .settings-section-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 .settings-section-head h3 {
   margin: 0;
-  color: #0f172a;
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: var(--text-md);
   font-weight: 800;
 }
 
 .settings-section-head p {
-  margin: 4px 0 0;
-  color: #64748b;
-  font-size: 12px;
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
+/* ==========================================================================
+   4. AI 配置面板 (AI Config Panel)
+   ========================================================================== */
 .ai-config-panel {
-  background: #ffffff;
+  background: var(--bg-primary);
 }
 
 .ai-config-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
+/* ==========================================================================
+   5. 表单字段 (Form Field)
+   ========================================================================== */
 .settings-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .settings-field span {
-  font-size: 11px;
-  font-weight: 750;
-  color: #64748b;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-secondary);
   letter-spacing: 0;
 }
 
 .settings-field input,
 .settings-field select {
-  min-height: 36px;
-  padding: 7px 10px;
-  border: 1px solid #dbe3ef;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #1e293b;
-  background: #f9fbfd;
+  min-height: var(--control-height-md);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
   font-family: inherit;
   width: 100%;
   box-sizing: border-box;
 }
 
 .settings-field small {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
   line-height: 1.45;
+}
+
+.settings-field input:hover,
+.settings-field select:hover {
+  border-color: var(--border-color-hover);
 }
 
 .settings-field input:focus,
 .settings-field select:focus {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-  background: #fff;
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-primary);
 }
 
 .settings-field input[type="range"] {
-  padding: 4px 0;
+  padding: var(--space-2) 0;
   border: none;
   background: transparent;
   box-shadow: none;
-  accent-color: #6366f1;
+  accent-color: var(--color-primary);
 }
 
 .settings-field input[type="number"] {
@@ -164,48 +185,57 @@
   grid-column: 1 / -1;
 }
 
+/* ==========================================================================
+   6. 表单分组 (Form Group)
+   ========================================================================== */
 .settings-form-group {
   padding: 0;
   background: transparent;
 }
 
 .settings-form-group + .settings-form-group {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #eef2f7;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-form-group-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 .settings-form-group-head strong {
   flex-shrink: 0;
-  color: #0f172a;
-  font-size: 13px;
+  color: var(--text-primary);
+  font-size: var(--text-md);
   font-weight: 800;
 }
 
+/* ==========================================================================
+   7. 网格布局 (Grid Layout)
+   ========================================================================== */
 .settings-group-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px 24px;
+  gap: var(--space-3) var(--space-6);
 }
 
 .settings-group-grid--context {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
 }
 
+/* ==========================================================================
+   8. 复选框字段 (Checkbox Field)
+   ========================================================================== */
 .settings-field-toggle {
   display: inline-flex;
   gap: 6px 10px;
   align-items: center;
   justify-content: flex-start;
-  min-height: 36px;
+  min-height: var(--control-height-md);
   padding: 0;
   border: 0;
   background: transparent;
@@ -214,7 +244,7 @@
 .settings-field-toggle--inline {
   align-self: end;
   justify-self: start;
-  min-height: 36px;
+  min-height: var(--control-height-md);
   padding-bottom: 2px;
 }
 
@@ -222,7 +252,7 @@
   align-self: end;
   justify-self: start;
   flex-wrap: wrap;
-  min-height: 36px;
+  min-height: var(--control-height-md);
   padding-bottom: 2px;
 }
 
@@ -244,13 +274,13 @@
   max-height: 18px;
   margin: 0;
   padding: 0;
-  border: 1px solid #cbd5e1;
-  border-radius: 999px;
-  background: #e2e8f0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
   box-sizing: border-box;
   cursor: pointer;
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12);
-  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .settings-field-toggle input[type="checkbox"]::after {
@@ -259,16 +289,16 @@
   left: 2px;
   width: 12px;
   height: 12px;
-  border-radius: 999px;
-  background: #ffffff;
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
   content: '';
-  transition: transform 0.15s ease;
+  transition: transform var(--transition-fast);
 }
 
 .settings-field-toggle input[type="checkbox"]:checked {
-  border-color: #4f46e5;
-  background: #4f46e5;
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   box-shadow: none;
 }
 
@@ -278,7 +308,7 @@
 
 .settings-field-toggle input[type="checkbox"]:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16);
+  box-shadow: var(--shadow-focus);
 }
 
 .settings-field-toggle small {
@@ -286,34 +316,40 @@
   margin-top: 0;
 }
 
+/* ==========================================================================
+   9. 内联操作按钮 (Inline Actions)
+   ========================================================================== */
 .settings-inline-actions {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
 }
 
 .settings-inline-actions .ghost-btn {
   flex-shrink: 0;
-  min-height: 40px;
-  padding: 9px 14px;
-  background: #eef2ff;
-  color: #3730a3;
-  border: 1px solid #c7d2fe;
+  min-height: var(--control-height-lg);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--border-color);
   text-align: center;
   font-weight: 600;
 }
 
 .settings-inline-actions .ghost-btn:hover {
-  background: #e0e7ff;
-  color: #312e81;
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
 }
 
 .settings-inline-actions .ghost-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  box-shadow: var(--shadow-focus);
 }
 
+/* ==========================================================================
+   10. 可见性切换按钮 (Visibility Button)
+   ========================================================================== */
 .settings-visibility-btn {
   width: auto;
   min-width: 52px;
@@ -321,33 +357,121 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
+/* ==========================================================================
+   11. Token 输入框 (Token Input)
+   ========================================================================== */
 .settings-token-input {
   flex: 1;
   min-width: 0;
-  color: #0f172a;
+  color: var(--text-primary);
   letter-spacing: 0.02em;
 }
 
 .settings-token-input[type='password'] {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
-    'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
+/* ==========================================================================
+   12. 反馈消息 (Feedback)
+   ========================================================================== */
 .settings-feedback {
   display: inline-block;
-  margin-top: 6px;
-  color: #4338ca;
+  margin-top: var(--space-2);
+  color: var(--color-primary);
   font-weight: 500;
 }
 
+/* ==========================================================================
+   13. 模型配置测试 (Model Config Test)
+   ========================================================================== */
+.model-config-test {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.test-connection-btn {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.test-connection-btn:hover:not(:disabled) {
+  border-color: var(--border-color-hover);
+  background: var(--bg-secondary);
+}
+
+.test-connection-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  line-height: 1.4;
+}
+
+.test-result.test-success {
+  background: var(--color-success-light);
+  border: 1px solid var(--color-success);
+  color: var(--color-success);
+}
+
+.test-result.test-error {
+  background: var(--color-error-light);
+  border: 1px solid var(--color-error);
+  color: var(--color-error);
+}
+
+.test-icon {
+  font-weight: 700;
+  font-size: var(--text-lg);
+}
+
+.test-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.test-message {
+  font-weight: 600;
+}
+
+.test-latency,
+.test-info {
+  font-size: var(--text-sm);
+  opacity: 0.8;
+}
+
+.test-error-msg {
+  font-size: var(--text-sm);
+  color: var(--color-error);
+  margin-top: var(--space-2);
+}
+
+/* ==========================================================================
+   14. 响应式适配 (Responsive)
+   ========================================================================== */
 @media (max-width: 768px) {
   .settings-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 12px;
+    row-gap: var(--space-3);
   }
 
   .settings-summary-item {
@@ -367,7 +491,7 @@
   .settings-form-group-head {
     align-items: flex-start;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-2);
   }
 
   .settings-inline-actions {
@@ -378,94 +502,7 @@
     width: 100%;
     flex-basis: 100%;
   }
-}
 
-/* =====================
-   Model Config Test
-   ===================== */
-
-.model-config-test {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.test-connection-btn {
-  padding: 6px 12px;
-  font-size: 13px;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #475569;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.test-connection-btn:hover:not(:disabled) {
-  border-color: #94a3b8;
-  background: #f8fafc;
-}
-
-.test-connection-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.test-result {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.test-result.test-success {
-  background: #f0fdf4;
-  border: 1px solid #86efac;
-  color: #166534;
-}
-
-.test-result.test-error {
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
-  color: #991b1b;
-}
-
-.test-icon {
-  font-weight: 700;
-  font-size: 16px;
-}
-
-.test-details {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.test-message {
-  font-weight: 600;
-}
-
-.test-latency {
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-.test-info {
-  font-size: 12px;
-  opacity: 0.9;
-}
-
-.test-error-msg {
-  font-size: 12px;
-  color: #dc2626;
-  margin-top: 2px;
-}
-
-@media (max-width: 768px) {
   .model-config-test {
     flex-direction: column;
     align-items: stretch;

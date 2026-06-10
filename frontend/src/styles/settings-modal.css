@@ -1,4 +1,11 @@
-/* Settings modal */
+/* ==========================================================================
+   设置模态框 (Settings Modal)
+   使用设计代币系统 — 支持亮色/暗色主题
+   ========================================================================== */
+
+/* ==========================================================================
+   1. 遮罩层 (Backdrop)
+   ========================================================================== */
 .settings-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -6,16 +13,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-6);
   background: rgba(15, 23, 42, 0.56);
   backdrop-filter: blur(4px);
 }
 
+/* ==========================================================================
+   2. 模态框容器 (Modal Container)
+   ========================================================================== */
 .settings-modal {
   width: min(720px, 100%);
-  background: #ffffff;
-  border-radius: 20px;
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+  background: var(--bg-primary);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
 }
 
@@ -26,74 +36,90 @@
   flex-direction: column;
 }
 
+/* ==========================================================================
+   3. 模态框头部 (Modal Header)
+   ========================================================================== */
 .settings-modal-header {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: flex-start;
-  padding: 20px 24px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .settings-modal-header h3 {
-  margin: 0 0 6px;
-  color: #111827;
-  font-size: 20px;
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-xl);
+  font-weight: 700;
 }
 
 .settings-modal-header p {
   margin: 0;
-  color: #6b7280;
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
 }
 
+/* ==========================================================================
+   4. 关闭按钮 (Close Button)
+   ========================================================================== */
 .settings-close-btn {
-  background: #eef2ff;
-  color: #4338ca;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
   border: none;
-  border-radius: 8px;
-  padding: 6px 16px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
   cursor: pointer;
   font: inherit;
   flex-shrink: 0;
   margin-left: auto;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
-  transition: background 0.15s;
+  transition: background var(--transition-fast);
 }
 
 .settings-close-btn:hover {
-  background: #dde4ff;
+  background: var(--color-primary-soft);
 }
 
+/* ==========================================================================
+   5. 滚动区域 (Scroll Area)
+   ========================================================================== */
 .settings-modal-scroll {
   overflow-y: auto;
-  padding: 20px 24px 24px;
+  padding: var(--space-5) var(--space-6) var(--space-6);
 }
 
+/* ==========================================================================
+   6. 面板区块 (Panel Block)
+   ========================================================================== */
 .settings-panel-block {
   min-width: 0;
-  padding: 15px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #ffffff;
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
 }
 
 .settings-panel-block + .settings-panel-block {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .single-column {
   width: 100%;
 }
 
+/* ==========================================================================
+   7. 空状态 (Empty State)
+   ========================================================================== */
 .empty-state {
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
 }
 
 .empty-state.light {
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
 }
