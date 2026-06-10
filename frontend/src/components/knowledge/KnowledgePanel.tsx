@@ -23,9 +23,9 @@ import WorkspaceHero from './WorkspaceHero'
 import MainWorkspace from './MainWorkspace'
 import ConfirmDialog from '../common/ConfirmDialog'
 import UploadDropZone from '../common/UploadDropZone'
-import { useKnowledgeBase } from './contexts/KnowledgeBaseContext'
 import { useDocument } from './contexts/DocumentContext'
 import { useEvalDataset } from './contexts/EvalDatasetContext'
+import { useHealth } from './contexts/HealthContext'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -96,31 +96,26 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onDeleteKnowledgeBase,
   onUploadFiles,
   onUploadDirectory,
-  onGenerateEvalDataset,
-  onListEvalDatasets,
-  onListEvalRuns,
-  onFetchEvalDataset,
-  onDeleteEvalDataset,
-  onAddEvalDatasetCandidate,
-  onUpdateEvalDatasetItem,
-  onDeleteEvalDatasetItem,
-  onRunEvalDataset,
   directoryUploadTask,
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
-  onFetchKnowledgeBaseHealth,
-  onFetchDocumentDetail,
-  onReindexDocument,
-  onDebugRetrieval,
   citationNavigationTarget,
   onCitationNavigationHandled,
   onClose,
 }) => {
   // Use Context
-  const kbContext = useKnowledgeBase()
   const docContext = useDocument()
   const evalContext = useEvalDataset()
+  const healthContext = useHealth()
+  const {
+    clearRetrievalDebug,
+    fetchHealth,
+  } = healthContext
+  const {
+    loadEvalDatasets,
+    loadEvalRuns,
+  } = evalContext
 
   // UI state (non-business logic)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -130,14 +125,6 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
   const [showFailedItems, setShowFailedItems] = useState(false)
   const [showSkippedItems, setShowSkippedItems] = useState(false)
-  const [healthByKnowledgeBase, setHealthByKnowledgeBase] = useState<Record<string, KnowledgeBaseHealthResponse>>({})
-  const [healthLoadingId, setHealthLoadingId] = useState<string | null>(null)
-  const [healthError, setHealthError] = useState('')
-  const [retrievalQuery, setRetrievalQuery] = useState('')
-  const [retrievalSearchMode, setRetrievalSearchMode] = useState<RetrievalSearchMode>('auto')
-  const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
-  const [retrievalDebugResult, setRetrievalDebugResult] = useState<RetrievalDebugResponse | null>(null)
-  const [retrievalDebugError, setRetrievalDebugError] = useState('')
 
   // 确认对话框状态
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -166,15 +153,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   }, [open, selectedKnowledgeBaseId, selectedKnowledgeBase, onSelectKnowledgeBase])
 
   useEffect(() => {
-    setRetrievalDebugResult(null)
-    setRetrievalDebugError('')
-  }, [selectedKnowledgeBaseId, selectedDocumentId])
+    clearRetrievalDebug()
+  }, [selectedKnowledgeBaseId, selectedDocumentId, clearRetrievalDebug])
 
   useEffect(() => {
     if (!open || !activeKnowledgeBaseId) return
-    void evalContext.loadEvalDatasets(activeKnowledgeBaseId)
-    void evalContext.loadEvalRuns(activeKnowledgeBaseId)
-  }, [open, activeKnowledgeBaseId, evalContext])
+    void loadEvalDatasets(activeKnowledgeBaseId)
+    void loadEvalRuns(activeKnowledgeBaseId)
+  }, [open, activeKnowledgeBaseId, loadEvalDatasets, loadEvalRuns])
 
   const selectedKnowledgeBaseHealthKey = useMemo(() => {
     if (!activeKnowledgeBaseId || !selectedKnowledgeBase) return ''
@@ -194,31 +180,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       return
     }
 
-    let canceled = false
-    setHealthLoadingId(activeKnowledgeBaseId)
-    setHealthError('')
-    onFetchKnowledgeBaseHealth(activeKnowledgeBaseId)
-      .then((health) => {
-        if (canceled) return
-        setHealthByKnowledgeBase((prev) => ({
-          ...prev,
-          [activeKnowledgeBaseId]: health,
-        }))
-      })
-      .catch((error) => {
-        if (canceled) return
-        setHealthError(error instanceof Error ? error.message : '加载知识库健康度失败')
-      })
-      .finally(() => {
-        if (!canceled) {
-          setHealthLoadingId(null)
-        }
-      })
-
-    return () => {
-      canceled = true
-    }
-  }, [open, activeKnowledgeBaseId, selectedKnowledgeBaseHealthKey, onFetchKnowledgeBaseHealth])
+    void fetchHealth(activeKnowledgeBaseId)
+  }, [open, activeKnowledgeBaseId, selectedKnowledgeBaseHealthKey, fetchHealth])
 
   const handleFileChange = (knowledgeBaseId: string, event: React.ChangeEvent<HTMLInputElement>) => {
     onUploadFiles(knowledgeBaseId, event.target.files)
@@ -259,7 +222,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   ) => {
     const response = await evalContext.updateDatasetItem(datasetId, itemId, item)
     if (activeKnowledgeBaseId) {
-      void evalContext.loadEvalDatasets(activeKnowledgeBaseId)
+      void loadEvalDatasets(activeKnowledgeBaseId)
     }
     return response.item
   }
@@ -267,7 +230,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const handleDeleteEvalDatasetItem = async (datasetId: string, itemId: string) => {
     await evalContext.deleteDatasetItem(datasetId, itemId)
     if (activeKnowledgeBaseId) {
-      void evalContext.loadEvalDatasets(activeKnowledgeBaseId)
+      void loadEvalDatasets(activeKnowledgeBaseId)
     }
   }
 
@@ -277,7 +240,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   ) => {
     const report = await evalContext.runEvalDataset(datasetId, options)
     if (activeKnowledgeBaseId) {
-      void evalContext.loadEvalRuns(activeKnowledgeBaseId)
+      void loadEvalRuns(activeKnowledgeBaseId)
     }
     return report
   }
@@ -306,47 +269,22 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
     await docContext.reindexDocument(knowledgeBaseId, documentId)
-    // Refresh health after reindex
-    const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
-    setHealthByKnowledgeBase((prev) => ({
-      ...prev,
-      [knowledgeBaseId]: health,
-    }))
+    await fetchHealth(knowledgeBaseId)
   }
 
   const handleRunRetrievalDebug = async (knowledgeBaseId: string) => {
-    const query = retrievalQuery.trim()
-    if (!query) {
-      setRetrievalDebugError('请输入要调试的问题')
-      return
-    }
-
-    setRetrievalDebugKnowledgeBaseId(knowledgeBaseId)
-    setRetrievalDebugError('')
-    setEvalCandidateSaveMessage('')
-    try {
-      const result = await onDebugRetrieval(knowledgeBaseId, query, selectedDocumentId, retrievalSearchMode)
-      setRetrievalDebugResult(result)
-    } catch (error) {
-      setRetrievalDebugResult(null)
-      setRetrievalDebugError(error instanceof Error ? error.message : '检索调试失败')
-    } finally {
-      setRetrievalDebugKnowledgeBaseId(null)
-    }
+    await healthContext.runRetrievalDebug(knowledgeBaseId, selectedDocumentId)
   }
 
   const handleDownloadRetrievalEvalCandidate = () => {
-    if (!retrievalDebugResult?.evalCandidate) {
-      return
-    }
-
-    const blob = new Blob([JSON.stringify([retrievalDebugResult.evalCandidate], null, 2)], {
+    if (!healthContext.retrievalDebugResult?.evalCandidate) return
+    const blob = new Blob([JSON.stringify([healthContext.retrievalDebugResult.evalCandidate], null, 2)], {
       type: 'application/json;charset=utf-8',
     })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-    const scope = retrievalDebugResult.documentId || retrievalDebugResult.knowledgeBaseId || 'all'
+    const scope = healthContext.retrievalDebugResult.documentId || healthContext.retrievalDebugResult.knowledgeBaseId || 'all'
     link.href = url
     link.download = `retrieval_debug_eval_${scope}_${timestamp}.json`
     document.body.appendChild(link)
@@ -356,9 +294,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   }
 
   const handleAddRetrievalEvalCandidate = async (knowledgeBaseId: string) => {
-    if (!retrievalDebugResult?.evalCandidate) return
-    const { query, groundTruth } = retrievalDebugResult.evalCandidate
-    await evalContext.saveEvalCandidate(knowledgeBaseId, selectedDocumentId, query, groundTruth)
+    if (!healthContext.retrievalDebugResult?.evalCandidate) return
+    const { question, answer } = healthContext.retrievalDebugResult.evalCandidate
+    await evalContext.saveEvalCandidate(knowledgeBaseId, selectedDocumentId, question, answer)
   }
 
   const registerDirectoryInput = (knowledgeBaseId: string, element: HTMLInputElement | null) => {
@@ -419,7 +357,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   if (!open) return null
 
   const totalDocuments = knowledgeBases.reduce((sum, knowledgeBase) => sum + knowledgeBase.documents.length, 0)
-  const activeHealth = activeKnowledgeBaseId ? healthByKnowledgeBase[activeKnowledgeBaseId] : undefined
+  const activeHealth = activeKnowledgeBaseId ? healthContext.healthByKnowledgeBase[activeKnowledgeBaseId] : undefined
 
   return (
     <>
@@ -455,7 +393,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               <KnowledgeBaseRail
                 knowledgeBases={knowledgeBases}
                 selectedKnowledgeBaseId={activeKnowledgeBaseId}
-                healthByKnowledgeBase={healthByKnowledgeBase}
+                healthByKnowledgeBase={healthContext.healthByKnowledgeBase}
                 deleteConfirmId={deleteConfirmId}
                 onSelectKnowledgeBase={onSelectKnowledgeBase}
                 onDeleteKnowledgeBase={onDeleteKnowledgeBase}
@@ -491,22 +429,22 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       canContinueUpload={canContinueUpload}
                       isTaskVisible={isTaskVisible}
                       activeHealth={activeHealth}
-                      healthLoadingId={healthLoadingId}
-                      healthError={healthError}
+                      healthLoadingId={healthContext.healthLoadingId}
+                      healthError={healthContext.healthError}
                       selectedScopeLabel={selectedScopeLabel}
-                      retrievalQuery={retrievalQuery}
-                      retrievalSearchMode={retrievalSearchMode}
-                      retrievalDebugResult={retrievalDebugResult}
-                      retrievalDebugError={retrievalDebugError}
-                      retrievalDebugKnowledgeBaseId={retrievalDebugKnowledgeBaseId}
+                      retrievalQuery={healthContext.retrievalQuery}
+                      retrievalSearchMode={healthContext.retrievalSearchMode}
+                      retrievalDebugResult={healthContext.retrievalDebugResult}
+                      retrievalDebugError={healthContext.retrievalDebugError}
+                      retrievalDebugKnowledgeBaseId={healthContext.retrievalDebugKnowledgeBaseId}
                       onToggleUploadTaskDetails={() => setShowUploadTaskDetails(prev => !prev)}
                       onToggleFailedItems={() => setShowFailedItems(prev => !prev)}
                       onToggleSkippedItems={() => setShowSkippedItems(prev => !prev)}
                       onCancelDirectoryUpload={onCancelDirectoryUpload}
                       onContinueDirectoryUpload={onContinueDirectoryUpload}
                       onReindexDocument={(documentId) => void handleReindexDocument(activeKnowledgeBaseId, documentId)}
-                      onSetRetrievalQuery={setRetrievalQuery}
-                      onSetRetrievalSearchMode={setRetrievalSearchMode}
+                      onSetRetrievalQuery={healthContext.setRetrievalQuery}
+                      onSetRetrievalSearchMode={healthContext.setRetrievalSearchMode}
                       onRunRetrievalDebug={() => void handleRunRetrievalDebug(activeKnowledgeBaseId)}
                       onDownloadRetrievalEvalCandidate={handleDownloadRetrievalEvalCandidate}
                       onAddRetrievalEvalCandidate={() => void handleAddRetrievalEvalCandidate(activeKnowledgeBaseId)}

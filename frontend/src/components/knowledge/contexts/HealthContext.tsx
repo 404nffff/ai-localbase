@@ -5,8 +5,8 @@ import type {
   RetrievalSearchMode,
 } from '../../../services/api'
 import {
-  getKnowledgeBaseHealth,
-  debugRetrieve,
+  fetchKnowledgeBaseHealth,
+  debugKnowledgeBaseRetrieval,
   extractErrorMessage,
 } from '../../../services/api'
 
@@ -30,8 +30,7 @@ interface HealthContextValue {
   setRetrievalSearchMode: (mode: RetrievalSearchMode) => void
   runRetrievalDebug: (
     knowledgeBaseId: string,
-    documentId?: string | null,
-    verbose?: boolean
+    documentId?: string | null
   ) => Promise<void>
   clearRetrievalDebug: () => void
 }
@@ -48,6 +47,16 @@ export const useHealth = () => {
 
 interface HealthProviderProps {
   children: ReactNode
+}
+
+const getErrorMessage = async (err: unknown, fallback: string) => {
+  if (err instanceof Error) {
+    return err.message
+  }
+  if (err instanceof Response) {
+    return extractErrorMessage(err)
+  }
+  return fallback
 }
 
 export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
@@ -72,14 +81,14 @@ export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
     setHealthError('')
 
     try {
-      const health = await getKnowledgeBaseHealth(knowledgeBaseId)
+      const health = await fetchKnowledgeBaseHealth(knowledgeBaseId)
 
       setHealthByKnowledgeBase(prev => ({
         ...prev,
         [knowledgeBaseId]: health,
       }))
     } catch (err) {
-      setHealthError(await extractErrorMessage(err))
+      setHealthError(await getErrorMessage(err, '加载知识库健康度失败'))
     } finally {
       setHealthLoadingId(null)
     }
@@ -92,8 +101,7 @@ export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
   // Run Retrieval Debug
   const runRetrievalDebug = useCallback(async (
     knowledgeBaseId: string,
-    documentId: string | null = null,
-    verbose = false
+    documentId: string | null = null
   ) => {
     if (!retrievalQuery.trim()) {
       setRetrievalDebugError('请输入查询内容')
@@ -105,20 +113,20 @@ export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
     setRetrievalDebugKnowledgeBaseId(knowledgeBaseId)
 
     try {
-      const result = await debugRetrieve(
+      const result = await debugKnowledgeBaseRetrieval(
         knowledgeBaseId,
         retrievalQuery,
         documentId,
-        retrievalSearchMode,
-        verbose
+        retrievalSearchMode
       )
 
       setRetrievalDebugResult(result)
     } catch (err) {
-      setRetrievalDebugError(await extractErrorMessage(err))
+      setRetrievalDebugError(await getErrorMessage(err, '检索调试失败'))
       setRetrievalDebugResult(null)
     } finally {
       setRetrievalDebugLoading(false)
+      setRetrievalDebugKnowledgeBaseId(null)
     }
   }, [retrievalQuery, retrievalSearchMode])
 

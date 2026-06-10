@@ -5,6 +5,7 @@ import type {
   EvalGroundTruthCase,
   EvalRunSummary,
   EvalRunOptions,
+  RetrievalSearchMode,
   GenerateEvalDatasetResponse,
   RunEvalDatasetResponse,
   UpdateEvalDatasetItemResponse,
@@ -58,7 +59,10 @@ interface EvalDatasetContextValue {
   evalRunHistoryLoading: boolean
   evalRunHistoryError: string
   loadEvalRuns: (knowledgeBaseId: string) => Promise<void>
-  runEvalDataset: (datasetId: string, options?: EvalRunOptions) => Promise<RunEvalDatasetResponse>
+  runEvalDataset: (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions
+  ) => Promise<RunEvalDatasetResponse>
 
   // Eval Candidate
   savingEvalCandidate: boolean
@@ -254,7 +258,10 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
   }, [])
 
   // Run Eval Dataset
-  const runEvalDataset = useCallback(async (datasetId: string, options?: EvalRunOptions) => {
+  const runEvalDataset = useCallback(async (
+    datasetId: string,
+    options?: RetrievalSearchMode | EvalRunOptions
+  ) => {
     return await apiRunEvalDataset(datasetId, options)
   }, [])
 

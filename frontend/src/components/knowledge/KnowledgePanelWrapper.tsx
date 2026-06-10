@@ -2,6 +2,7 @@ import React from 'react'
 import { DocumentProvider } from './contexts/DocumentContext'
 import { KnowledgeBaseProvider } from './contexts/KnowledgeBaseContext'
 import { EvalDatasetProvider } from './contexts/EvalDatasetContext'
+import { HealthProvider } from './contexts/HealthContext'
 import KnowledgePanel from './KnowledgePanel'
 import type { CitationNavigationTarget, DirectoryUploadTask, KnowledgeBase } from '../../App'
 import type {
@@ -87,7 +88,9 @@ const KnowledgePanelWrapper: React.FC<KnowledgePanelWrapperProps> = (props) => {
     >
       <DocumentProvider>
         <EvalDatasetProvider>
-          <KnowledgePanel {...props} />
+          <HealthProvider>
+            <KnowledgePanel {...props} />
+          </HealthProvider>
         </EvalDatasetProvider>
       </DocumentProvider>
     </KnowledgeBaseProvider>
