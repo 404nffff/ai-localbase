@@ -1,0 +1,99 @@
+.upload-preview {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.upload-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  background: #f8fafc;
+}
+
+.upload-preview-count {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.upload-preview-size {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.upload-preview-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.upload-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.15s ease;
+}
+
+.upload-preview-item:last-child {
+  border-bottom: 0;
+}
+
+.upload-preview-item:hover {
+  background: #f8fafc;
+}
+
+.upload-preview-icon {
+  flex-shrink: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.upload-preview-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.upload-preview-name {
+  display: block;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-preview-meta {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.upload-preview-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.upload-preview-remove:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+}

@@ -1,0 +1,82 @@
+/* Skeleton base styles */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #f0f0f0 0%,
+    #e0e0e0 50%,
+    #f0f0f0 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.skeleton-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Document List Skeleton */
+.document-list-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.document-item-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.doc-icon-skeleton {
+  flex-shrink: 0;
+  border-radius: 8px;
+}
+
+.doc-info-skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Message Skeleton */
+.message-skeleton {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.message-skeleton--user {
+  justify-content: flex-end;
+}
+
+.message-skeleton--assistant {
+  justify-content: flex-start;
+}
+
+.message-avatar-skeleton {
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.message-content-skeleton {
+  max-width: 70%;
+  min-width: 200px;
+}

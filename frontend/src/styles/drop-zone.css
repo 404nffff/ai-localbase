@@ -1,0 +1,35 @@
+/* 拖放上传区域 */
+.upload-drop-zone {
+  position: relative;
+  transition: all 0.2s;
+}
+
+.upload-drop-zone.dragging {
+  border-color: #3b82f6;
+}
+
+.upload-drop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(59, 130, 246, 0.1);
+  border: 2px dashed #3b82f6;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.upload-drop-hint {
+  padding: 16px 24px;
+  background: #3b82f6;
+  color: white;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
