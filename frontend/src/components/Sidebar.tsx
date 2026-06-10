@@ -26,7 +26,7 @@ import type {
   UpdateEvalDatasetItemResponse,
   DeleteEvalDatasetItemResponse,
 } from '../services/api'
-import KnowledgePanel from './knowledge/KnowledgePanel'
+import KnowledgePanelWrapper from './knowledge/KnowledgePanelWrapper'
 import SettingsPanel from './settings/SettingsPanel'
 
 interface SidebarProps {
@@ -387,7 +387,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
 
-      <KnowledgePanel
+      <KnowledgePanelWrapper
         open={isKnowledgePanelOpen}
         knowledgeBases={sortedKnowledgeBases}
         collapsedKnowledgeBases={collapsedKnowledgeBases}

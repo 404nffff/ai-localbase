@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
 import type { KnowledgeBase } from '../../../App'
 
 interface KnowledgeBaseContextValue {
@@ -41,6 +41,19 @@ export const KnowledgeBaseProvider: React.FC<KnowledgeBaseProviderProps> = ({
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>(initialKnowledgeBases)
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<string | null>(initialSelectedId)
   const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<Record<string, boolean>>(initialCollapsed)
+
+  // Sync with external changes
+  useEffect(() => {
+    setKnowledgeBases(initialKnowledgeBases)
+  }, [initialKnowledgeBases])
+
+  useEffect(() => {
+    setSelectedKnowledgeBaseId(initialSelectedId)
+  }, [initialSelectedId])
+
+  useEffect(() => {
+    setCollapsedKnowledgeBases(initialCollapsed)
+  }, [initialCollapsed])
 
   // Derived state
   const selectedKnowledgeBase = useMemo(() => {

@@ -16,18 +16,15 @@ import type {
   DeleteEvalDatasetItemResponse,
 } from '../../services/api'
 import CreateKnowledgeBaseDialog from './CreateKnowledgeBaseDialog'
-import DirectoryUploadTaskPanel from './DirectoryUploadTaskPanel'
 import DocumentDetailDialog from './DocumentDetailDialog'
-import EvalDatasetHistoryPanel from './EvalDatasetHistoryPanel'
-import EvalRunTrendPanel from './EvalRunTrendPanel'
-import DocumentList from './DocumentList'
 import EvalDatasetDialog from './EvalDatasetDialog'
 import KnowledgeBaseRail from './KnowledgeBaseRail'
-import KnowledgeHealthPanel from './KnowledgeHealthPanel'
-import RetrievalDebugPanel from './RetrievalDebugPanel'
+import WorkspaceHero from './WorkspaceHero'
+import MainWorkspace from './MainWorkspace'
 import ConfirmDialog from '../common/ConfirmDialog'
 import UploadDropZone from '../common/UploadDropZone'
-import { healthStatusLabel } from './knowledgeLabels'
+import { useKnowledgeBase } from './contexts/KnowledgeBaseContext'
+import { useDocument } from './contexts/DocumentContext'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -119,6 +116,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCitationNavigationHandled,
   onClose,
 }) => {
+  // Use Context
+  const kbContext = useKnowledgeBase()
+  const docContext = useDocument()
+
+  // UI state (non-business logic)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
@@ -127,8 +129,6 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showFailedItems, setShowFailedItems] = useState(false)
   const [showSkippedItems, setShowSkippedItems] = useState(false)
   const [generatingEvalKnowledgeBaseId, setGeneratingEvalKnowledgeBaseId] = useState<string | null>(null)
-  const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
-  const [documentDetailFocusChunkId, setDocumentDetailFocusChunkId] = useState<string | null>(null)
   const [evalDataset, setEvalDataset] = useState<GenerateEvalDatasetResponse | null>(null)
   const [evalDatasetScopeName, setEvalDatasetScopeName] = useState('')
   const [evalDatasetSummaries, setEvalDatasetSummaries] = useState<EvalDatasetSummary[]>([])
@@ -139,13 +139,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [evalRunHistoryError, setEvalRunHistoryError] = useState('')
   const [openingEvalDatasetId, setOpeningEvalDatasetId] = useState<string | null>(null)
   const [deletingEvalDatasetId, setDeletingEvalDatasetId] = useState<string | null>(null)
-  const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
-  const [documentDetailError, setDocumentDetailError] = useState('')
   const [healthByKnowledgeBase, setHealthByKnowledgeBase] = useState<Record<string, KnowledgeBaseHealthResponse>>({})
   const [healthLoadingId, setHealthLoadingId] = useState<string | null>(null)
   const [healthError, setHealthError] = useState('')
-  const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
-  const [reindexError, setReindexError] = useState('')
   const [retrievalQuery, setRetrievalQuery] = useState('')
   const [retrievalSearchMode, setRetrievalSearchMode] = useState<RetrievalSearchMode>('auto')
   const [retrievalDebugKnowledgeBaseId, setRetrievalDebugKnowledgeBaseId] = useState<string | null>(null)
@@ -406,19 +402,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   }
 
   const handleOpenDocumentDetail = useCallback(async (knowledgeBaseId: string, documentId: string, chunkId?: string) => {
-    setDocumentDetail(null)
-    setDocumentDetailFocusChunkId(chunkId ?? null)
-    setDocumentDetailError('')
-    setDocumentDetailLoadingId(documentId)
-    try {
-      const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId, chunkId)
-      setDocumentDetail(detail)
-    } catch (error) {
-      setDocumentDetailError(error instanceof Error ? error.message : '加载文档详情失败')
-    } finally {
-      setDocumentDetailLoadingId(null)
-    }
-  }, [onFetchDocumentDetail])
+    await docContext.openDocumentDetail(knowledgeBaseId, documentId, chunkId)
+  }, [docContext])
 
   useEffect(() => {
     if (!open || !citationNavigationTarget) {
@@ -439,30 +424,13 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   ])
 
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
-    setReindexingDocumentId(documentId)
-    setReindexError('')
-    try {
-      const updatedDocument = await onReindexDocument(knowledgeBaseId, documentId)
-      if (documentDetail?.document.id === documentId) {
-        const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId)
-        setDocumentDetail({
-          ...detail,
-          document: {
-            ...detail.document,
-            ...updatedDocument,
-          },
-        })
-      }
-      const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
-      setHealthByKnowledgeBase((prev) => ({
-        ...prev,
-        [knowledgeBaseId]: health,
-      }))
-    } catch (error) {
-      setReindexError(error instanceof Error ? error.message : '重建索引失败')
-    } finally {
-      setReindexingDocumentId(null)
-    }
+    await docContext.reindexDocument(knowledgeBaseId, documentId)
+    // Refresh health after reindex
+    const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
+    setHealthByKnowledgeBase((prev) => ({
+      ...prev,
+      [knowledgeBaseId]: health,
+    }))
   }
 
   const handleRunRetrievalDebug = async (knowledgeBaseId: string) => {
@@ -551,12 +519,6 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setNewDescription('')
   }
 
-  const closeDocumentDetail = () => {
-    setDocumentDetail(null)
-    setDocumentDetailFocusChunkId(null)
-    setDocumentDetailError('')
-  }
-
   const selectedScopeLabel =
     selectedDocumentId
       ? selectedKnowledgeBase?.documents.find((document) => document.id === selectedDocumentId)?.name ?? '当前文档'
@@ -593,12 +555,6 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   const totalDocuments = knowledgeBases.reduce((sum, knowledgeBase) => sum + knowledgeBase.documents.length, 0)
   const activeHealth = activeKnowledgeBaseId ? healthByKnowledgeBase[activeKnowledgeBaseId] : undefined
-  const activeMetrics = activeHealth?.metrics
-  const activeHealthBadge = activeHealth ? healthStatusLabel(activeHealth.status) : null
-  const activeIndexedCount =
-    activeMetrics?.indexedCount ??
-    selectedKnowledgeBase?.documents.filter((document) => document.status === 'indexed').length ??
-    0
 
   return (
     <>
@@ -646,157 +602,65 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 <UploadDropZone onFilesSelected={(files) => onUploadDirectory(activeKnowledgeBaseId!, files)}>
                 {selectedKnowledgeBase && activeKnowledgeBaseId ? (
                   <>
-                    <section className="kb-workspace-hero">
-                      <div className="kb-workspace-overview">
-                        <div className="kb-workspace-title">
-                          <span className="kb-workspace-kicker">当前知识库</span>
-                          <div className="kb-workspace-title-row">
-                            <h3>{selectedKnowledgeBase.name}</h3>
-                            {activeHealthBadge && (
-                              <span
-                                className="kb-workspace-health"
-                                style={{ color: activeHealthBadge.color, background: activeHealthBadge.bg }}
-                              >
-                                {activeHealthBadge.text} · {activeHealth?.score}
-                              </span>
-                            )}
-                          </div>
-                          <p>{selectedKnowledgeBase.description || '未填写描述'}</p>
-                        </div>
-                        <div className="kb-workspace-metrics" aria-label="知识库索引概览">
-                          <div>
-                            <span>文档</span>
-                            <strong>{activeMetrics?.documentCount ?? selectedKnowledgeBase.documents.length}</strong>
-                          </div>
-                          <div>
-                            <span>已索引</span>
-                            <strong>{activeIndexedCount}</strong>
-                          </div>
-                          <div>
-                            <span>Chunks</span>
-                            <strong>{activeMetrics?.chunkCount ?? '-'}</strong>
-                          </div>
-                          <div>
-                            <span>向量</span>
-                            <strong>{activeMetrics?.vectorCount ?? '-'}</strong>
-                          </div>
-                          <div>
-                            <span>结构化</span>
-                            <strong>{activeMetrics?.structuredRowCount ?? '-'}</strong>
-                          </div>
-                          <div>
-                            <span>范围</span>
-                            <strong>{selectedScopeLabel}</strong>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="kb-workspace-actions">
-                        <label className="kb-upload-btn" title="上传文档">
-                          <span>+</span> 上传文件
-                          <input
-                            type="file"
-                            multiple
-                            accept=".txt,.md,.pdf,.csv,.xlsx"
-                            className="hidden-input"
-                            onChange={(event) => handleFileChange(activeKnowledgeBaseId, event)}
-                          />
-                        </label>
-                        <label className="kb-upload-btn kb-upload-btn--secondary" title="上传目录">
-                          <span>+</span> 上传目录
-                          <input
-                            ref={(element) => registerDirectoryInput(activeKnowledgeBaseId, element)}
-                            type="file"
-                            multiple
-                            className="hidden-input"
-                            onChange={(event) => handleDirectoryChange(activeKnowledgeBaseId, event)}
-                          />
-                        </label>
-                        <button
-                          className="kb-eval-btn"
-                          onClick={() => void handleGenerateEvalDataset(activeKnowledgeBaseId)}
-                          disabled={selectedKnowledgeBase.documents.length === 0 || generatingEvalKnowledgeBaseId === activeKnowledgeBaseId}
-                        >
-                          {generatingEvalKnowledgeBaseId === activeKnowledgeBaseId ? '生成中' : '评估集'}
-                        </button>
-                      </div>
-                    </section>
-
-                    {isTaskVisible && directoryUploadTask.knowledgeBaseId === activeKnowledgeBaseId && (
-                      <DirectoryUploadTaskPanel
-                        task={directoryUploadTask}
-                        progressPercent={uploadProgressPercent}
-                        showDetails={showUploadTaskDetails}
-                        showFailedItems={showFailedItems}
-                        showSkippedItems={showSkippedItems}
-                        canCancelUpload={canCancelUpload}
-                        canContinueUpload={canContinueUpload}
-                        onToggleDetails={() => setShowUploadTaskDetails((prev) => !prev)}
-                        onToggleFailedItems={() => setShowFailedItems((prev) => !prev)}
-                        onToggleSkippedItems={() => setShowSkippedItems((prev) => !prev)}
-                        onCancel={onCancelDirectoryUpload}
-                        onContinue={onContinueDirectoryUpload}
-                      />
-                    )}
-
-                    {reindexError && (
-                      <div className="kb-inline-error">
-                        重建索引失败：{reindexError}
-                      </div>
-                    )}
-
-                    <div className="kb-workspace-grid">
-                      <KnowledgeHealthPanel
-                        health={activeHealth}
-                        loading={healthLoadingId === activeKnowledgeBaseId}
-                        error={healthError}
-                        onReindexDocument={(documentId) => void handleReindexDocument(activeKnowledgeBaseId, documentId)}
-                        reindexingDocumentId={reindexingDocumentId}
-                      />
-
-                      <RetrievalDebugPanel
-                        scopeLabel={selectedScopeLabel}
-                        query={retrievalQuery}
-                        searchMode={retrievalSearchMode}
-                        result={retrievalDebugResult}
-                        error={retrievalDebugError}
-                        loading={retrievalDebugKnowledgeBaseId === activeKnowledgeBaseId}
-                        savingEvalCandidate={savingEvalCandidate}
-                        evalCandidateSaveMessage={evalCandidateSaveMessage}
-                        onQueryChange={setRetrievalQuery}
-                        onSearchModeChange={setRetrievalSearchMode}
-                        onRun={() => void handleRunRetrievalDebug(activeKnowledgeBaseId)}
-                        onDownloadEvalCandidate={handleDownloadRetrievalEvalCandidate}
-                        onAddEvalCandidate={() => void handleAddRetrievalEvalCandidate(activeKnowledgeBaseId)}
-                      />
-                    </div>
-
-                    <EvalDatasetHistoryPanel
-                      datasets={evalDatasetSummaries}
-                      loading={evalDatasetHistoryLoading}
-                      error={evalDatasetHistoryError}
-                      openingDatasetId={openingEvalDatasetId}
-                      deletingDatasetId={deletingEvalDatasetId}
-                      onRefresh={() => void loadEvalDatasets(activeKnowledgeBaseId)}
-                      onOpen={(datasetId) => void handleOpenSavedEvalDataset(datasetId)}
-                      onDelete={(datasetId) => void handleDeleteSavedEvalDataset(datasetId)}
+                    <WorkspaceHero
+                      knowledgeBase={selectedKnowledgeBase}
+                      health={activeHealth}
+                      selectedScopeLabel={selectedScopeLabel}
+                      generatingEvalDataset={generatingEvalKnowledgeBaseId === activeKnowledgeBaseId}
+                      onUploadFiles={(e) => handleFileChange(activeKnowledgeBaseId, e)}
+                      onUploadDirectory={(e) => handleDirectoryChange(activeKnowledgeBaseId, e)}
+                      onGenerateEvalDataset={() => void handleGenerateEvalDataset(activeKnowledgeBaseId)}
+                      registerDirectoryInput={(el) => registerDirectoryInput(activeKnowledgeBaseId, el)}
                     />
 
-                    <EvalRunTrendPanel
-                      runs={evalRunSummaries}
-                      loading={evalRunHistoryLoading}
-                      error={evalRunHistoryError}
-                      onRefresh={() => void loadEvalRuns(activeKnowledgeBaseId)}
-                    />
-
-                    <DocumentList
-                      documents={selectedKnowledgeBase.documents}
-                      healthDocuments={activeHealth?.documents}
+                    <MainWorkspace
+                      knowledgeBase={selectedKnowledgeBase}
+                      knowledgeBaseId={activeKnowledgeBaseId}
                       selectedDocumentId={selectedDocumentId}
-                      documentDetailLoadingId={documentDetailLoadingId}
-                      reindexingDocumentId={reindexingDocumentId}
+                      directoryUploadTask={directoryUploadTask}
+                      uploadProgressPercent={uploadProgressPercent}
+                      showUploadTaskDetails={showUploadTaskDetails}
+                      showFailedItems={showFailedItems}
+                      showSkippedItems={showSkippedItems}
+                      canCancelUpload={canCancelUpload}
+                      canContinueUpload={canContinueUpload}
+                      isTaskVisible={isTaskVisible}
+                      activeHealth={activeHealth}
+                      healthLoadingId={healthLoadingId}
+                      healthError={healthError}
+                      selectedScopeLabel={selectedScopeLabel}
+                      retrievalQuery={retrievalQuery}
+                      retrievalSearchMode={retrievalSearchMode}
+                      retrievalDebugResult={retrievalDebugResult}
+                      retrievalDebugError={retrievalDebugError}
+                      retrievalDebugKnowledgeBaseId={retrievalDebugKnowledgeBaseId}
+                      savingEvalCandidate={savingEvalCandidate}
+                      evalCandidateSaveMessage={evalCandidateSaveMessage}
+                      evalDatasetSummaries={evalDatasetSummaries}
+                      evalDatasetHistoryLoading={evalDatasetHistoryLoading}
+                      evalDatasetHistoryError={evalDatasetHistoryError}
+                      openingEvalDatasetId={openingEvalDatasetId}
+                      deletingEvalDatasetId={deletingEvalDatasetId}
+                      evalRunSummaries={evalRunSummaries}
+                      evalRunHistoryLoading={evalRunHistoryLoading}
+                      evalRunHistoryError={evalRunHistoryError}
+                      onToggleUploadTaskDetails={() => setShowUploadTaskDetails(prev => !prev)}
+                      onToggleFailedItems={() => setShowFailedItems(prev => !prev)}
+                      onToggleSkippedItems={() => setShowSkippedItems(prev => !prev)}
+                      onCancelDirectoryUpload={onCancelDirectoryUpload}
+                      onContinueDirectoryUpload={onContinueDirectoryUpload}
+                      onReindexDocument={(documentId) => void handleReindexDocument(activeKnowledgeBaseId, documentId)}
+                      onSetRetrievalQuery={setRetrievalQuery}
+                      onSetRetrievalSearchMode={setRetrievalSearchMode}
+                      onRunRetrievalDebug={() => void handleRunRetrievalDebug(activeKnowledgeBaseId)}
+                      onDownloadRetrievalEvalCandidate={handleDownloadRetrievalEvalCandidate}
+                      onAddRetrievalEvalCandidate={() => void handleAddRetrievalEvalCandidate(activeKnowledgeBaseId)}
+                      onLoadEvalDatasets={() => void loadEvalDatasets(activeKnowledgeBaseId)}
+                      onOpenSavedEvalDataset={(datasetId) => void handleOpenSavedEvalDataset(datasetId)}
+                      onDeleteSavedEvalDataset={(datasetId) => void handleDeleteSavedEvalDataset(datasetId)}
+                      onLoadEvalRuns={() => void loadEvalRuns(activeKnowledgeBaseId)}
                       onSelectDocument={(documentId) => onSelectDocument(activeKnowledgeBaseId, documentId)}
                       onOpenDocumentDetail={(documentId) => void handleOpenDocumentDetail(activeKnowledgeBaseId, documentId)}
-                      onReindexDocument={(documentId) => void handleReindexDocument(activeKnowledgeBaseId, documentId)}
                       onRemoveDocument={(documentId) => onRemoveDocument(activeKnowledgeBaseId, documentId)}
                     />
                   </>
@@ -828,11 +692,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         />
       )}
 
-      {(documentDetail || documentDetailError) && (
+      {(docContext.documentDetail || docContext.documentDetailError) && (
         <DocumentDetailDialog
-          detail={documentDetail}
-          error={documentDetailError}
-          focusChunkId={documentDetailFocusChunkId}
+          detail={docContext.documentDetail}
+          error={docContext.documentDetailError}
+          focusChunkId={docContext.documentDetailFocusChunkId}
+          onClose={docContext.closeDocumentDetail}
           onClose={closeDocumentDetail}
         />
       )}

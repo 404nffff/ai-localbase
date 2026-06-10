@@ -2,14 +2,14 @@ import React, { createContext, useContext, useState, useCallback, useMemo, useRe
 import type { DocumentDetailResponse, DirectoryUploadTask, DirectoryUploadIssueItem, DocumentItem } from '../../../App'
 import {
   deleteKnowledgeBaseDocument,
-  getDocumentDetail,
-  reindexDocument as apiReindexDocument,
+  fetchKnowledgeBaseDocumentDetail,
+  reindexKnowledgeBaseDocument,
   uploadKnowledgeBaseFile,
   stageUpload,
   batchIndexDocuments,
   getDocumentIndexStatus,
+  extractErrorMessage,
 } from '../../../services/api'
-import { extractErrorMessage } from '../../../services/api'
 
 interface DocumentContextValue {
   // Selection
@@ -117,7 +117,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
     setDocumentDetailFocusChunkId(focusChunkId)
 
     try {
-      const detail = await getDocumentDetail(knowledgeBaseId, documentId, focusChunkId)
+      const detail = await fetchKnowledgeBaseDocumentDetail(knowledgeBaseId, documentId, focusChunkId)
       setDocumentDetail(detail)
       setSelectedDocumentId(documentId)
     } catch (err) {
@@ -139,7 +139,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
     setReindexError('')
 
     try {
-      await apiReindexDocument(knowledgeBaseId, documentId)
+      await reindexKnowledgeBaseDocument(knowledgeBaseId, documentId)
 
       // Refresh document detail if it's currently open
       if (documentDetail?.document.id === documentId) {
@@ -306,10 +306,11 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
       // Notify parent about document change
       onDocumentsChange?.(knowledgeBaseId)
     } catch (err) {
+      const errorMsg = await extractErrorMessage(err)
       setDirectoryUploadTask(prev => ({
         ...prev,
         status: 'failed',
-        summaryMessage: await extractErrorMessage(err),
+        summaryMessage: errorMsg,
       }))
     }
   }, [onDocumentsChange])
