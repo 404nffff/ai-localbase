@@ -1,0 +1,468 @@
+/* ==========================================================================
+   表单系统 (Form System)
+   统一输入控件、标签、复选框、Range 滑块样式
+   ========================================================================== */
+
+/* ==========================================================================
+   1. 输入容器 (Field Container)
+   ========================================================================== */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.form-field-full {
+  grid-column: 1 / -1;
+}
+
+/* ==========================================================================
+   2. 标签 (Label)
+   ========================================================================== */
+.form-field-label {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.form-field-description {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.45;
+  margin-top: var(--space-1);
+}
+
+/* ==========================================================================
+   3. 文本输入 (Text Input)
+   ========================================================================== */
+.form-input {
+  min-height: var(--control-height-md);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.form-input:hover {
+  border-color: var(--border-color-hover);
+}
+
+.form-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-primary);
+}
+
+/* 只读状态 */
+.form-input:read-only {
+  background: var(--bg-tertiary);
+  cursor: default;
+}
+
+/* 禁用状态 */
+.form-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg-tertiary);
+}
+
+/* ==========================================================================
+   4. 选择器 (Select)
+   ========================================================================== */
+.form-select {
+  min-height: var(--control-height-md);
+  padding: var(--space-2) var(--space-3);
+  padding-right: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8.825L1.175 4 2.238 2.938 6 6.7 9.763 2.938 10.825 4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  background-size: 12px;
+}
+
+.form-select:hover {
+  border-color: var(--border-color-hover);
+}
+
+.form-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-focus);
+  background-color: var(--bg-primary);
+}
+
+.form-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   5. 文本域 (Textarea)
+   ========================================================================== */
+.form-textarea {
+  min-height: var(--control-height-lg);
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.form-textarea:hover {
+  border-color: var(--border-color-hover);
+}
+
+.form-textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-primary);
+}
+
+.form-textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg-tertiary);
+}
+
+/* ==========================================================================
+   6. 复选框 (Checkbox)
+   ========================================================================== */
+.form-checkbox {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  position: relative;
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  height: 18px;
+  min-height: 18px;
+  max-height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-checkbox::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transform: translateY(-50%);
+  transition: transform var(--transition-fast), background-color var(--transition-fast);
+}
+
+.form-checkbox:checked {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.form-checkbox:checked::after {
+  transform: translateY(-50%) translateX(16px);
+  background: white;
+}
+
+.form-checkbox:focus {
+  box-shadow: var(--shadow-focus);
+}
+
+.form-checkbox:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   7. 单选框 (Radio)
+   ========================================================================== */
+.form-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.form-radio-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.form-radio {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+  position: relative;
+}
+
+.form-radio::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform var(--transition-fast);
+}
+
+.form-radio:checked {
+  border-color: var(--color-primary);
+  background: var(--bg-primary);
+}
+
+.form-radio:checked::after {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.form-radio:focus {
+  box-shadow: var(--shadow-focus);
+}
+
+.form-radio-label {
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  user-select: none;
+}
+
+/* ==========================================================================
+   8. Range 滑块 (Range Slider)
+   ========================================================================== */
+.form-range {
+  padding: var(--space-2) 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  cursor: pointer;
+  accent-color: var(--color-primary);
+}
+
+/* ==========================================================================
+   9. 数字输入 (Number Input)
+   ========================================================================== */
+.form-number {
+  -moz-appearance: textfield;
+}
+
+.form-number::-webkit-outer-spin-button,
+.form-number::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ==========================================================================
+   10. 表单网格布局 (Form Grid)
+   ========================================================================== */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3) var(--space-6);
+}
+
+.form-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3) var(--space-6);
+}
+
+.form-grid-context {
+  grid-template-columns: 1fr 1.4fr;
+  gap: var(--space-3) var(--space-6);
+}
+
+/* ==========================================================================
+   11. 复选框容器 (Checkbox Container)
+   ========================================================================== */
+.form-checkbox-container {
+  display: inline-flex;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  justify-content: flex-start;
+  min-height: var(--control-height-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.form-checkbox-container--inline {
+  align-self: end;
+  justify-self: start;
+  min-height: var(--control-height-md);
+  padding-bottom: 2px;
+}
+
+.form-checkbox-container--described {
+  align-self: end;
+  justify-self: start;
+  flex-wrap: wrap;
+  min-height: var(--control-height-md);
+  padding-bottom: 2px;
+}
+
+.form-checkbox-container > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   12. 表单段落 (Form Group)
+   ========================================================================== */
+.form-group {
+  padding: 0;
+  background: transparent;
+}
+
+.form-group + .form-group {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.form-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.form-group-title {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  font-weight: 800;
+}
+
+.form-group-description {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+/* ==========================================================================
+   13. 摘要统计 (Summary Stats)
+   ========================================================================== */
+.form-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: var(--space-4);
+  padding: var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.form-summary-item {
+  min-width: 0;
+  padding: 0 var(--space-4);
+  background: transparent;
+}
+
+.form-summary-item:first-child {
+  padding-left: 0;
+}
+
+.form-summary-item + .form-summary-item {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.form-summary-item .form-summary-label {
+  display: block;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.form-summary-item .form-summary-value {
+  display: block;
+  margin: var(--space-1) 0 var(--space-2);
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   14. 响应式适配 (Responsive)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .form-grid-context {
+    grid-template-columns: 1fr;
+  }
+
+  .form-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .form-summary-item:nth-child(2) {
+    border-left: none;
+  }
+}

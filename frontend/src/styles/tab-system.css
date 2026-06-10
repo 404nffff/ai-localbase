@@ -1,0 +1,305 @@
+/* ==========================================================================
+   Tab 系统 (Tab System)
+   统一标签页导航、激活态、禁用态样式
+   ========================================================================== */
+
+/* ==========================================================================
+   1. Tab 容器 (Tab Container)
+   ========================================================================== */
+.tab-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+}
+
+.tab-list-wrapper {
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tab-list-wrapper::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+   2. Tab 列表 (Tab List)
+   ========================================================================== */
+.tab-list {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+   3. Tab 按钮 (Tab Button)
+   ========================================================================== */
+.tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+  bottom: -1px;
+}
+
+.tab-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.tab-button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  border-radius: var(--radius-xs);
+}
+
+/* 激活状态 */
+.tab-button[aria-selected="true"] {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* 禁用状态 */
+.tab-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   4. Tab 面板 (Tab Panel)
+   ========================================================================== */
+.tab-panel-wrapper {
+  position: relative;
+  min-height: 0;
+}
+
+.tab-panel {
+  animation: tabFadeIn var(--transition-normal);
+}
+
+.tab-panel[data-hidden="true"] {
+  display: none;
+}
+
+/* ==========================================================================
+   5. Tab 变体：轮廓样式 (Outline Variant)
+   ========================================================================== */
+.tab-container--outlined .tab-list-wrapper {
+  border-bottom: none;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1);
+}
+
+.tab-container--outlined .tab-list {
+  gap: var(--space-1);
+}
+
+.tab-container--outlined .tab-button {
+  border-radius: var(--radius-md);
+  border-bottom: none;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.tab-container--outlined .tab-button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.tab-container--outlined .tab-button[aria-selected="true"] {
+  background: var(--bg-primary);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ==========================================================================
+   6. Tab 变体：胶囊样式 (Pill Variant)
+   ========================================================================== */
+.tab-container--pill .tab-list-wrapper {
+  border-bottom: none;
+}
+
+.tab-container--pill .tab-list {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  padding: var(--space-1);
+  gap: var(--space-1);
+  width: fit-content;
+}
+
+.tab-container--pill .tab-button {
+  border-radius: var(--radius-full);
+  border-bottom: none;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.tab-container--pill .tab-button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.tab-container--pill .tab-button[aria-selected="true"] {
+  background: var(--color-primary);
+  color: white;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   7. Tab 变体：图标样式 (Icon Variant)
+   ========================================================================== */
+.tab-container--icon .tab-list {
+  justify-content: center;
+}
+
+.tab-container--icon .tab-button {
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3);
+  min-width: 64px;
+}
+
+.tab-container--icon .tab-button svg,
+.tab-container--icon .tab-button [class*="icon"] {
+  width: 20px;
+  height: 20px;
+}
+
+.tab-container--icon .tab-button[data-label]::after {
+  content: attr(data-label);
+  font-size: var(--text-xs);
+}
+
+.tab-container--icon .tab-button[aria-selected="true"] {
+  color: var(--color-primary);
+}
+
+/* ==========================================================================
+   8. Tab 标签徽章 (Tab Badge)
+   ========================================================================== */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.tab-badge--default {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.tab-badge--primary {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.tab-badge--danger {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.tab-badge--success {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+/* ==========================================================================
+   9. Tab 分段样式 (Segmented Variant)
+   ========================================================================== */
+.tab-container--segmented .tab-list-wrapper {
+  border-bottom: none;
+}
+
+.tab-container--segmented .tab-list {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1);
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.tab-container--segmented .tab-button {
+  flex: 1;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border-bottom: none;
+  padding: var(--space-2) var(--space-4);
+}
+
+.tab-container--segmented .tab-button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.tab-container--segmented .tab-button[aria-selected="true"] {
+  background: var(--bg-primary);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ==========================================================================
+   10. 动画 (Animation)
+   ========================================================================== */
+@keyframes tabFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==========================================================================
+   11. 响应式适配 (Responsive)
+   ========================================================================== */
+@media (max-width: 640px) {
+  .tab-container--segmented .tab-list {
+    flex-wrap: nowrap;
+  }
+
+  .tab-container--segmented .tab-button {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-2) var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .tab-container--icon .tab-button {
+    min-width: 52px;
+    padding: var(--space-2);
+  }
+
+  .tab-container--icon .tab-button[data-label]::after {
+    display: none;
+  }
+}

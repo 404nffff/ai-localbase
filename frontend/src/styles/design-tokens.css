@@ -30,8 +30,12 @@
   --color-primary-active: #1e40af;
   --color-primary-light: #dbeafe;
   --color-primary-soft: #eff6ff;
-  --color-accent: #4f46e5;
+  --color-accent: #6366f1;
   --color-accent-light: #eef2ff;
+
+  /* 用户消息专用色 */
+  --color-user-bubble: #2563eb;
+  --color-user-bubble-text: #ffffff;
 
   /* 语义反馈色 */
   --color-success: #10b981;
@@ -80,6 +84,14 @@
   --space-10: 2.5rem;
   --space-12: 3rem;
 
+  /* 组件间距 */
+  --spacing-component-inner: 16px;
+  --spacing-component-outer: 24px;
+  --spacing-section: 32px;
+
+  /* 按钮内边距 */
+  --padding-button-inner: 8px 20px;
+
   /* 字体系统 */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "SF Mono", Monaco, Menlo, Consolas, "Liberation Mono", monospace;
@@ -125,6 +137,10 @@
   --color-primary-soft: rgba(96, 165, 250, 0.1);
   --color-accent: #818cf8;
   --color-accent-light: rgba(129, 140, 248, 0.14);
+
+  /* 用户消息专用色（暗色模式） */
+  --color-user-bubble: #3b82f6;
+  --color-user-bubble-text: #ffffff;
 
   --color-success: #34d399;
   --color-success-light: rgba(52, 211, 153, 0.08);

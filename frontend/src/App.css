@@ -1,6 +1,11 @@
 /* App.css */
 @import "./styles/design-tokens.css";
 @import "./styles/app-shell.css";
+@import "./styles/button-system.css";
+@import "./styles/form-system.css";
+@import "./styles/tab-system.css";
+@import "./styles/animations.css";
+@import "./styles/empty-state.css";
 @import "./styles/settings-modal.css";
 @import "./styles/knowledge-panel.css";
 @import "./styles/evaluation-dialog.css";
