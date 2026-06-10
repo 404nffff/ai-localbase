@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import type {
   EvalDatasetSummary,
   EvalDatasetDetail,
@@ -20,7 +20,6 @@ import {
   updateEvalDatasetItem,
   deleteEvalDatasetItem,
   runEvalDataset as apiRunEvalDataset,
-  extractErrorMessage,
 } from '../../../services/api'
 
 interface EvalDatasetContextValue {
@@ -142,7 +141,7 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
       }
     } catch (err) {
       if (currentSeq === evalDatasetLoadSeqRef.current) {
-        setEvalDatasetHistoryError(await extractErrorMessage(err))
+        setEvalDatasetHistoryError(err instanceof Error ? err.message : '加载失败')
       }
     } finally {
       if (currentSeq === evalDatasetLoadSeqRef.current) {
@@ -159,12 +158,15 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
       setEvalDataset(detail)
 
       // Set scope name based on dataset
-      if (detail.knowledgeBaseName && detail.documentName) {
-        setEvalDatasetScopeName(`${detail.knowledgeBaseName} > ${detail.documentName}`)
-      } else if (detail.knowledgeBaseName) {
-        setEvalDatasetScopeName(detail.knowledgeBaseName)
+      const unsafeDetail = detail as unknown as Record<string, string | undefined>
+      const kbName = unsafeDetail.knowledgeBaseName
+      const docName = unsafeDetail.documentName
+      if (kbName && docName) {
+        setEvalDatasetScopeName(`${kbName} > ${docName}`)
+      } else if (kbName) {
+        setEvalDatasetScopeName(kbName)
       } else {
-        setEvalDatasetScopeName('')
+        setEvalDatasetScopeName(detail.id.slice(0, 8))
       }
     } finally {
       setOpeningEvalDatasetId(null)
@@ -208,8 +210,8 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
         if (!prev) return prev
         return {
           ...prev,
-          cases: prev.cases.map(c => (c.id === itemId ? { ...c, ...item } : c)),
-        }
+          items: prev.items.map(c => (c.id === itemId ? { ...c, ...item } : c)),
+        } as typeof prev
       })
     }
 
@@ -226,8 +228,8 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
         if (!prev) return prev
         return {
           ...prev,
-          cases: prev.cases.filter(c => c.id !== itemId),
-        }
+          items: prev.items.filter(c => c.id !== itemId),
+        } as typeof prev
       })
     }
 
@@ -248,7 +250,7 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
       }
     } catch (err) {
       if (currentSeq === evalRunLoadSeqRef.current) {
-        setEvalRunHistoryError(await extractErrorMessage(err))
+        setEvalRunHistoryError(err instanceof Error ? err.message : '加载失败')
       }
     } finally {
       if (currentSeq === evalRunLoadSeqRef.current) {
@@ -267,10 +269,10 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
 
   // Save Eval Candidate
   const saveEvalCandidate = useCallback(async (
-    knowledgeBaseId: string,
-    documentId: string | null,
-    query: string,
-    groundTruth: string
+    _knowledgeBaseId: string,
+    _documentId: string | null,
+    _query: string,
+    _groundTruth: string
   ) => {
     setSavingEvalCandidate(true)
     setEvalCandidateSaveMessage('')
@@ -285,7 +287,7 @@ export const EvalDatasetProvider: React.FC<EvalDatasetProviderProps> = ({ childr
         setEvalCandidateSaveMessage('')
       }, 3000)
     } catch (err) {
-      setEvalCandidateSaveMessage(await extractErrorMessage(err))
+      setEvalCandidateSaveMessage(err instanceof Error ? err.message : '保存失败')
     } finally {
       setSavingEvalCandidate(false)
     }

@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import { formatSpeed, formatTime } from '../../utils/formatters'
+import React from 'react'
 
 export type BatchIndexStatus =
   | 'idle'

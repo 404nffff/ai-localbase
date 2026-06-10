@@ -4,8 +4,6 @@ import type {
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
   RetrievalSearchMode,
-  EvalDatasetSummary,
-  EvalRunSummary,
 } from '../../services/api'
 import DirectoryUploadTaskPanel from './DirectoryUploadTaskPanel'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
@@ -52,7 +50,7 @@ interface MainWorkspaceProps {
   onOpenSavedEvalDataset: (datasetId: string) => void
   onDeleteSavedEvalDataset: (datasetId: string) => void
   onLoadEvalRuns: () => void
-  onSelectDocument: (documentId: string) => void
+  onSelectDocument: (documentId: string | null) => void
   onOpenDocumentDetail: (documentId: string) => void
   onRemoveDocument: (documentId: string) => void
 }

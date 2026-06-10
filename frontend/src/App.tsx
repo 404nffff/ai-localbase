@@ -450,7 +450,7 @@ function App() {
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
   const [backendReady, setBackendReady] = useState(false)
   const [backendWarmupRequired, setBackendWarmupRequired] = useState(true)
-  const [globalLoading, setGlobalLoading] = useState(false)
+  const [globalLoading] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const initialConversation = createWelcomeConversation()
     return [initialConversation]

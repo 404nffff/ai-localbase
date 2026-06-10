@@ -1,15 +1,30 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { DocumentDetailResponse, DirectoryUploadTask, DirectoryUploadIssueItem, DocumentItem } from '../../../App'
+import type { DirectoryUploadTask } from '../../../App'
+import type { DocumentDetailResponse } from '../../../services/api'
 import {
   deleteKnowledgeBaseDocument,
   fetchKnowledgeBaseDocumentDetail,
   reindexKnowledgeBaseDocument,
-  uploadKnowledgeBaseFile,
   stageUpload,
   batchIndexDocuments,
-  getDocumentIndexStatus,
   extractErrorMessage,
 } from '../../../services/api'
+
+export interface DirectoryUploadIssueItem {
+  name: string
+  path: string
+  reason: string
+}
+
+const safeExtractMessage = async (err: unknown): Promise<string> => {
+  if (err instanceof Response) {
+    return await extractErrorMessage(err)
+  }
+  if (err instanceof Error) {
+    return err.message
+  }
+  return '操作失败'
+}
 
 interface DocumentContextValue {
   // Selection
@@ -121,7 +136,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
       setDocumentDetail(detail)
       setSelectedDocumentId(documentId)
     } catch (err) {
-      setDocumentDetailError(await extractErrorMessage(err))
+      setDocumentDetailError(await safeExtractMessage(err))
     } finally {
       setDocumentDetailLoading(false)
       setDocumentDetailLoadingId(null)
@@ -149,7 +164,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
       // Notify parent about document change
       onDocumentsChange?.(knowledgeBaseId)
     } catch (err) {
-      setReindexError(await extractErrorMessage(err))
+      setReindexError(await safeExtractMessage(err))
     } finally {
       setReindexingDocumentId(null)
     }
@@ -205,8 +220,8 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
         eligibleItems.push({ file, path: (file as any).webkitRelativePath || file.name })
       } else {
         skippedItems.push({
-          fileName: file.name,
-          filePath: (file as any).webkitRelativePath || file.name,
+          name: file.name,
+          path: (file as any).webkitRelativePath || file.name,
           reason: `不支持的文件类型: ${ext}`,
         })
       }
@@ -245,7 +260,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
 
       try {
         const result = await stageUpload(file)
-        uploadIds.push(result.id)
+        uploadIds.push(result.uploadId)
 
         setDirectoryUploadTask(prev => ({
           ...prev,
@@ -253,9 +268,9 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
         }))
       } catch (err) {
         failedItems.push({
-          fileName: file.name,
-          filePath: path,
-          reason: await extractErrorMessage(err),
+          name: file.name,
+          path: path,
+          reason: await safeExtractMessage(err),
         })
 
         setDirectoryUploadTask(prev => ({
@@ -306,7 +321,7 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
       // Notify parent about document change
       onDocumentsChange?.(knowledgeBaseId)
     } catch (err) {
-      const errorMsg = await extractErrorMessage(err)
+      const errorMsg = await safeExtractMessage(err)
       setDirectoryUploadTask(prev => ({
         ...prev,
         status: 'failed',

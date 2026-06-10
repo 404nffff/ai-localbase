@@ -1,6 +1,6 @@
 import { createContext, useCallback, useState, ReactNode } from 'react'
-import Toast, { ToastType } from './Toast'
-import '../../styles/toast.css'
+
+export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
 export interface ToastOptions {
   type: ToastType
@@ -23,6 +23,7 @@ interface ToastContainerProps {
   children: ReactNode
 }
 
+// Legacy compatibility component - deprecated, use ToastProvider from Toast.tsx instead
 export default function ToastContainer({ children }: ToastContainerProps) {
   const [toasts, setToasts] = useState<ToastItem[]>([])
 
@@ -42,14 +43,13 @@ export default function ToastContainer({ children }: ToastContainerProps) {
       {children}
       <div className="toast-container">
         {toasts.map((toast) => (
-          <Toast
+          <div
             key={toast.id}
-            id={toast.id}
-            type={toast.type}
-            message={toast.message}
-            duration={toast.duration}
-            onClose={handleClose}
-          />
+            className={`toast toast-${toast.type}`}
+            onClick={() => handleClose(toast.id)}
+          >
+            {toast.message}
+          </div>
         ))}
       </div>
     </ToastContext.Provider>
