@@ -130,63 +130,6 @@
   max-width: 140px;
 }
 
-.chat-topbar-info-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-full);
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.chat-topbar-info-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.chat-topbar-info-icon {
-  position: relative;
-  display: block;
-  width: 15px;
-  height: 12px;
-  border: 1.7px solid currentColor;
-  border-radius: 8px;
-}
-
-.chat-topbar-info-icon::before {
-  content: '';
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 4px 0 0 currentColor, 8px 0 0 currentColor;
-}
-
-.chat-topbar-info-icon::after {
-  content: '';
-  position: absolute;
-  left: 2px;
-  bottom: -5px;
-  width: 6px;
-  height: 6px;
-  border-left: 1.7px solid currentColor;
-  border-bottom: 1.7px solid currentColor;
-  background: var(--surface-primary, #ffffff);
-  transform: rotate(-18deg);
-}
-
-.chat-topbar-info-btn:hover .chat-topbar-info-icon::after {
-  background: var(--bg-tertiary);
-}
-
 .chat-topbar-clear-btn {
   width: 30px;
   height: 30px;
@@ -244,7 +187,7 @@
   border-radius: 3px 3px 0 0;
 }
 
-/* Sub layer (collapsible stats) */
+/* Sub layer (persistent stats) */
 .chat-topbar-sub {
   display: flex;
   align-items: center;

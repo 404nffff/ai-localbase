@@ -61,7 +61,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   const [inputValue, setInputValue] = useState('')
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [showModeMenu, setShowModeMenu] = useState(false)
-  const [showTopbarSub, setShowTopbarSub] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(activeConversation.title)
@@ -199,15 +198,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({
             <div className="chat-topbar-actions" aria-label="对话操作">
               <button
                 type="button"
-                className="chat-topbar-info-btn"
-                onClick={() => setShowTopbarSub(prev => !prev)}
-                title="消息统计"
-                aria-label="消息统计"
-              >
-                <span className="chat-topbar-info-icon" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
                 className="chat-topbar-clear-btn"
                 onClick={() => setShowClearConfirm(true)}
                 disabled={isLoading}
@@ -220,13 +210,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {showTopbarSub && (
-          <div className="chat-topbar-sub">
-            <span className="topbar-sub-stat">💬 {conversationStats.totalCount} 条消息</span>
-            <span className="topbar-sub-stat">👤 {conversationStats.userCount} 条提问</span>
-            <span className="topbar-sub-stat">🕐 {formatTime(activeConversation.updatedAt)}</span>
-          </div>
-        )}
+        <div className="chat-topbar-sub" aria-label="对话统计">
+          <span className="topbar-sub-stat">💬 {conversationStats.totalCount} 条消息</span>
+          <span className="topbar-sub-stat">👤 {conversationStats.userCount} 条提问</span>
+          <span className="topbar-sub-stat">🕐 {formatTime(activeConversation.updatedAt)}</span>
+        </div>
       </div>
 
       <div className="messages-container">
