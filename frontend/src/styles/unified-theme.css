@@ -325,12 +325,24 @@ select:disabled {
 }
 
 .input-container:focus-within {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-focus);
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08), var(--shadow-sm);
 }
 
 .input-container textarea {
   color: var(--text-primary);
+}
+
+.chat-area .input-container textarea:focus,
+.chat-area .input-container textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.chat-area .input-mode-toggle:focus-visible,
+.chat-area .send-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
 }
 
 /* Modals and dialogs */
