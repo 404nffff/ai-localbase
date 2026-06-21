@@ -1,4 +1,8 @@
-# AI LocalBase v1.3.0 - Tier 1 Complete
+# Archived Release Notes: AI LocalBase v1.3.0
+
+> 历史版本归档，不代表当前项目版本。当前版本以 Git tag 与 GitHub Release 为准。
+
+## v1.3.0 阶段交付记录
 
 ## 🎉 重大更新
 

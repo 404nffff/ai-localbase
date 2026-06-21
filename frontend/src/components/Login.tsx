@@ -23,6 +23,8 @@ const getPasswordStrength = (password: string) => {
   return { label: '偏弱', tone: 'weak', hint: '至少 8 位，推荐 16 位以上' }
 }
 
+const appVersion = (import.meta.env.VITE_APP_VERSION || '').trim()
+
 const Login: React.FC = () => {
   const {
     login,
@@ -409,9 +411,11 @@ const Login: React.FC = () => {
           </div>
         </div>
 
-        <div className="login-version">
-          v1.3.0
-        </div>
+        {appVersion && (
+          <div className="login-version">
+            {appVersion}
+          </div>
+        )}
       </div>
 
       {showResetHelp && (

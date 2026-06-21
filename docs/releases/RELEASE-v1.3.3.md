@@ -1,4 +1,6 @@
-# AI LocalBase v1.3.3
+# Archived Release Notes: AI LocalBase v1.3.3
+
+> 历史版本归档，不代表当前项目版本。当前版本以 Git tag 与 GitHub Release 为准。
 
 v1.3.3 聚焦认证完善、设置页与知识库工作台体验优化，并补齐开源自部署场景下的安全默认值。
 
