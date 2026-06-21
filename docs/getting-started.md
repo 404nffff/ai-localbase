@@ -40,6 +40,8 @@ npm install
 npm run dev
 ```
 
+前端开发服务器默认监听 `http://localhost:3000`。Docker Compose 中的前端默认端口是 `http://localhost:4173`。
+
 ### 前端构建
 
 ```bash
@@ -59,6 +61,8 @@ docker compose -f docker-compose.qdrant.yml up -d
 docker compose up --build
 ```
 
+如果开启认证，推荐在启动前复制 `.env.example` 为 `.env`，并设置 `ENABLE_AUTH=true` 与 `AUTH_PASSWORD`。
+
 ---
 
 ## 关键环境变量
@@ -71,6 +75,13 @@ docker compose up --build
 | `UPLOAD_DIR` | `data/uploads` | 上传文件目录 |
 | `STATE_FILE` | `data/app-state.json` | 应用状态文件 |
 | `CHAT_HISTORY_FILE` | `data/chat-history.db` | 聊天记录 SQLite 文件 |
+| `ENABLE_AUTH` | `false` | 是否启用 Web 登录和 API Key 鉴权 |
+| `AUTH_USERNAME` | `root` | root 登录用户名 |
+| `AUTH_PASSWORD` | 空 | 首次启动自动创建 root 用户的密码 |
+| `AUTH_SETUP_TOKEN` | 空 | 首次初始化向导保护 Token |
+| `AUTH_RESET_TOKEN` | 空 | root 密码一次性重置 Token |
+| `AUTH_RESET_PASSWORD` | 空 | root 密码一次性重置密码 |
+| `JWT_SECRET` | 空 | 旧版兼容项，当前 session 认证不再要求 |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant 地址 |
 | `QDRANT_API_KEY` | 空 | Qdrant API Key |
 | `QDRANT_COLLECTION_PREFIX` | `kb_` | 知识库集合名前缀 |
@@ -85,6 +96,26 @@ docker compose up --build
 |
 
 > 注意：`QDRANT_VECTOR_SIZE` 必须与嵌入模型输出维度一致。切换嵌入模型时，如果维度变化，旧 Qdrant 集合不能直接复用；请清理旧集合、使用新的 `QDRANT_COLLECTION_PREFIX`，或重新创建知识库后重建索引。
+
+### 认证初始化
+
+本地开发默认关闭认证：
+
+```bash
+ENABLE_AUTH=false
+```
+
+服务器部署建议开启认证：
+
+```bash
+ENABLE_AUTH=true
+AUTH_USERNAME=root
+AUTH_PASSWORD=your-secure-password
+```
+
+首次启动时，如果设置了 `AUTH_PASSWORD`，后端会自动创建 root 用户并保存密码哈希。如果未设置 `AUTH_PASSWORD`，Web 页面会进入首次初始化向导。公网部署时建议至少设置 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占。
+
+更多认证接口、API Key 和密码重置说明见 [`docs/AUTH.md`](./AUTH.md)。
 
 ---
 

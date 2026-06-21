@@ -175,25 +175,21 @@ export const DocumentProvider: React.FC<DocumentProviderProps> = ({
     documentId: string,
     onSuccess?: () => void
   ) => {
-    try {
-      await deleteKnowledgeBaseDocument(knowledgeBaseId, documentId)
+    await deleteKnowledgeBaseDocument(knowledgeBaseId, documentId)
 
-      // Close detail if this document was open
-      if (documentDetail?.document.id === documentId) {
-        closeDocumentDetail()
-      }
-
-      // Clear selection if this document was selected
-      if (selectedDocumentId === documentId) {
-        setSelectedDocumentId(null)
-      }
-
-      // Notify parent about document change
-      onDocumentsChange?.(knowledgeBaseId)
-      onSuccess?.()
-    } catch (err) {
-      throw err
+    // Close detail if this document was open
+    if (documentDetail?.document.id === documentId) {
+      closeDocumentDetail()
     }
+
+    // Clear selection if this document was selected
+    if (selectedDocumentId === documentId) {
+      setSelectedDocumentId(null)
+    }
+
+    // Notify parent about document change
+    onDocumentsChange?.(knowledgeBaseId)
+    onSuccess?.()
   }, [documentDetail, selectedDocumentId, closeDocumentDetail, onDocumentsChange])
 
   // Directory Upload Implementation
