@@ -7,6 +7,7 @@ import MCPSettings from './tabs/MCPSettings'
 import SystemSettings from './tabs/SystemSettings'
 
 type SettingsTab = 'general' | 'ai' | 'retrieval' | 'mcp' | 'system'
+type SettingsNavIconName = 'user' | 'settings' | 'shield' | 'cube' | 'database'
 
 interface SettingsPanelProps {
   config: AppConfig
@@ -31,19 +32,62 @@ interface SettingsNavItem {
   id: SettingsTab
   label: string
   description: string
-  icon: string
+  icon: SettingsNavIconName
 }
 
 const navItems: SettingsNavItem[] = [
-  { id: 'general', label: '通用设置', description: '应用状态与基础信息', icon: '总' },
-  { id: 'ai', label: 'AI 配置', description: '模型、接口与推理参数', icon: 'AI' },
-  { id: 'retrieval', label: '检索策略', description: '召回、重排与上下文规模', icon: '检' },
-  { id: 'mcp', label: 'MCP 设置', description: '工具调用与访问令牌', icon: 'M' },
-  { id: 'system', label: '账户与安全', description: '会话、密码与访问密钥', icon: '安' },
+  { id: 'system', label: '账户管理', description: '会话、密码与访问密钥', icon: 'user' },
+  { id: 'general', label: '系统设置', description: '当前模型、检索与运行状态', icon: 'settings' },
+  { id: 'mcp', label: '系统授权', description: 'MCP 工具调用与访问令牌', icon: 'shield' },
+  { id: 'ai', label: '模型', description: '模型、接口与推理参数', icon: 'cube' },
+  { id: 'retrieval', label: '检索策略', description: '召回、重排与上下文规模', icon: 'database' },
 ]
 
 const getTabButtonId = (tabId: SettingsTab) => `settings-tab-${tabId}`
 const getTabPanelId = (tabId: SettingsTab) => `settings-panel-${tabId}`
+
+const SettingsNavIcon: React.FC<{ name: SettingsNavIconName }> = ({ name }) => {
+  switch (name) {
+    case 'user':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M4.8 20C6 16.8 8.4 15.2 12 15.2C15.6 15.2 18 16.8 19.2 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'settings':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 8.4A3.6 3.6 0 1 0 12 15.6A3.6 3.6 0 0 0 12 8.4Z" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M19.1 13.6C19.2 13.1 19.2 12.6 19.2 12C19.2 11.4 19.2 10.9 19.1 10.4L21 8.9L19 5.5L16.7 6.4C15.8 5.7 14.9 5.2 13.8 4.9L13.5 2.5H10.5L10.2 4.9C9.1 5.2 8.2 5.7 7.3 6.4L5 5.5L3 8.9L4.9 10.4C4.8 10.9 4.8 11.4 4.8 12C4.8 12.6 4.8 13.1 4.9 13.6L3 15.1L5 18.5L7.3 17.6C8.2 18.3 9.1 18.8 10.2 19.1L10.5 21.5H13.5L13.8 19.1C14.9 18.8 15.8 18.3 16.7 17.6L19 18.5L21 15.1L19.1 13.6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'shield':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3L19 6V11.4C19 15.8 16.1 19.2 12 21C7.9 19.2 5 15.8 5 11.4V6L12 3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M9 12L11.1 14.1L15.4 9.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'cube':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3.5L19.5 7.7V16.3L12 20.5L4.5 16.3V7.7L12 3.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M4.8 8L12 12.1L19.2 8M12 20.2V12.1" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'database':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <ellipse cx="12" cy="6" rx="7" ry="3.2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M5 6V12C5 13.8 8.1 15.2 12 15.2C15.9 15.2 19 13.8 19 12V6" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M5 12V18C5 19.8 8.1 21.2 12 21.2C15.9 21.2 19 19.8 19 18V12" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      )
+    default:
+      return null
+  }
+}
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
   config,
@@ -171,19 +215,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         onKeyDown={handleDialogKeyDown}
         role="dialog"
       >
-        <aside className="settings-sidebar" aria-label="设置分类">
-          <div className="settings-sidebar-header">
-            <div>
-              <h2 id="settings-dialog-title">设置管理</h2>
-              <p id="settings-dialog-description">调整模型、检索、MCP 与账户安全</p>
-            </div>
-            <button className="settings-sidebar-close" onClick={onClose} aria-label="关闭设置">
-              <svg viewBox="0 0 24 24" fill="none" width="20" height="20" aria-hidden="true">
-                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </div>
+        <button className="settings-modal-close" onClick={onClose} aria-label="关闭设置" type="button">
+          <svg viewBox="0 0 24 24" fill="none" width="28" height="28" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        </button>
 
+        <aside className="settings-sidebar" aria-label="设置分类">
           <nav
             aria-label="设置分类"
             className="settings-nav"
@@ -205,7 +243,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   tabIndex={isActive ? 0 : -1}
                   type="button"
                 >
-                  <span className="settings-nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="settings-nav-icon" aria-hidden="true">
+                    <SettingsNavIcon name={item.icon} />
+                  </span>
                   <span className="settings-nav-text">
                     <span className="settings-nav-label">{item.label}</span>
                     <span className="settings-nav-description">{item.description}</span>
@@ -219,29 +259,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <main className="settings-main">
           <header className="settings-main-header">
             <div>
-              <h3>{activeNavItem.label}</h3>
-              <p>{activeNavItem.description}</p>
+              <h3 id="settings-dialog-title">设置</h3>
+              <p id="settings-dialog-description" className="settings-main-description">
+                {activeNavItem.label} · {activeNavItem.description}
+              </p>
             </div>
           </header>
-
-          <div className="settings-summary-bar" aria-label="当前配置摘要">
-            <div className="settings-summary-item">
-              <span>聊天模型</span>
-              <strong>{config.chat.model || '未配置'}</strong>
-            </div>
-            <div className="settings-summary-item">
-              <span>Embedding</span>
-              <strong>{config.embedding.model || '未配置'}</strong>
-            </div>
-            <div className="settings-summary-item">
-              <span>检索模式</span>
-              <strong>{config.retrieval.defaultSearchMode === 'hybrid' ? '混合' : '向量'}</strong>
-            </div>
-            <div className="settings-summary-item">
-              <span>MCP</span>
-              <strong>{config.mcp.enabled ? '已启用' : '未启用'}</strong>
-            </div>
-          </div>
 
           <section
             aria-labelledby={getTabButtonId(activeTab)}

@@ -5,16 +5,12 @@ interface GeneralSettingsProps {
   config: AppConfig
 }
 
-interface OverviewRow {
-  label: string
-  value: string
-  detail?: string
-  status?: 'enabled' | 'disabled'
-}
-
-interface OverviewGroup {
+interface PreferenceRow {
   title: string
-  rows: OverviewRow[]
+  description: string
+  value: string
+  meta?: string
+  status?: 'enabled' | 'disabled' | 'neutral'
 }
 
 const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config }) => {
@@ -25,78 +21,62 @@ const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config }) => {
   const queryRewriteLabel = config.retrieval.enableQueryRewrite ? '已启用' : '未启用'
   const lowConfidenceBoostLabel = config.retrieval.enableLowConfidenceBoost ? '已启用' : '未启用'
 
-  const overviewGroups: OverviewGroup[] = [
+  const preferenceRows: PreferenceRow[] = [
     {
-      title: '模型链路',
-      rows: [
-        { label: '聊天 Provider', value: chatProviderLabel, detail: config.chat.baseUrl },
-        { label: '聊天模型', value: config.chat.model || '未配置', detail: `上下文 ${config.chat.contextMessageLimit} 条` },
-        { label: 'Embedding Provider', value: embeddingProviderLabel, detail: config.embedding.baseUrl },
-        { label: 'Embedding 模型', value: config.embedding.model || '未配置' },
-      ],
+      title: '聊天模型',
+      description: `${chatProviderLabel} · ${config.chat.baseUrl || '未配置 Base URL'}`,
+      value: config.chat.model || '未配置',
+      meta: `上下文 ${config.chat.contextMessageLimit} 条`,
+      status: config.chat.model ? 'neutral' : 'disabled',
     },
     {
-      title: '检索链路',
-      rows: [
-        { label: '默认模式', value: searchModeLabel, detail: config.retrieval.hybridSearchEnabled ? '混合召回可用' : '仅默认召回' },
-        { label: '重排策略', value: rerankLabel },
-        { label: '问题改写', value: queryRewriteLabel, detail: `${config.retrieval.queryRewriteMaxVariants} 个变体` },
-        { label: '低置信补强', value: lowConfidenceBoostLabel },
-      ],
+      title: 'Embedding 模型',
+      description: `${embeddingProviderLabel} · ${config.embedding.baseUrl || '未配置 Base URL'}`,
+      value: config.embedding.model || '未配置',
+      status: config.embedding.model ? 'neutral' : 'disabled',
+    },
+    {
+      title: '默认检索模式',
+      description: `${rerankLabel} · ${queryRewriteLabel}问题改写 · ${lowConfidenceBoostLabel}低置信补强`,
+      value: searchModeLabel,
+      meta: config.retrieval.hybridSearchEnabled ? '混合召回可用' : '向量召回优先',
+      status: config.retrieval.hybridSearchEnabled ? 'enabled' : 'neutral',
     },
     {
       title: '召回规模',
-      rows: [
-        { label: '文档 TopK', value: String(config.retrieval.topKDocument), detail: `候选 ${config.retrieval.candidateTopKDocument}` },
-        { label: '知识库 TopK', value: String(config.retrieval.topKKnowledgeBase), detail: `候选 ${config.retrieval.candidateTopKAllDocs}` },
-        { label: '每文档片段', value: String(config.retrieval.maxChunksPerDocument) },
-        { label: '上下文字符', value: String(config.retrieval.maxContextChars) },
-      ],
+      description: `文档 TopK ${config.retrieval.topKDocument}，知识库 TopK ${config.retrieval.topKKnowledgeBase}，每文档 ${config.retrieval.maxChunksPerDocument} 个片段。`,
+      value: `${config.retrieval.maxContextChars}`,
+      meta: '上下文字符',
     },
     {
-      title: '集成状态',
-      rows: [
-        { label: 'MCP 状态', value: config.mcp.enabled ? '已启用' : '未启用', status: config.mcp.enabled ? 'enabled' : 'disabled' },
-        { label: 'MCP 路径', value: config.mcp.basePath || '未配置' },
-        { label: '访问 Token', value: config.mcp.token ? '已生成' : '未生成', status: config.mcp.token ? 'enabled' : 'disabled' },
-      ],
+      title: 'MCP 服务',
+      description: config.mcp.basePath || '未配置 MCP 路径',
+      value: config.mcp.enabled ? '已启用' : '未启用',
+      meta: config.mcp.token ? 'Token 已生成' : 'Token 未生成',
+      status: config.mcp.enabled ? 'enabled' : 'disabled',
     },
   ]
 
   return (
-    <div className="settings-tab-content settings-tab-content-overview">
-      <section className="settings-card">
-        <div className="settings-card-header">
-          <div className="settings-card-header-copy">
-            <h3>应用信息</h3>
-            <p>集中查看模型、检索与 MCP 的当前运行配置。</p>
+    <div className="settings-tab-content settings-preferences-page">
+      {preferenceRows.map((row) => (
+        <section className="settings-preference-row" key={row.title}>
+          <div className="settings-preference-copy">
+            <h3>{row.title}</h3>
+            <p>{row.description}</p>
           </div>
-        </div>
-        <div className="settings-card-body">
-          <div className="settings-overview-grid">
-            {overviewGroups.map((group) => (
-              <div className="settings-overview-group" key={group.title}>
-                <h4>{group.title}</h4>
-                <div className="settings-overview-rows">
-                  {group.rows.map((row) => (
-                    <div className="settings-info-row" key={`${group.title}-${row.label}`}>
-                      <span className="settings-info-label">{row.label}</span>
-                      <span className="settings-info-content">
-                        {row.status ? (
-                          <span className={`settings-status-pill ${row.status}`}>{row.value}</span>
-                        ) : (
-                          <span className="settings-info-value">{row.value}</span>
-                        )}
-                        {row.detail ? <small>{row.detail}</small> : null}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="settings-preference-control">
+            {row.status ? (
+              <span className={`settings-select-like settings-status-like ${row.status}`}>
+                {row.value}
+              </span>
+            ) : (
+              <span className="settings-select-like">{row.value}</span>
+            )}
+            {row.meta ? <small>{row.meta}</small> : null}
           </div>
-        </div>
-      </section>
+        </section>
+      ))}
     </div>
   )
 }

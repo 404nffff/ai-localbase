@@ -295,141 +295,145 @@ const SystemSettings: React.FC<SystemSettingsProps> = ({ onLogout }) => {
   return (
     <>
       <div className="settings-tab-content settings-security-content">
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
-              <h3>Root 账户</h3>
-              <p>查看当前登录身份、会话剩余时间和外部访问凭据。</p>
+        <section className="settings-security-overview-panel" aria-label="账户概览">
+          <div className="settings-security-identity">
+            <div>
+              <span>Root 账户</span>
+              <strong>{username || 'root'}</strong>
+              <p>管理网页登录、服务端会话和 OpenAI-compatible API Key。</p>
             </div>
             <span className="settings-status-pill enabled">已认证</span>
           </div>
-          <div className="settings-card-body">
-            <div className="settings-readonly-grid settings-security-overview">
-              <div className="settings-readonly-field">
-                <span>当前用户</span>
-                <strong>{username || 'root'}</strong>
-              </div>
-              <div className="settings-readonly-field">
-                <span>会话到期</span>
-                <strong>{formatTimeRemaining(expiresAt)}</strong>
-                <small>{formatDateTime(expiresAt)}</small>
-              </div>
-              <div className="settings-readonly-field">
-                <span>活跃会话</span>
-                <strong>{activeSessions.length}</strong>
-              </div>
-              <div className="settings-readonly-field">
-                <span>API Key</span>
-                <strong>{apiKeys.filter((key) => !key.revokedAt).length}</strong>
-              </div>
+
+          <div className="settings-security-metrics">
+            <div>
+              <span>会话到期</span>
+              <strong>{formatTimeRemaining(expiresAt)}</strong>
+              <small>{formatDateTime(expiresAt)}</small>
             </div>
-            {loading && <div className="settings-inline-note">正在加载安全状态...</div>}
-            {feedback && <div className="settings-inline-note success">{feedback}</div>}
-            {error && <div className="settings-inline-note error">{error}</div>}
+            <div>
+              <span>活跃会话</span>
+              <strong>{activeSessions.length}</strong>
+              <small>含当前设备</small>
+            </div>
+            <div>
+              <span>API Key</span>
+              <strong>{apiKeys.filter((key) => !key.revokedAt).length}</strong>
+              <small>未撤销</small>
+            </div>
           </div>
+
+          {(loading || feedback || error) && (
+            <div className="settings-security-notices">
+              {loading && <div className="settings-inline-note">正在加载安全状态...</div>}
+              {feedback && <div className="settings-inline-note success">{feedback}</div>}
+              {error && <div className="settings-inline-note error">{error}</div>}
+            </div>
+          )}
         </section>
 
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
-              <h3>修改密码</h3>
+        <section className="settings-setting-section">
+          <div className="settings-setting-section-header">
+            <div>
+              <h3>密码</h3>
               <p>更新 root 密码后，所有已登录会话会立即失效。</p>
             </div>
-            <button
-              className="settings-action-btn"
-              onClick={() => setShowPasswordForm((visible) => !visible)}
-              type="button"
-            >
-              {showPasswordForm ? '收起' : '修改'}
-            </button>
           </div>
-          <div className="settings-card-body">
-            {!showPasswordForm ? (
-              <div className="settings-action-row settings-password-closed">
-                <div>
-                  <strong>当前密码不会显示</strong>
-                  <span>需要输入当前密码才能完成变更。</span>
-                </div>
-                <span className="settings-status-pill warning">会吊销会话</span>
+          <div className="settings-setting-list">
+            <div className="settings-setting-row">
+              <div className="settings-setting-row-main">
+                <strong>登录密码</strong>
+                <span>需要输入当前密码才能完成变更。</span>
               </div>
-            ) : (
-              <form className="settings-form-grid settings-form-grid-dense settings-password-form" onSubmit={handleChangePassword}>
-                <div className="settings-form-group">
-                  <label className="settings-form-label">当前密码</label>
-                  <input
-                    type="password"
-                    value={currentPassword}
-                    onChange={(event) => setCurrentPassword(event.target.value)}
-                    autoComplete="current-password"
-                  />
-                </div>
-                <div className="settings-form-group">
-                  <label className="settings-form-label">新密码</label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(event) => setNewPassword(event.target.value)}
-                    autoComplete="new-password"
-                  />
-                  <div className={`settings-password-meter ${passwordStrength.tone}`}>
-                    <span>{passwordStrength.label}</span>
-                    <small>{passwordStrength.hint}</small>
+              <div className="settings-setting-row-action">
+                <span className="settings-status-pill warning">会吊销会话</span>
+                <button
+                  className="settings-action-btn"
+                  onClick={() => setShowPasswordForm((visible) => !visible)}
+                  type="button"
+                >
+                  {showPasswordForm ? '收起' : '修改'}
+                </button>
+              </div>
+            </div>
+            {showPasswordForm && (
+              <div className="settings-inline-panel">
+                <form className="settings-form-grid settings-form-grid-dense settings-password-form" onSubmit={handleChangePassword}>
+                  <div className="settings-form-group">
+                    <label className="settings-form-label">当前密码</label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                      autoComplete="current-password"
+                    />
                   </div>
-                </div>
-                <div className="settings-form-group">
-                  <label className="settings-form-label">确认新密码</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                    autoComplete="new-password"
-                  />
-                </div>
-                <div className="settings-form-group settings-security-action-cell">
-                  <button
-                    className="settings-action-btn settings-action-btn-primary"
-                    disabled={busyAction === 'change-password'}
-                    type="submit"
-                  >
-                    {busyAction === 'change-password' ? '更新中...' : '更新密码'}
-                  </button>
-                </div>
-              </form>
+                  <div className="settings-form-group">
+                    <label className="settings-form-label">新密码</label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                    <div className={`settings-password-meter ${passwordStrength.tone}`}>
+                      <span>{passwordStrength.label}</span>
+                      <small>{passwordStrength.hint}</small>
+                    </div>
+                  </div>
+                  <div className="settings-form-group">
+                    <label className="settings-form-label">确认新密码</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <div className="settings-form-group settings-security-action-cell">
+                    <button
+                      className="settings-action-btn settings-action-btn-primary"
+                      disabled={busyAction === 'change-password'}
+                      type="submit"
+                    >
+                      {busyAction === 'change-password' ? '更新中...' : '更新密码'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             )}
           </div>
         </section>
 
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
+        <section className="settings-setting-section">
+          <div className="settings-setting-section-header">
+            <div>
               <h3>服务端会话</h3>
-              <p>当前设备和其它浏览器登录态会显示在这里。</p>
+              <p>查看当前设备和其它浏览器登录态。</p>
             </div>
             <button className="settings-action-btn" onClick={() => void loadSecurityData()} type="button">
               刷新
             </button>
           </div>
-          <div className="settings-card-body">
-            <div className="settings-security-list">
-              {sessions.length === 0 && <div className="settings-empty-row">暂无会话记录</div>}
-              {currentSessions.length > 0 && <div className="settings-list-group-label">当前设备</div>}
-              {currentSessions.map(renderSessionRow)}
-              {otherSessions.length > 0 && <div className="settings-list-group-label">其它设备</div>}
-              {otherSessions.map(renderSessionRow)}
-              {revokedSessions.length > 0 && <div className="settings-list-group-label">最近失效</div>}
-              {revokedSessions.map(renderSessionRow)}
-            </div>
+          <div className="settings-security-list">
+            {sessions.length === 0 && <div className="settings-empty-row">暂无会话记录</div>}
+            {currentSessions.length > 0 && <div className="settings-list-group-label">当前设备</div>}
+            {currentSessions.map(renderSessionRow)}
+            {otherSessions.length > 0 && <div className="settings-list-group-label">其它设备</div>}
+            {otherSessions.map(renderSessionRow)}
+            {revokedSessions.length > 0 && <div className="settings-list-group-label">最近失效</div>}
+            {revokedSessions.map(renderSessionRow)}
           </div>
         </section>
 
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
+        <section className="settings-setting-section">
+          <div className="settings-setting-section-header">
+            <div>
               <h3>OpenAI-compatible API Key</h3>
               <p>用于外部客户端调用 /v1/chat/completions，和网页登录会话分离。</p>
             </div>
           </div>
-          <div className="settings-card-body">
+          <div className="settings-inline-panel settings-inline-panel-quiet">
             <form className="settings-token-create-row" onSubmit={handleCreateAPIKey}>
               <input
                 value={keyName}
@@ -477,79 +481,77 @@ const SystemSettings: React.FC<SystemSettingsProps> = ({ onLogout }) => {
                 </div>
               </div>
             )}
+          </div>
 
-            <div className="settings-security-list">
-              {apiKeys.length === 0 && <div className="settings-empty-row">暂无 API Key</div>}
-              {apiKeys.map((apiKey) => (
-                <div className="settings-security-row" key={apiKey.id}>
-                  <div>
-                    <strong>{apiKey.name}</strong>
-                    <span>{apiKey.prefix}... · {formatAPIKeyScopes(apiKey.scopes)} · 创建 {formatDateTime(apiKey.createdAt)}</span>
-                  </div>
-                  <div className="settings-security-row-meta">
-                    <span>{apiKey.revokedAt ? '已撤销' : apiKey.lastUsedAt ? `最近使用 ${formatDateTime(apiKey.lastUsedAt)}` : '未使用'}</span>
-                    {!apiKey.revokedAt && (
-                      <button
-                        className="settings-action-btn settings-action-btn-danger"
-                        disabled={busyAction === apiKey.id}
-                        onClick={() => void handleRevokeAPIKey(apiKey.id)}
-                        type="button"
-                      >
-                        撤销
-                      </button>
-                    )}
-                  </div>
+          <div className="settings-security-list settings-api-key-list">
+            {apiKeys.length === 0 && <div className="settings-empty-row">暂无 API Key</div>}
+            {apiKeys.map((apiKey) => (
+              <div className="settings-security-row" key={apiKey.id}>
+                <div>
+                  <strong>{apiKey.name}</strong>
+                  <span>{apiKey.prefix}... · {formatAPIKeyScopes(apiKey.scopes)} · 创建 {formatDateTime(apiKey.createdAt)}</span>
                 </div>
-              ))}
-            </div>
+                <div className="settings-security-row-meta">
+                  <span>{apiKey.revokedAt ? '已撤销' : apiKey.lastUsedAt ? `最近使用 ${formatDateTime(apiKey.lastUsedAt)}` : '未使用'}</span>
+                  {!apiKey.revokedAt && (
+                    <button
+                      className="settings-action-btn settings-action-btn-danger"
+                      disabled={busyAction === apiKey.id}
+                      onClick={() => void handleRevokeAPIKey(apiKey.id)}
+                      type="button"
+                    >
+                      撤销
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
 
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
+        <section className="settings-setting-section">
+          <div className="settings-setting-section-header">
+            <div>
               <h3>安全事件</h3>
               <p>记录登录、改密、API Key 变更等关键动作。</p>
             </div>
           </div>
-          <div className="settings-card-body">
-            <div className="settings-security-list settings-event-list">
-              {events.length === 0 && <div className="settings-empty-row">暂无安全事件</div>}
-              {events.slice(0, 10).map((event) => (
-                <div className="settings-security-row" key={event.id}>
-                  <div>
-                    <strong>{eventLabelMap[event.type] || event.type}</strong>
-                    <span>{event.message || '已记录'}{event.ip ? ` · ${event.ip}` : ''}</span>
-                  </div>
-                  <div className="settings-security-row-meta">
-                    <span>{formatDateTime(event.createdAt)}</span>
-                  </div>
+          <div className="settings-security-list settings-event-list">
+            {events.length === 0 && <div className="settings-empty-row">暂无安全事件</div>}
+            {events.slice(0, 10).map((event) => (
+              <div className="settings-security-row" key={event.id}>
+                <div>
+                  <strong>{eventLabelMap[event.type] || event.type}</strong>
+                  <span>{event.message || '已记录'}{event.ip ? ` · ${event.ip}` : ''}</span>
                 </div>
-              ))}
-            </div>
+                <div className="settings-security-row-meta">
+                  <span>{formatDateTime(event.createdAt)}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
 
-        <section className="settings-card settings-card-danger">
-          <div className="settings-card-header">
-            <div className="settings-card-header-copy">
-              <h3>会话操作</h3>
-              <p>退出当前设备，或撤销所有已登录设备。</p>
-            </div>
-          </div>
-          <div className="settings-card-body">
-            <div className="settings-danger-actions settings-danger-actions-row">
-              <button className="btn-danger settings-logout-btn-full" onClick={() => setShowLogoutConfirm(true)} type="button">
-                退出登录
-              </button>
-              <button
-                className="btn-danger settings-logout-btn-full"
-                disabled={busyAction === 'logout-all'}
-                onClick={() => setShowLogoutAllConfirm(true)}
-                type="button"
-              >
-                退出所有设备
-              </button>
+        <section className="settings-setting-section settings-setting-section-danger">
+          <div className="settings-setting-list">
+            <div className="settings-setting-row">
+              <div className="settings-setting-row-main">
+                <strong>会话操作</strong>
+                <span>退出当前设备，或撤销所有已登录设备。</span>
+              </div>
+              <div className="settings-setting-row-action">
+                <button className="btn-danger settings-logout-btn-full" onClick={() => setShowLogoutConfirm(true)} type="button">
+                  退出登录
+                </button>
+                <button
+                  className="btn-danger settings-logout-btn-full"
+                  disabled={busyAction === 'logout-all'}
+                  onClick={() => setShowLogoutAllConfirm(true)}
+                  type="button"
+                >
+                  退出所有设备
+                </button>
+              </div>
             </div>
           </div>
         </section>

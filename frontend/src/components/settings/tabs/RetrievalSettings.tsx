@@ -170,14 +170,15 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
                 onChange={(event) => onRetrievalConfigChange('maxContextChars', Number(event.target.value))}
               />
             </div>
-            <div className="settings-form-group settings-form-group-checkbox">
+            <div className="settings-form-group settings-form-group-checkbox settings-form-group-checkbox-stacked">
+              <label className="settings-form-label">低置信自动扩展</label>
               <label className="settings-checkbox-label">
                 <input
                   type="checkbox"
                   checked={config.enableLowConfidenceBoost}
                   onChange={(event) => onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)}
                 />
-                <span>低置信自动扩展</span>
+                <span>{config.enableLowConfidenceBoost ? '已启用' : '未启用'}</span>
               </label>
               <small>当知识库范围召回置信偏低时，扩大候选并尝试补充更多片段。</small>
             </div>

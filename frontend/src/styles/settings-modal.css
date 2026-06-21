@@ -8,21 +8,22 @@
    ========================================================================== */
 
 .settings-modal-backdrop {
-  --settings-modal-width: 1088px;
-  --settings-modal-max-height: 760px;
-  --settings-sidebar-width: 264px;
-  --settings-viewport-padding-block: clamp(var(--space-5), 5vh, var(--space-10));
-  --settings-viewport-padding-inline: clamp(var(--space-5), 5vw, var(--space-12));
-  --settings-content-padding: clamp(var(--space-5), 2vw, var(--space-8));
-  --settings-backdrop-bg: rgba(15, 23, 42, 0.46);
-  --settings-surface: var(--bg-primary);
-  --settings-surface-muted: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-primary));
-  --settings-surface-raised: color-mix(in srgb, var(--bg-secondary) 72%, var(--bg-primary));
-  --settings-border: color-mix(in srgb, var(--border-color) 68%, transparent);
+  --settings-modal-width: 1440px;
+  --settings-modal-max-height: 820px;
+  --settings-sidebar-width: clamp(248px, 21vw, 318px);
+  --settings-viewport-padding-block: clamp(24px, 4vh, 48px);
+  --settings-viewport-padding-inline: clamp(24px, 4vw, 56px);
+  --settings-content-padding: clamp(40px, 3.8vw, 60px);
+  --settings-backdrop-bg: rgba(15, 23, 42, 0.32);
+  --settings-surface: color-mix(in srgb, var(--bg-primary) 96%, var(--bg-secondary));
+  --settings-surface-muted: color-mix(in srgb, var(--bg-secondary) 76%, var(--bg-primary));
+  --settings-surface-raised: color-mix(in srgb, var(--bg-secondary) 54%, var(--bg-primary));
+  --settings-border: color-mix(in srgb, var(--border-color) 48%, transparent);
   --settings-border-strong: color-mix(in srgb, var(--border-color-hover) 72%, transparent);
-  --settings-nav-hover: color-mix(in srgb, var(--bg-tertiary) 62%, transparent);
-  --settings-nav-active-bg: color-mix(in srgb, var(--color-primary) 8%, var(--bg-primary));
-  --settings-nav-active-text: var(--text-primary);
+  --settings-nav-hover: color-mix(in srgb, var(--bg-tertiary) 46%, var(--bg-secondary));
+  --settings-nav-active-bg: color-mix(in srgb, var(--color-primary) 8%, var(--settings-surface-muted));
+  --settings-nav-active-text: color-mix(in srgb, var(--color-primary) 74%, var(--text-primary));
+  --settings-nav-active-indicator: color-mix(in srgb, var(--color-primary) 80%, var(--text-primary));
   --settings-nav-active-shadow: none;
   --settings-focus-ring: var(--shadow-focus);
 
@@ -48,16 +49,20 @@
    ========================================================================== */
 
 .settings-modal.settings-modal-settings {
+  position: relative;
   width: min(
     var(--settings-modal-width),
     calc(100vw - var(--settings-viewport-padding-inline) - var(--settings-viewport-padding-inline))
   );
-  height: min(82vh, var(--settings-modal-max-height));
+  height: min(
+    var(--settings-modal-max-height),
+    calc(100svh - var(--settings-viewport-padding-block) - var(--settings-viewport-padding-block))
+  );
   max-height: calc(100svh - var(--settings-viewport-padding-block) - var(--settings-viewport-padding-block));
   background: var(--settings-surface);
-  border: 1px solid var(--settings-border);
-  border-radius: var(--radius-xl);
-  box-shadow: 0 24px 72px rgba(15, 23, 42, 0.2);
+  border: 1px solid color-mix(in srgb, var(--border-color) 64%, transparent);
+  border-radius: var(--radius-2xl);
+  box-shadow: 0 22px 64px rgba(15, 23, 42, 0.16);
   display: flex;
   overflow: hidden;
   animation: modalSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
@@ -82,7 +87,7 @@
   width: var(--settings-sidebar-width);
   flex-shrink: 0;
   background: var(--settings-surface-muted);
-  border-right: 1px solid var(--settings-border);
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 36%, transparent);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -93,13 +98,13 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-5) var(--space-5) var(--space-3);
-  border-bottom: 1px solid var(--settings-border);
+  padding: var(--space-6) var(--space-5) var(--space-4);
+  border-bottom: 0;
 }
 
 .settings-sidebar-header h2 {
   margin: 0;
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   font-weight: 760;
   color: var(--text-primary);
   letter-spacing: 0;
@@ -139,33 +144,47 @@
 /* 导航菜单 */
 .settings-nav {
   flex: 1;
-  padding: var(--space-3) var(--space-3) var(--space-4);
+  padding: clamp(44px, 5vh, 64px) var(--space-4) var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   overflow-y: auto;
 }
 
 .settings-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   width: 100%;
-  min-height: 50px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
+  min-height: 48px;
+  padding: 0 var(--space-4);
+  border: 0;
   background: transparent;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--text-primary) 78%, var(--text-secondary));
   font-family: inherit;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
   text-align: left;
+  overflow: hidden;
+}
+
+.settings-nav-item::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--settings-nav-active-indicator);
+  content: '';
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
 .settings-nav-item:hover {
   background: var(--settings-nav-hover);
-  border-color: var(--settings-border);
   color: var(--text-primary);
 }
 
@@ -176,60 +195,90 @@
 
 .settings-nav-item.active {
   background: var(--settings-nav-active-bg);
-  border-color: color-mix(in srgb, var(--color-primary) 18%, transparent);
-  color: var(--color-primary);
-  box-shadow: inset 2px 0 0 var(--color-primary);
+  color: var(--settings-nav-active-text);
+  box-shadow: none;
   border-radius: var(--radius-md);
 }
 
+.settings-nav-item.active::before {
+  opacity: 1;
+}
+
 .settings-nav-item.active .settings-nav-label {
-  color: var(--color-primary);
+  color: var(--settings-nav-active-text);
 }
 
 .settings-nav-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-primary) 84%, transparent);
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: var(--text-md);
   font-weight: 760;
   line-height: 1;
   text-align: center;
   flex: 0 0 auto;
 }
 
+.settings-nav-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+}
+
 .settings-nav-item.active .settings-nav-icon {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: transparent;
+  color: currentColor;
 }
 
 .settings-nav-text {
   display: grid;
-  gap: 2px;
   min-width: 0;
 }
 
 .settings-nav-label {
   overflow: hidden;
-  font-size: var(--text-md);
-  font-weight: 700;
+  font-size: clamp(0.94rem, 0.95vw, 1.06rem);
+  font-weight: 650;
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .settings-nav-description {
-  overflow: hidden;
-  color: currentColor;
-  font-size: var(--text-xs);
-  line-height: 1.25;
-  opacity: 0.78;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
+}
+
+.settings-modal-close {
+  position: absolute;
+  top: clamp(26px, 2.8vw, 40px);
+  right: clamp(28px, 2.2vw, 42px);
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: color-mix(in srgb, var(--text-primary) 64%, var(--text-secondary));
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-modal-close:hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 76%, transparent);
+  color: var(--text-primary);
+}
+
+.settings-modal-close:focus-visible {
+  outline: none;
+  box-shadow: var(--settings-focus-ring);
 }
 
 /* 侧边栏底部 */
@@ -280,20 +329,36 @@
 
 .settings-main-header {
   display: block;
-  padding: var(--space-5) var(--settings-content-padding) var(--space-3);
+  padding: clamp(48px, 4.8vh, 64px) var(--settings-content-padding) var(--space-4);
   background: var(--settings-surface);
   flex-shrink: 0;
+}
+
+.settings-main-header > div {
+  max-width: 1340px;
+  margin: 0;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--settings-border);
 }
 
 .settings-main-header h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: var(--text-xl);
-  font-weight: 800;
+  font-size: clamp(1.55rem, 1.55vw, 1.85rem);
+  font-weight: 760;
   line-height: 1.2;
 }
 
-.settings-main-header p {
+.settings-main-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.settings-main-header p:not(.settings-main-description) {
   max-width: 560px;
   margin: var(--space-1) 0 0;
   color: var(--text-secondary);
@@ -363,9 +428,14 @@
 .settings-content-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4) var(--settings-content-padding) var(--settings-content-padding);
+  padding: var(--space-4) var(--settings-content-padding) clamp(48px, 6vh, 84px);
   animation: tabContentFadeIn 0.18s ease-out;
   outline: none;
+}
+
+.settings-content-scroll > .settings-tab-content {
+  max-width: 1340px;
+  margin: 0;
 }
 
 .settings-content-scroll:focus-visible {
@@ -624,15 +694,16 @@
    ========================================================================== */
 
 [data-theme="dark"] .settings-modal-backdrop {
-  --settings-backdrop-bg: rgba(5, 8, 22, 0.72);
-  --settings-surface: var(--bg-primary);
-  --settings-surface-muted: color-mix(in srgb, var(--bg-secondary) 64%, var(--bg-primary));
-  --settings-surface-raised: rgba(30, 41, 59, 0.42);
-  --settings-border: rgba(148, 163, 184, 0.08);
+  --settings-backdrop-bg: rgba(5, 8, 22, 0.62);
+  --settings-surface: color-mix(in srgb, var(--bg-primary) 94%, var(--bg-secondary));
+  --settings-surface-muted: color-mix(in srgb, var(--bg-secondary) 52%, var(--bg-primary));
+  --settings-surface-raised: rgba(30, 41, 59, 0.3);
+  --settings-border: rgba(148, 163, 184, 0.07);
   --settings-border-strong: rgba(203, 213, 225, 0.18);
-  --settings-nav-hover: rgba(96, 165, 250, 0.1);
-  --settings-nav-active-bg: rgba(96, 165, 250, 0.14);
-  --settings-nav-active-text: var(--text-primary);
+  --settings-nav-hover: rgba(148, 163, 184, 0.08);
+  --settings-nav-active-bg: color-mix(in srgb, var(--color-primary) 15%, var(--settings-surface-muted));
+  --settings-nav-active-text: color-mix(in srgb, var(--color-primary) 68%, var(--text-primary));
+  --settings-nav-active-indicator: color-mix(in srgb, var(--color-primary) 76%, #ffffff);
   --settings-nav-active-shadow: none;
 }
 
@@ -664,18 +735,25 @@
 @media (max-width: 768px) {
   .settings-modal-backdrop {
     --settings-content-padding: var(--space-4);
-    padding: var(--space-3);
+    padding: 0;
   }
   
   .settings-modal.settings-modal-settings {
     flex-direction: column;
-    width: min(100%, 720px);
-    height: min(95vh, 860px);
+    width: 100%;
+    height: 100svh;
+    max-height: 100svh;
+    border-radius: 0;
+  }
+
+  .settings-modal-close {
+    top: var(--space-3);
+    right: var(--space-3);
   }
   
   .settings-sidebar {
     width: 100%;
-    max-height: 190px;
+    max-height: 132px;
     border-right: none;
   }
 
@@ -687,20 +765,29 @@
     flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: var(--space-2) var(--space-2);
+    padding: calc(var(--space-5) + 30px) var(--space-3) var(--space-3);
     scroll-snap-type: x proximity;
   }
   
   .settings-nav-item {
     flex-shrink: 0;
-    width: min(210px, 62vw);
+    width: auto;
+    min-width: 152px;
     min-height: 56px;
-    padding: var(--space-2) var(--space-3);
+    padding: 0 var(--space-4);
     scroll-snap-align: start;
   }
 
   .settings-main-header {
-    display: none;
+    padding: var(--space-5) var(--settings-content-padding) var(--space-3);
+  }
+
+  .settings-main-header > div {
+    padding-bottom: var(--space-3);
+  }
+
+  .settings-main-header h3 {
+    font-size: var(--text-2xl);
   }
   
   .settings-sidebar-footer {
