@@ -338,7 +338,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     directoryUploadTask.status === 'uploading' ||
     directoryUploadTask.status === 'canceling'
   const canContinueUpload =
-    (directoryUploadTask.status === 'canceled' || directoryUploadTask.status === 'partial-failed') &&
+    (
+      directoryUploadTask.status === 'canceled' ||
+      directoryUploadTask.status === 'partial-failed' ||
+      directoryUploadTask.status === 'failed'
+    ) &&
     directoryUploadTask.pendingFiles > 0
   const isTaskActive =
     directoryUploadTask.status === 'scanning' ||
