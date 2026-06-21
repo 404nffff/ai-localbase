@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { APP_VERSION } from '../utils/appInfo'
 import '../styles/Login.css'
 
 const getPasswordStrength = (password: string) => {
@@ -22,8 +23,6 @@ const getPasswordStrength = (password: string) => {
   }
   return { label: '偏弱', tone: 'weak', hint: '至少 8 位，推荐 16 位以上' }
 }
-
-const appVersion = (import.meta.env.VITE_APP_VERSION || '').trim()
 
 const Login: React.FC = () => {
   const {
@@ -411,9 +410,9 @@ const Login: React.FC = () => {
           </div>
         </div>
 
-        {appVersion && (
+        {APP_VERSION && (
           <div className="login-version">
-            {appVersion}
+            {APP_VERSION}
           </div>
         )}
       </div>

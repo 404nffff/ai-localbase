@@ -5,9 +5,10 @@ import AISettings from './tabs/AISettings'
 import RetrievalSettings from './tabs/RetrievalSettings'
 import MCPSettings from './tabs/MCPSettings'
 import SystemSettings from './tabs/SystemSettings'
+import AboutSettings from './tabs/AboutSettings'
 
-type SettingsTab = 'general' | 'ai' | 'retrieval' | 'mcp' | 'system'
-type SettingsNavIconName = 'user' | 'settings' | 'shield' | 'cube' | 'database'
+type SettingsTab = 'general' | 'ai' | 'retrieval' | 'mcp' | 'system' | 'about'
+type SettingsNavIconName = 'user' | 'settings' | 'shield' | 'cube' | 'database' | 'info'
 
 interface SettingsPanelProps {
   config: AppConfig
@@ -41,6 +42,7 @@ const navItems: SettingsNavItem[] = [
   { id: 'mcp', label: '系统授权', description: 'MCP 工具调用与访问令牌', icon: 'shield' },
   { id: 'ai', label: '模型', description: '模型、接口与推理参数', icon: 'cube' },
   { id: 'retrieval', label: '检索策略', description: '召回、重排与上下文规模', icon: 'database' },
+  { id: 'about', label: '关于', description: '版本、发布与项目资源', icon: 'info' },
 ]
 
 const getTabButtonId = (tabId: SettingsTab) => `settings-tab-${tabId}`
@@ -82,6 +84,14 @@ const SettingsNavIcon: React.FC<{ name: SettingsNavIconName }> = ({ name }) => {
           <ellipse cx="12" cy="6" rx="7" ry="3.2" stroke="currentColor" strokeWidth="1.8" />
           <path d="M5 6V12C5 13.8 8.1 15.2 12 15.2C15.9 15.2 19 13.8 19 12V6" stroke="currentColor" strokeWidth="1.8" />
           <path d="M5 12V18C5 19.8 8.1 21.2 12 21.2C15.9 21.2 19 19.8 19 18V12" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      )
+    case 'info':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M12 10.8V16.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M12 7.6H12.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
         </svg>
       )
     default:
@@ -188,6 +198,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         )
       case 'system':
         return <SystemSettings onLogout={onLogout} />
+      case 'about':
+        return <AboutSettings />
       default:
         return null
     }
