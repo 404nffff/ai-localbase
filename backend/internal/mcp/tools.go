@@ -19,13 +19,16 @@ type AppServiceReader interface {
 	ListKnowledgeBases() []model.KnowledgeBase
 	GetKnowledgeBaseDocuments(id string) ([]model.Document, error)
 	GetDocumentDetail(knowledgeBaseID, documentID, focusChunkID string) (model.DocumentDetailResponse, error)
+	GetKnowledgeBaseHealth(knowledgeBaseID string) (model.KnowledgeBaseHealthResponse, error)
 	ReindexDocument(knowledgeBaseID, documentID string) (model.Document, error)
 	ListConversations() ([]model.ConversationListItem, error)
 	GetConversation(id string) (*model.Conversation, error)
 	BuildRetrievalContext(req model.ChatCompletionRequest) (string, []map[string]string, error)
 	DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error)
 	TryBuildStructuredDataAnswer(req model.ChatCompletionRequest) (string, []map[string]string, bool, error)
+	ListEvalRuns(knowledgeBaseID, datasetID string) []model.EvalRunSummary
 	GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (model.GenerateEvalDatasetResponse, error)
+	AddEvalDatasetCandidate(req model.AddEvalDatasetCandidateRequest) (model.AddEvalDatasetCandidateResponse, error)
 	CreateKnowledgeBase(req model.KnowledgeBaseInput) (model.KnowledgeBase, error)
 	DeleteKnowledgeBase(id string) (int, error)
 	DeleteDocument(knowledgeBaseID, documentID string) (model.Document, error)
@@ -355,6 +358,308 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					summary += " 当前结果低置信，可沉淀为评测样本。"
 				}
 				return NewTextResult(summary, map[string]any{"debug": response}), nil
+			},
+		},
+		{
+			Name:        "answer_with_sources",
+			Description: "基于知识库或文档生成带来源的答案草稿。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"query":           map[string]any{"type": "string", "description": "用户问题"},
+					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID，可选"},
+					"documentId":      map[string]any{"type": "string", "description": "文档 ID，可选"},
+				},
+				[]string{"query"},
+			),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				query, err := requiredStringArg(args, "query")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				knowledgeBaseID := optionalStringArg(args, "knowledgeBaseId")
+				documentID := optionalStringArg(args, "documentId")
+				if knowledgeBaseID == "" && documentID == "" {
+					return ToolCallResult{}, fmt.Errorf("knowledgeBaseId or documentId is required")
+				}
+
+				chatReq := model.ChatCompletionRequest{
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					Messages: []model.ChatMessage{{
+						Role:    "user",
+						Content: query,
+					}},
+					Embedding: embeddingModelConfigFromAppConfig(appService.GetConfig()),
+				}
+				answer, sources, structuredUsed, err := appService.TryBuildStructuredDataAnswer(chatReq)
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				answer = strings.TrimSpace(answer)
+				mode := "structured"
+				if !structuredUsed {
+					mode = "retrieval_context"
+					answer, sources, err = appService.BuildRetrievalContext(chatReq)
+					if err != nil {
+						return ToolCallResult{}, err
+					}
+					answer = strings.TrimSpace(answer)
+				}
+				warnings := []string{}
+				if answer == "" {
+					answer = "未检索到可用于回答的内容。"
+					warnings = append(warnings, "未找到相关证据，建议换用更具体的问题或扩大检索范围。")
+				}
+				if len(sources) == 0 {
+					warnings = append(warnings, "本次结果没有可引用来源。")
+				}
+
+				return ToolCallResult{
+					Summary: fmt.Sprintf("已生成带来源答案草稿，模式为 %s，来源 %d 条。", mode, len(sources)),
+					Content: []ToolContent{{Type: "text", Text: answer}},
+					Data: map[string]any{
+						"answer":          answer,
+						"sources":         sources,
+						"mode":            mode,
+						"query":           query,
+						"knowledgeBaseId": knowledgeBaseID,
+						"documentId":      documentID,
+					},
+					Warnings: warnings,
+					NextActions: []string{
+						"需要排查命中质量时调用 debug_retrieval。",
+						"需要沉淀回归样本时调用 create_eval_case_from_query。",
+					},
+				}, nil
+			},
+		},
+		{
+			Name:            "inspect_knowledge_base_quality",
+			Description:     "聚合知识库索引健康、最近评估结果和改进建议。参数 knowledgeBaseId 为必填。",
+			InputSchema:     requiredStringPropertySchema("knowledgeBaseId", "知识库 ID"),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				health, err := appService.GetKnowledgeBaseHealth(knowledgeBaseID)
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				evalRuns := appService.ListEvalRuns(knowledgeBaseID, "")
+				var latestEvalRun any
+				if len(evalRuns) > 0 {
+					latestEvalRun = evalRuns[0]
+				}
+				insights := buildKnowledgeBaseQualityInsights(health, evalRuns)
+				warnings := []string{}
+				if health.Status != "healthy" {
+					warnings = append(warnings, fmt.Sprintf("知识库健康状态为 %s。", health.Status))
+				}
+
+				return ToolCallResult{
+					Summary: fmt.Sprintf("知识库《%s》健康分 %d，状态 %s，最近评估 %d 次。", health.Name, health.Score, health.Status, len(evalRuns)),
+					Content: []ToolContent{{Type: "text", Text: strings.Join(insights, "\n")}},
+					Data: map[string]any{
+						"health":        health,
+						"latestEvalRun": latestEvalRun,
+						"evalRuns":      evalRuns,
+						"insights":      insights,
+					},
+					Warnings: warnings,
+					NextActions: []string{
+						"需要定位单个问题时调用 debug_retrieval。",
+						"需要补充覆盖时调用 create_eval_case_from_query 或 generate_eval_dataset。",
+					},
+				}, nil
+			},
+		},
+		{
+			Name:        "compare_retrieval_modes",
+			Description: "对同一问题比较 dense 与 hybrid 检索结果。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"query":           map[string]any{"type": "string", "description": "检索问题"},
+					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID，可选"},
+					"documentId":      map[string]any{"type": "string", "description": "文档 ID，可选"},
+					"topK":            map[string]any{"type": "integer", "description": "每种模式最多返回多少个命中，默认 5"},
+				},
+				[]string{"query"},
+			),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				query, err := requiredStringArg(args, "query")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				knowledgeBaseID := optionalStringArg(args, "knowledgeBaseId")
+				documentID := optionalStringArg(args, "documentId")
+				if knowledgeBaseID == "" && documentID == "" {
+					return ToolCallResult{}, fmt.Errorf("knowledgeBaseId or documentId is required")
+				}
+				topK := optionalIntArg(args, "topK")
+				if topK <= 0 {
+					topK = 5
+				}
+				dense, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+					Query:           query,
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					TopK:            topK,
+					SearchMode:      "dense",
+				})
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				hybrid, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+					Query:           query,
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					TopK:            topK,
+					SearchMode:      "hybrid",
+				})
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				recommendation := recommendRetrievalMode(dense, hybrid)
+				return ToolCallResult{
+					Summary: fmt.Sprintf("检索模式对比完成：dense 命中 %d，hybrid 命中 %d，建议 %s。", dense.Count, hybrid.Count, recommendation),
+					Content: []ToolContent{{Type: "text", Text: buildRetrievalModeComparisonText(dense, hybrid, recommendation)}},
+					Data: map[string]any{
+						"query":           query,
+						"knowledgeBaseId": knowledgeBaseID,
+						"documentId":      documentID,
+						"recommendation":  recommendation,
+						"dense":           dense,
+						"hybrid":          hybrid,
+					},
+					Warnings: retrievalComparisonWarnings(dense, hybrid),
+					NextActions: []string{
+						"如果两种模式均低置信，建议补充文档或创建评测样本。",
+						"如果 hybrid 明显更稳，可在检索策略中启用混合检索。",
+					},
+				}, nil
+			},
+		},
+		{
+			Name:        "create_eval_case_from_query",
+			Description: "根据一次检索问题创建待审核评测样本。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"query":           map[string]any{"type": "string", "description": "需要沉淀为评测样本的问题"},
+					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID，可选"},
+					"documentId":      map[string]any{"type": "string", "description": "文档 ID，可选"},
+					"topK":            map[string]any{"type": "integer", "description": "生成样本时参考的命中数量，默认 5"},
+				},
+				[]string{"query"},
+			),
+			ReadOnly:        false,
+			PermissionLevel: ToolPermissionWrite,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				query, err := requiredStringArg(args, "query")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				knowledgeBaseID := optionalStringArg(args, "knowledgeBaseId")
+				documentID := optionalStringArg(args, "documentId")
+				if knowledgeBaseID == "" && documentID == "" {
+					return ToolCallResult{}, fmt.Errorf("knowledgeBaseId or documentId is required")
+				}
+				topK := optionalIntArg(args, "topK")
+				if topK <= 0 {
+					topK = 5
+				}
+				debug, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+					Query:           query,
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					TopK:            topK,
+				})
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				candidate := buildEvalCaseFromDebugResponse(debug)
+				response, err := appService.AddEvalDatasetCandidate(model.AddEvalDatasetCandidateRequest{
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					Item:            candidate,
+				})
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				return ToolCallResult{
+					Summary: fmt.Sprintf("已创建待审核评测样本：%s。", response.Item.ID),
+					Content: []ToolContent{{Type: "text", Text: fmt.Sprintf("问题：%s\n答案草稿：%s", response.Item.Question, response.Item.Answer)}},
+					Data: map[string]any{
+						"candidate": response.Item,
+						"dataset":   response.Dataset,
+						"created":   response.Created,
+						"debug":     debug,
+					},
+					Warnings: evalCaseWarningsFromDebug(debug),
+					NextActions: []string{
+						"在评估数据集中审核并启用该样本。",
+						"审核通过后运行评估，观察 Hit Rate、MRR 和证据支撑率。",
+					},
+				}, nil
+			},
+		},
+		{
+			Name:        "summarize_document",
+			Description: "返回文档摘要、索引诊断和关键 chunk 预览。参数 knowledgeBaseId、documentId 为必填。",
+			InputSchema: requiredStringPropertiesSchema(map[string]string{
+				"knowledgeBaseId": "知识库 ID",
+				"documentId":      "文档 ID",
+			}),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				documentID, err := requiredStringArg(args, "documentId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				detail, err := appService.GetDocumentDetail(knowledgeBaseID, documentID, "")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				summary := documentSummaryText(detail)
+				warnings := []string{}
+				if !detail.Diagnostics.RawContentAvailable {
+					warnings = append(warnings, "文档原文不可用，摘要只能基于已保存的索引信息。")
+				}
+				if detail.Diagnostics.ChunkCount == 0 {
+					warnings = append(warnings, "文档没有可检索 chunk，建议重建索引。")
+				}
+				return ToolCallResult{
+					Summary: fmt.Sprintf("文档《%s》摘要完成，chunk %d 个。", detail.Document.Name, detail.Diagnostics.ChunkCount),
+					Content: []ToolContent{{Type: "text", Text: summary}},
+					Data: map[string]any{
+						"knowledgeBaseId": knowledgeBaseID,
+						"document":        detail.Document,
+						"diagnostics":     detail.Diagnostics,
+						"summary":         summary,
+						"chunks":          previewDocumentChunks(detail.Chunks, 5),
+					},
+					Warnings: warnings,
+					NextActions: []string{
+						"需要验证某个问题时调用 answer_with_sources。",
+						"需要查看完整命中链路时调用 debug_retrieval。",
+					},
+				}, nil
 			},
 		},
 		{
@@ -838,6 +1143,252 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 
 func DefaultRegistry(appService *service.AppService) *ToolRegistry {
 	return NewToolRegistry(NewReadOnlyTools(appService)...)
+}
+
+func buildKnowledgeBaseQualityInsights(health model.KnowledgeBaseHealthResponse, evalRuns []model.EvalRunSummary) []string {
+	insights := make([]string, 0, 8)
+	if health.Score >= 90 {
+		insights = append(insights, "索引健康度较好，当前更适合继续补充评测覆盖。")
+	} else {
+		insights = append(insights, fmt.Sprintf("索引健康分为 %d，建议先处理未索引、失败或需要重建的文档。", health.Score))
+	}
+	if health.Metrics.DocumentCount == 0 {
+		insights = append(insights, "知识库暂无文档，需要先导入内容。")
+	}
+	if health.Metrics.FailedCount > 0 {
+		insights = append(insights, fmt.Sprintf("存在 %d 个索引失败文档，优先查看错误并重新导入。", health.Metrics.FailedCount))
+	}
+	if health.Metrics.EmptyContentCount > 0 {
+		insights = append(insights, fmt.Sprintf("存在 %d 个原文不可用文档，可能影响摘要、引用和重建索引。", health.Metrics.EmptyContentCount))
+	}
+	if health.Metrics.VectorCount == 0 && health.Metrics.DocumentCount > 0 {
+		insights = append(insights, "当前没有向量索引，RAG 检索质量会明显受限。")
+	}
+	if len(health.Recommendations) > 0 {
+		insights = append(insights, health.Recommendations...)
+	}
+	if len(evalRuns) == 0 {
+		insights = append(insights, "暂无评估历史，建议先生成评测集并运行一次基线评估。")
+		return insights
+	}
+
+	latest := evalRuns[0]
+	metrics := latest.Metrics
+	if metrics.TotalCases == 0 {
+		insights = append(insights, "最近评估没有有效样本，建议检查评测集是否启用样本。")
+		return insights
+	}
+	if metrics.HitRate < 0.8 {
+		insights = append(insights, fmt.Sprintf("最近评估 Hit Rate 为 %s，建议检查漏召回问题。", formatPercent(metrics.HitRate)))
+	}
+	if metrics.MRR < 0.7 {
+		insights = append(insights, fmt.Sprintf("最近评估 MRR 为 %s，建议优化重排策略或 chunk 粒度。", formatPercent(metrics.MRR)))
+	}
+	if metrics.LowConfidence > 0 {
+		insights = append(insights, fmt.Sprintf("最近评估出现 %d 个低置信样本，建议沉淀为回归用例。", metrics.LowConfidence))
+	}
+	if metrics.EvidenceSupportRate > 0 && metrics.EvidenceSupportRate < 0.85 {
+		insights = append(insights, fmt.Sprintf("证据支撑率为 %s，建议排查引用和答案依据是否一致。", formatPercent(metrics.EvidenceSupportRate)))
+	}
+	if metrics.LatencyP95Ms > 0 && metrics.LatencyP95Ms > 3000 {
+		insights = append(insights, fmt.Sprintf("P95 延迟为 %d ms，建议压缩候选量或上下文长度。", metrics.LatencyP95Ms))
+	}
+	if len(insights) == 0 {
+		insights = append(insights, "暂无明显质量风险。")
+	}
+	return insights
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.0f%%", value*100)
+}
+
+func recommendRetrievalMode(dense, hybrid model.RetrievalDebugResponse) string {
+	denseScore := retrievalModeScore(dense)
+	hybridScore := retrievalModeScore(hybrid)
+	if hybridScore > denseScore+0.05 {
+		return "hybrid"
+	}
+	if denseScore > hybridScore+0.05 {
+		return "dense"
+	}
+	return "tie"
+}
+
+func retrievalModeScore(response model.RetrievalDebugResponse) float64 {
+	score := response.Confidence.TopScore
+	if response.Confidence.EvidenceCoverage > score {
+		score = response.Confidence.EvidenceCoverage
+	}
+	if response.LowConfidence {
+		score -= 0.2
+	}
+	if response.Count == 0 {
+		score -= 0.3
+	}
+	if response.DeterministicUsed {
+		score += 0.1
+	}
+	return score
+}
+
+func buildRetrievalModeComparisonText(dense, hybrid model.RetrievalDebugResponse, recommendation string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("dense：命中 %d，置信 %s，TopScore %.3f，耗时 %d ms。", dense.Count, dense.Confidence.Status, dense.Confidence.TopScore, dense.ElapsedMs),
+		fmt.Sprintf("hybrid：命中 %d，置信 %s，TopScore %.3f，耗时 %d ms。", hybrid.Count, hybrid.Confidence.Status, hybrid.Confidence.TopScore, hybrid.ElapsedMs),
+		fmt.Sprintf("建议：%s。", recommendation),
+	}, "\n")
+}
+
+func retrievalComparisonWarnings(dense, hybrid model.RetrievalDebugResponse) []string {
+	warnings := []string{}
+	if dense.LowConfidence && hybrid.LowConfidence {
+		warnings = append(warnings, "dense 与 hybrid 均为低置信，建议补充文档内容或创建评测样本。")
+	}
+	if dense.Count == 0 || hybrid.Count == 0 {
+		warnings = append(warnings, "至少一种检索模式没有命中结果。")
+	}
+	return warnings
+}
+
+func buildEvalCaseFromDebugResponse(debug model.RetrievalDebugResponse) model.EvalGroundTruthCase {
+	if debug.EvalCandidate != nil {
+		candidate := *debug.EvalCandidate
+		if strings.TrimSpace(candidate.ID) == "" {
+			candidate.ID = util.NextID("mcp-eval-case")
+		}
+		return candidate
+	}
+
+	answer := strings.TrimSpace(debug.ContextPreview)
+	if answer == "" && len(debug.Items) > 0 {
+		answer = debug.Items[0].Text
+	}
+	answer = truncateText(answer, 800)
+	snippets := snippetsFromDebugItems(debug.Items, 3)
+	if len(snippets) == 0 && answer != "" {
+		snippets = []string{truncateText(answer, 120)}
+	}
+	return model.EvalGroundTruthCase{
+		ID:              util.NextID("mcp-eval-case"),
+		Question:        debug.Query,
+		Answer:          answer,
+		AnswerSnippets:  snippets,
+		SourceDocuments: sourceDocumentsFromDebugItems(debug.Items, 5),
+		AnswerType:      "retrieval-debug-candidate",
+		Difficulty:      "medium",
+		ReviewStatus:    "pending",
+		Disabled:        true,
+		Notes:           "created from MCP create_eval_case_from_query; review before enabling",
+	}
+}
+
+func sourceDocumentsFromDebugItems(items []model.RetrievalDebugChunk, limit int) []model.EvalSourceDocument {
+	if limit <= 0 {
+		limit = 5
+	}
+	sources := make([]model.EvalSourceDocument, 0, min(limit, len(items)))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		if strings.TrimSpace(item.DocumentID) == "" {
+			continue
+		}
+		key := item.KnowledgeBaseID + "\x00" + item.DocumentID + "\x00" + item.ID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		sources = append(sources, model.EvalSourceDocument{
+			KnowledgeBaseID: item.KnowledgeBaseID,
+			DocumentID:      item.DocumentID,
+			ChunkID:         item.ID,
+		})
+		if len(sources) >= limit {
+			break
+		}
+	}
+	return sources
+}
+
+func snippetsFromDebugItems(items []model.RetrievalDebugChunk, limit int) []string {
+	if limit <= 0 {
+		limit = 3
+	}
+	snippets := make([]string, 0, min(limit, len(items)))
+	for _, item := range items {
+		text := truncateText(strings.TrimSpace(item.Text), 120)
+		if text == "" {
+			continue
+		}
+		snippets = append(snippets, text)
+		if len(snippets) >= limit {
+			break
+		}
+	}
+	return snippets
+}
+
+func evalCaseWarningsFromDebug(debug model.RetrievalDebugResponse) []string {
+	warnings := []string{}
+	if debug.LowConfidence {
+		warnings = append(warnings, "该样本来自低置信检索结果，必须人工审核答案和证据。")
+	}
+	if len(debug.Items) == 0 {
+		warnings = append(warnings, "检索没有命中 chunk，样本答案可能为空。")
+	}
+	return warnings
+}
+
+func documentSummaryText(detail model.DocumentDetailResponse) string {
+	summary := strings.TrimSpace(detail.Summary)
+	if summary != "" {
+		return summary
+	}
+	parts := make([]string, 0, 3)
+	if preview := strings.TrimSpace(detail.Document.ContentPreview); preview != "" {
+		parts = append(parts, preview)
+	}
+	for _, chunk := range detail.Chunks {
+		text := strings.TrimSpace(chunk.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, truncateText(text, 220))
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "暂无可用摘要。"
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func previewDocumentChunks(chunks []model.DocumentChunkPreview, limit int) []model.DocumentChunkPreview {
+	if limit <= 0 {
+		limit = 5
+	}
+	if len(chunks) < limit {
+		limit = len(chunks)
+	}
+	preview := make([]model.DocumentChunkPreview, 0, limit)
+	for _, chunk := range chunks[:limit] {
+		chunk.Text = truncateText(chunk.Text, 300)
+		preview = append(preview, chunk)
+	}
+	return preview
+}
+
+func truncateText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || value == "" {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[string]any {

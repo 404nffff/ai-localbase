@@ -199,6 +199,8 @@ docker compose -f docker-compose.dev.yml up --build
 - MCP 能力自检工具：`get_mcp_capabilities`
 - 文档详情、检索调试、结构化查询、评估集生成和重建索引工具
 - MCP Job 工作流：异步导入、状态查询、取消和最近任务列表
+- Agent 友好组合工具：带来源回答、知识库质量检查、检索模式对比、评测样本创建和文档摘要
+- Settings 内置 Cherry Studio、Claude Desktop、Cursor / 通用 HTTP MCP 复制模板
 
 默认入口：
 
@@ -224,6 +226,7 @@ MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时
 - **请求头**：
   - `Content-Type: application/json`
   - `Authorization: Bearer <带 MCP scope 的 API Key>`
+- **建议 scope**：`mcp:read`、`mcp:upload`、`mcp:eval`；需要删除类工具时再额外授予 `mcp:danger`
 
 ![Cherry Studio MCP 设置页面](./assets/mcp_setting.png)
 

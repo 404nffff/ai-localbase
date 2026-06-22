@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import type { MCPConfig } from '../../../App'
 
 interface MCPSettingsProps {
@@ -8,24 +8,111 @@ interface MCPSettingsProps {
 }
 
 const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onResetMcpToken }) => {
-  const [mcpFeedback, setMcpFeedback] = useState('')
+  const [tokenFeedback, setTokenFeedback] = useState('')
+  const [templateFeedback, setTemplateFeedback] = useState('')
   const [isMcpTokenVisible, setIsMcpTokenVisible] = useState(false)
+  const [copiedTemplateId, setCopiedTemplateId] = useState('')
+
+  const mcpEndpoint = useMemo(() => {
+    const origin = typeof window === 'undefined' ? 'http://localhost:3000' : window.location.origin
+    return `${origin}${config.basePath || '/mcp'}`
+  }, [config.basePath])
+
+  const templates = useMemo(() => {
+    const apiKeyPlaceholder = '<API_KEY_WITH_MCP_SCOPE>'
+    const authHeader = `Bearer ${apiKeyPlaceholder}`
+
+    return [
+      {
+        id: 'cherry-studio',
+        name: 'Cherry Studio',
+        description: 'HTTP MCP 服务配置',
+        scopes: ['mcp:read', 'mcp:upload', 'mcp:eval'],
+        content: JSON.stringify(
+          {
+            name: 'AI LocalBase',
+            type: 'streamable-http',
+            url: mcpEndpoint,
+            headers: {
+              Authorization: authHeader,
+            },
+          },
+          null,
+          2,
+        ),
+      },
+      {
+        id: 'claude-desktop',
+        name: 'Claude Desktop',
+        description: 'HTTP MCP 客户端配置',
+        scopes: ['mcp:read', 'mcp:eval'],
+        content: JSON.stringify(
+          {
+            mcpServers: {
+              'ai-localbase': {
+                type: 'http',
+                url: mcpEndpoint,
+                headers: {
+                  Authorization: authHeader,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+      {
+        id: 'cursor-http',
+        name: 'Cursor / 通用 HTTP',
+        description: '通用 JSON-RPC MCP 配置',
+        scopes: ['mcp:read', 'mcp:write', 'mcp:upload', 'mcp:eval'],
+        content: JSON.stringify(
+          {
+            server: 'ai-localbase',
+            transport: 'http',
+            endpoint: mcpEndpoint,
+            headers: {
+              Authorization: authHeader,
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]
+  }, [mcpEndpoint])
 
   const handleCopyToken = async () => {
     try {
       await onCopyMcpToken()
-      setMcpFeedback('Token 已复制')
+      setTokenFeedback('Token 已复制')
     } catch {
-      setMcpFeedback('复制失败')
+      setTokenFeedback('复制失败')
     }
   }
 
   const handleResetToken = async () => {
     try {
       await onResetMcpToken()
-      setMcpFeedback('Token 已重置')
+      setTokenFeedback('Token 已重置')
     } catch {
-      setMcpFeedback('重置失败')
+      setTokenFeedback('重置失败')
+    }
+  }
+
+  const handleCopyTemplate = async (templateId: string, content: string) => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      setTemplateFeedback('当前环境不支持复制')
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopiedTemplateId(templateId)
+      setTemplateFeedback('模板已复制')
+    } catch {
+      setTemplateFeedback('复制失败')
     }
   }
 
@@ -80,9 +167,60 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
                 </div>
               </div>
               <small>旧版 MCP Bearer Token，仅用于兼容既有客户端；新接入建议使用带 MCP scope 的 API Key。</small>
-              {mcpFeedback && <small className="settings-feedback">{mcpFeedback}</small>}
+              {tokenFeedback && <small className="settings-feedback">{tokenFeedback}</small>}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <div className="settings-card-header-copy">
+            <h3>客户端模板</h3>
+            <p>模板默认使用 API Key，并按客户端场景标注所需 MCP scope。</p>
+          </div>
+        </div>
+        <div className="settings-card-body">
+          <div className="settings-readonly-grid">
+            <div className="settings-readonly-field">
+              <span>MCP Endpoint</span>
+              <strong>{mcpEndpoint}</strong>
+            </div>
+            <div className="settings-readonly-field">
+              <span>认证方式</span>
+              <strong>Authorization Bearer</strong>
+              <small>使用带 MCP scope 的 API Key</small>
+            </div>
+          </div>
+
+          <div className="settings-mcp-template-grid">
+            {templates.map((template) => (
+              <article className="settings-mcp-template" key={template.id}>
+                <div className="settings-mcp-template-head">
+                  <div>
+                    <h4>{template.name}</h4>
+                    <p>{template.description}</p>
+                  </div>
+                  <button
+                    className="settings-action-btn"
+                    onClick={() => void handleCopyTemplate(template.id, template.content)}
+                    type="button"
+                  >
+                    {copiedTemplateId === template.id ? '已复制' : '复制'}
+                  </button>
+                </div>
+                <div className="settings-mcp-scope-row">
+                  {template.scopes.map((scope) => (
+                    <span key={scope}>{scope}</span>
+                  ))}
+                </div>
+                <pre className="settings-mcp-template-code">
+                  <code>{template.content}</code>
+                </pre>
+              </article>
+            ))}
+          </div>
+          {templateFeedback && <small className="settings-feedback">{templateFeedback}</small>}
         </div>
       </section>
     </div>

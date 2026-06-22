@@ -704,6 +704,79 @@
   white-space: nowrap;
 }
 
+.settings-mcp-template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.settings-mcp-template {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--settings-control-border);
+  border-radius: var(--radius-md);
+  background: var(--settings-control-bg);
+}
+
+.settings-mcp-template-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.settings-mcp-template-head h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.settings-mcp-template-head p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.settings-mcp-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.settings-mcp-scope-row span {
+  padding: 3px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.settings-mcp-template-code {
+  overflow: auto;
+  max-height: 220px;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--border-color) 56%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-tertiary) 72%, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-mcp-template-code code {
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
 /* ==========================================================================
    9. 反馈消息 (Feedback)
    ========================================================================== */
@@ -2170,6 +2243,7 @@
   }
 
   .settings-form-grid-three,
+  .settings-mcp-template-grid,
   .settings-overview-grid,
   .settings-readonly-grid {
     grid-template-columns: 1fr;
@@ -2294,6 +2368,10 @@
   .settings-token-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .settings-mcp-template-head {
+    flex-direction: column;
   }
 }
 

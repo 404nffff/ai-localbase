@@ -614,7 +614,7 @@ func requiredScopesForTool(tool ToolDefinition) []string {
 	switch {
 	case tool.PermissionLevel == ToolPermissionDanger:
 		return []string{scopeMCPDanger}
-	case tool.Name == "generate_eval_dataset":
+	case tool.Name == "generate_eval_dataset", tool.Name == "create_eval_case_from_query":
 		return []string{scopeMCPEval}
 	case isMCPUploadTool(tool.Name):
 		return []string{scopeMCPUpload}

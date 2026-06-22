@@ -375,6 +375,21 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if !containsString(toolNames, "debug_retrieval") {
 		t.Fatalf("expected debug_retrieval in tools list, got %v", toolNames)
 	}
+	if !containsString(toolNames, "answer_with_sources") {
+		t.Fatalf("expected answer_with_sources in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "inspect_knowledge_base_quality") {
+		t.Fatalf("expected inspect_knowledge_base_quality in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "compare_retrieval_modes") {
+		t.Fatalf("expected compare_retrieval_modes in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "create_eval_case_from_query") {
+		t.Fatalf("expected create_eval_case_from_query in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "summarize_document") {
+		t.Fatalf("expected summarize_document in tools list, got %v", toolNames)
+	}
 	if !containsString(toolNames, "reindex_document") {
 		t.Fatalf("expected reindex_document in tools list, got %v", toolNames)
 	}
@@ -417,7 +432,7 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if capabilitiesResp.Code != http.StatusOK {
 		t.Fatalf("expected capabilities status 200, got %d, body=%s", capabilitiesResp.Code, capabilitiesResp.Body.String())
 	}
-	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":25`) ||
+	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":30`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"version":"0.2.0"`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"resultContractVersion":"1.0"`) {
@@ -927,6 +942,103 @@ func TestMCPJobWorkflow(t *testing.T) {
 	}
 	if !strings.Contains(listResp.Body.String(), importJob.ID) || !strings.Contains(listResp.Body.String(), failedJob.ID) {
 		t.Fatalf("expected recent jobs list to include completed jobs, got %s", listResp.Body.String())
+	}
+}
+
+func TestMCPAgentOrientedTools(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	adminHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-agent-admin", []string{"mcp:admin"})
+	evalHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-agent-eval", []string{"mcp:eval"})
+
+	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	knowledgeBaseID := kbList.Items[0].ID
+
+	uploadResp := performMCPToolCall(t, engine, adminHeaders, 701, "upload_text_document", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"fileName":        "agent-tools.md",
+		"content":         "# Agent Tools\n\nAgent Tools 支持缓存、队列和持久化能力，用于稳定处理知识库任务。",
+	})
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+	var uploadRPC struct {
+		Result struct {
+			Data struct {
+				Uploaded model.Document `json:"uploaded"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	decodeJSONResponse(t, uploadResp.Body.Bytes(), &uploadRPC)
+	documentID := uploadRPC.Result.Data.Uploaded.ID
+	if strings.TrimSpace(documentID) == "" {
+		t.Fatalf("expected uploaded document id, got %+v", uploadRPC.Result.Data.Uploaded)
+	}
+
+	answerResp := performMCPToolCall(t, engine, adminHeaders, 702, "answer_with_sources", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"query":           "Agent Tools 支持什么能力？",
+	})
+	if answerResp.Code != http.StatusOK {
+		t.Fatalf("expected answer status 200, got %d, body=%s", answerResp.Code, answerResp.Body.String())
+	}
+	if !strings.Contains(answerResp.Body.String(), `"answer"`) || !strings.Contains(answerResp.Body.String(), `"sources"`) {
+		t.Fatalf("expected answer with sources result, got %s", answerResp.Body.String())
+	}
+
+	summaryResp := performMCPToolCall(t, engine, adminHeaders, 703, "summarize_document", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"documentId":      documentID,
+	})
+	if summaryResp.Code != http.StatusOK {
+		t.Fatalf("expected summarize status 200, got %d, body=%s", summaryResp.Code, summaryResp.Body.String())
+	}
+	if !strings.Contains(summaryResp.Body.String(), `"diagnostics"`) || !strings.Contains(summaryResp.Body.String(), "Agent Tools") {
+		t.Fatalf("expected document summary and diagnostics, got %s", summaryResp.Body.String())
+	}
+
+	compareResp := performMCPToolCall(t, engine, adminHeaders, 704, "compare_retrieval_modes", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"query":           "缓存和队列用于什么？",
+		"topK":            3,
+	})
+	if compareResp.Code != http.StatusOK {
+		t.Fatalf("expected compare status 200, got %d, body=%s", compareResp.Code, compareResp.Body.String())
+	}
+	if !strings.Contains(compareResp.Body.String(), `"dense"`) || !strings.Contains(compareResp.Body.String(), `"hybrid"`) {
+		t.Fatalf("expected dense and hybrid comparison, got %s", compareResp.Body.String())
+	}
+
+	createEvalResp := performMCPToolCall(t, engine, evalHeaders, 705, "create_eval_case_from_query", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"query":           "Agent Tools 的稳定处理能力包括哪些？",
+	})
+	if createEvalResp.Code != http.StatusOK {
+		t.Fatalf("expected create eval status 200, got %d, body=%s", createEvalResp.Code, createEvalResp.Body.String())
+	}
+	if !strings.Contains(createEvalResp.Body.String(), `"candidate"`) || !strings.Contains(createEvalResp.Body.String(), `"dataset"`) {
+		t.Fatalf("expected eval candidate and dataset, got %s", createEvalResp.Body.String())
+	}
+
+	qualityResp := performMCPToolCall(t, engine, adminHeaders, 706, "inspect_knowledge_base_quality", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+	})
+	if qualityResp.Code != http.StatusOK {
+		t.Fatalf("expected quality status 200, got %d, body=%s", qualityResp.Code, qualityResp.Body.String())
+	}
+	if !strings.Contains(qualityResp.Body.String(), `"health"`) || !strings.Contains(qualityResp.Body.String(), `"insights"`) {
+		t.Fatalf("expected quality health and insights, got %s", qualityResp.Body.String())
 	}
 }
 

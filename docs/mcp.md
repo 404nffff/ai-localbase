@@ -62,7 +62,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `mcp:read` | 工具发现、列表、检索、文档详情、会话读取等只读工具 |
 | `mcp:write` | 创建知识库、保存会话、重建索引等写入工具 |
 | `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload`、`start_import_job` |
-| `mcp:eval` | `generate_eval_dataset` |
+| `mcp:eval` | `generate_eval_dataset`、`create_eval_case_from_query` |
 | `mcp:danger` | 删除知识库、删除文档、删除会话 |
 | `mcp:admin` | 允许调用全部 MCP 工具 |
 
@@ -114,7 +114,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 ## 当前内置工具
 
-当前共提供 **25 个 MCP 工具**，分为 **14 个只读工具**、**8 个写工具**、**3 个危险工具**。
+当前共提供 **30 个 MCP 工具**，分为 **18 个只读工具**、**9 个写工具**、**3 个危险工具**。
 
 ### 权限级别说明
 
@@ -137,7 +137,12 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `search_document` | `read-only` | 按单个文档执行检索 |
 | `query_structured_data` | `read-only` | 对 CSV / XLSX 执行确定性结构化查询 |
 | `debug_retrieval` | `read-only` | 调试检索命中、低置信和确定性补全 |
+| `answer_with_sources` | `read-only` | 基于知识库或文档生成带来源的答案草稿 |
+| `inspect_knowledge_base_quality` | `read-only` | 聚合索引健康、最近评估和质量建议 |
+| `compare_retrieval_modes` | `read-only` | 对比 dense 与 hybrid 检索结果 |
+| `summarize_document` | `read-only` | 返回文档摘要、索引诊断和 chunk 预览 |
 | `generate_eval_dataset` | `read-only` | 生成 RAG 评估数据集 |
+| `create_eval_case_from_query` | `write` | 根据检索问题创建待审核评测样本 |
 | `create_knowledge_base` | `write` | 创建知识库 |
 | `save_conversation` | `write` | 保存完整会话 |
 | `upload_text_document` | `write` | 上传纯文本文档 |
@@ -339,9 +344,81 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - `contextPreview`
 - `evalCandidate`
 
+#### `answer_with_sources`
+
+权限级别：`read-only`，需要 `mcp:read` 或 `mcp:admin`
+
+输入参数：
+
+- `query`（必填）
+- `knowledgeBaseId`（选填）
+- `documentId`（选填）
+
+说明：
+
+- `knowledgeBaseId` 或 `documentId` 至少提供一个
+- 优先尝试结构化确定性查询，未命中时返回检索上下文答案草稿
+- 适合 Agent 在回答用户前先获取可引用证据包
+
+返回内容：
+
+- `answer`
+- `sources`
+- `mode`
+- `warnings`
+- `nextActions`
+
+#### `inspect_knowledge_base_quality`
+
+权限级别：`read-only`，需要 `mcp:read` 或 `mcp:admin`
+
+输入参数：
+
+- `knowledgeBaseId`（必填）
+
+返回内容：
+
+- 知识库健康检查 `health`
+- 最近评估历史 `evalRuns`
+- 最近一次评估 `latestEvalRun`
+- 可执行质量建议 `insights`
+
+#### `compare_retrieval_modes`
+
+权限级别：`read-only`，需要 `mcp:read` 或 `mcp:admin`
+
+输入参数：
+
+- `query`（必填）
+- `knowledgeBaseId`（选填）
+- `documentId`（选填）
+- `topK`（选填，默认 `5`）
+
+说明：
+
+- `knowledgeBaseId` 或 `documentId` 至少提供一个
+- 对同一问题分别运行 `dense` 与 `hybrid`
+- 返回推荐模式、两组调试结果和质量提示
+
+#### `summarize_document`
+
+权限级别：`read-only`，需要 `mcp:read` 或 `mcp:admin`
+
+输入参数：
+
+- `knowledgeBaseId`（必填）
+- `documentId`（必填）
+
+返回内容：
+
+- 文档摘要文本
+- 文档基础信息
+- 索引诊断
+- 前若干个 chunk 预览
+
 #### `generate_eval_dataset`
 
-权限级别：`read-only`
+权限级别：`read-only`，需要 `mcp:eval` 或 `mcp:admin`
 
 输入参数：
 
@@ -354,6 +431,30 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - 评估数据集
 - 覆盖文档数量
 - 生成样本数量
+
+#### `create_eval_case_from_query`
+
+权限级别：`write`，需要 `mcp:eval` 或 `mcp:admin`
+
+输入参数：
+
+- `query`（必填）
+- `knowledgeBaseId`（选填）
+- `documentId`（选填）
+- `topK`（选填，默认 `5`）
+
+说明：
+
+- `knowledgeBaseId` 或 `documentId` 至少提供一个
+- 基于检索调试结果生成待审核样本
+- 样本默认写入评测候选数据集，处于待审核状态
+
+返回内容：
+
+- `candidate`
+- `dataset`
+- `created`
+- `debug`
 
 ### 写工具
 
@@ -857,6 +958,55 @@ curl -X POST http://localhost:8080/mcp \
 - **请求头**：
   - `Content-Type: application/json`
   - `Authorization: Bearer <带 MCP scope 的 API Key>`
+- **建议 scope**：`mcp:read`、`mcp:upload`、`mcp:eval`
+
+Settings 的 MCP 页面也提供了可复制模板。以下示例中的 `<MCP_API_KEY>` 需要替换为带 MCP scope 的 API Key。
+
+### Cherry Studio 模板
+
+```json
+{
+  "name": "AI LocalBase",
+  "type": "streamable-http",
+  "url": "http://127.0.0.1:8080/mcp",
+  "headers": {
+    "Authorization": "Bearer <MCP_API_KEY>"
+  }
+}
+```
+
+### Claude Desktop 模板
+
+```json
+{
+  "mcpServers": {
+    "ai-localbase": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer <MCP_API_KEY>"
+      }
+    }
+  }
+}
+```
+
+建议 scope：`mcp:read`、`mcp:eval`。如果客户端需要写入或上传，再额外授予 `mcp:write`、`mcp:upload`。
+
+### Cursor / 通用 HTTP MCP 模板
+
+```json
+{
+  "server": "ai-localbase",
+  "transport": "http",
+  "endpoint": "http://127.0.0.1:8080/mcp",
+  "headers": {
+    "Authorization": "Bearer <MCP_API_KEY>"
+  }
+}
+```
+
+建议 scope：`mcp:read`、`mcp:write`、`mcp:upload`、`mcp:eval`。删除类工具需要单独授予 `mcp:danger` 并走一次性 `confirmNonce`。
 
 
 ![Cherry Studio MCP 设置页面](../assets/mcp_setting.png)

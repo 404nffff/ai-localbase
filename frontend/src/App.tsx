@@ -513,7 +513,7 @@ function AppContent() {
         apiKey: '',
       },
       mcp: {
-        enabled: true,
+        enabled: false,
         basePath: '/mcp',
         token: '',
       },
