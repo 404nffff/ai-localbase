@@ -50,9 +50,13 @@ type ToolDefinition struct {
 }
 
 type ToolCallResult struct {
-	Content []ToolContent `json:"content"`
-	Data    map[string]any
-	IsError bool `json:"isError,omitempty"`
+	Summary     string         `json:"summary,omitempty"`
+	Content     []ToolContent  `json:"content"`
+	Data        map[string]any `json:"data,omitempty"`
+	Warnings    []string       `json:"warnings,omitempty"`
+	NextActions []string       `json:"nextActions,omitempty"`
+	RequestID   string         `json:"requestId,omitempty"`
+	IsError     bool           `json:"isError,omitempty"`
 }
 
 type ToolContent struct {
@@ -62,6 +66,7 @@ type ToolContent struct {
 
 func NewTextResult(text string, data map[string]any) ToolCallResult {
 	return ToolCallResult{
+		Summary: text,
 		Content: []ToolContent{{
 			Type: "text",
 			Text: text,

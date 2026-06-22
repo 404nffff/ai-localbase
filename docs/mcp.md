@@ -98,6 +98,18 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 }
 ```
 
+工具调用成功时，`result` 统一包含：
+
+- `summary`：一句话摘要
+- `content`：兼容 MCP 客户端的文本内容
+- `data`：结构化数据
+- `warnings`：警告列表
+- `nextActions`：建议后续动作
+- `requestId`：服务端请求 ID
+- `isError`：工具级错误标记
+
+旧客户端可继续读取 `content` 和 `data`；新客户端建议优先读取 `summary`、`data` 和 `requestId`。
+
 ---
 
 ## 当前内置工具
@@ -158,6 +170,8 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - 当前工具清单
 - 鉴权类型与 Token 是否已配置
 - 危险工具确认 nonce 端点与兼容头信息
+- `authModel`、`requiredScopes`、`jobSupport`
+- `resultContractVersion`
 
 #### `get_config_summary`
 

@@ -240,21 +240,52 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 			c.JSON(http.StatusGatewayTimeout, errorResponse(request.ID, -32001, "mcp request timed out"))
 			return
 		}
+		result = normalizeToolCallResult(result, requestIDFromContext(c))
 		log.Printf("mcp tool call tool=%s permission=%s remote=%s duration_ms=%d is_error=%t", toolName, permissionLevel, c.ClientIP(), time.Since(startedAt).Milliseconds(), result.IsError)
 		s.recordMCPAudit(c, authCtx, toolName, permissionLevel, startedAt, !result.IsError, isDanger, "")
 		c.JSON(http.StatusOK, JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
 			ID:      request.ID,
 			Result: map[string]any{
-				"content": result.Content,
-				"data":    result.Data,
-				"isError": result.IsError,
+				"summary":     result.Summary,
+				"content":     result.Content,
+				"data":        result.Data,
+				"warnings":    result.Warnings,
+				"nextActions": result.NextActions,
+				"requestId":   result.RequestID,
+				"isError":     result.IsError,
 			},
 		})
 	default:
 		log.Printf("mcp request method_not_found method=%s remote=%s duration_ms=%d", method, c.ClientIP(), time.Since(startedAt).Milliseconds())
 		c.JSON(http.StatusOK, errorResponse(request.ID, -32601, fmt.Sprintf("method not found: %s", method)))
 	}
+}
+
+func normalizeToolCallResult(result ToolCallResult, requestID string) ToolCallResult {
+	if strings.TrimSpace(result.Summary) == "" && len(result.Content) > 0 {
+		result.Summary = strings.TrimSpace(result.Content[0].Text)
+	}
+	if result.Warnings == nil {
+		result.Warnings = []string{}
+	}
+	if result.NextActions == nil {
+		result.NextActions = []string{}
+	}
+	result.RequestID = strings.TrimSpace(requestID)
+	return result
+}
+
+func requestIDFromContext(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if value, ok := c.Get("requestId"); ok {
+		if requestID, ok := value.(string); ok {
+			return requestID
+		}
+	}
+	return strings.TrimSpace(c.GetHeader("X-Request-Id"))
 }
 
 func (s *Server) toolDescriptors() []map[string]any {

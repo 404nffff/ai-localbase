@@ -419,7 +419,8 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	}
 	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":25`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"version":"0.2.0"`) ||
-		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) {
+		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) ||
+		!strings.Contains(capabilitiesResp.Body.String(), `"resultContractVersion":"1.0"`) {
 		t.Fatalf("expected mcp capability summary, got %s", capabilitiesResp.Body.String())
 	}
 
@@ -449,12 +450,17 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 
 	var rpcResp struct {
 		Result struct {
-			Data struct {
+			Summary   string `json:"summary"`
+			RequestID string `json:"requestId"`
+			Data      struct {
 				KnowledgeBase model.KnowledgeBase `json:"knowledgeBase"`
 			} `json:"data"`
 		} `json:"result"`
 	}
 	decodeJSONResponse(t, callResp.Body.Bytes(), &rpcResp)
+	if strings.TrimSpace(rpcResp.Result.Summary) == "" || strings.TrimSpace(rpcResp.Result.RequestID) == "" {
+		t.Fatalf("expected standardized result summary and requestId, got %+v", rpcResp.Result)
+	}
 	if rpcResp.Result.Data.KnowledgeBase.Name != "MCP 新建知识库" {
 		t.Fatalf("expected created knowledge base name, got %+v", rpcResp.Result.Data.KnowledgeBase)
 	}

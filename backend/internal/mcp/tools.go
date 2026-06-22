@@ -870,6 +870,22 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 		"permissionCounts": permissionCounts,
 		"tools":            toolItems,
 		"capabilities":     map[string]any{"tools": map[string]any{"listChanged": false}},
+		"authModel":        "api_key_scope",
+		"requiredScopes": []string{
+			scopeMCPRead,
+			scopeMCPWrite,
+			scopeMCPUpload,
+			scopeMCPEval,
+			scopeMCPDanger,
+			scopeMCPAdmin,
+		},
+		"dangerConfirmation": map[string]any{
+			"type":         "confirmNonce",
+			"endpoint":     "/api/config/mcp/danger-confirmations",
+			"legacyHeader": "X-MCP-Confirm",
+		},
+		"jobSupport":            true,
+		"resultContractVersion": "1.0",
 		"auth": map[string]any{
 			"type":                  "api_key_scope",
 			"legacyTokenCompatible": true,
