@@ -285,6 +285,68 @@ func TestMCPAPIKeyScopeEnforcement(t *testing.T) {
 	}
 }
 
+func TestMCPConfigSummaryRedactsSensitiveCredentials(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	current := getTestConfig(t, engine, sessionHeaders)
+	updateResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPut,
+		"/api/config",
+		bytes.NewReader(mustMarshalJSON(t, model.ConfigUpdateRequest{
+			Chat: model.ChatConfig{
+				Provider:            current.Chat.Provider,
+				BaseURL:             current.Chat.BaseURL,
+				Model:               current.Chat.Model,
+				APIKey:              "sensitive-chat-api-key",
+				Temperature:         current.Chat.Temperature,
+				ContextMessageLimit: current.Chat.ContextMessageLimit,
+			},
+			Embedding: model.EmbeddingConfig{
+				Provider: current.Embedding.Provider,
+				BaseURL:  current.Embedding.BaseURL,
+				Model:    current.Embedding.Model,
+				APIKey:   "sensitive-embedding-api-key",
+			},
+			MCP: model.MCPConfig{
+				Enabled:  true,
+				BasePath: "/mcp",
+				Token:    "sensitive-mcp-token",
+			},
+			Retrieval: current.Retrieval,
+		})),
+		"application/json",
+		sessionHeaders,
+	)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected config update status 200, got %d, body=%s", updateResp.Code, updateResp.Body.String())
+	}
+
+	readHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-redacted-config", []string{"mcp:read"})
+	resp := performMCPToolCall(t, engine, readHeaders, 211, "get_config_summary", map[string]any{})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected config summary status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	body := resp.Body.String()
+	for _, forbidden := range []string{
+		"sensitive-chat-api-key",
+		"sensitive-embedding-api-key",
+		"sensitive-mcp-token",
+		"apiKey",
+		"token",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("expected config summary to redact %q, got %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, `"credentialsConfigured":true`) {
+		t.Fatalf("expected credential presence summary, got %s", body)
+	}
+}
+
 func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
@@ -867,6 +929,36 @@ func TestMCPInlineUploadTooLargeReturnsGuidance(t *testing.T) {
 		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 	if !strings.Contains(resp.Body.String(), "register_staged_upload") || !strings.Contains(resp.Body.String(), "/api/uploads") {
+		t.Fatalf("expected staged upload guidance, got %s", resp.Body.String())
+	}
+}
+
+func TestMCPImportJobContentTooLargeReturnsGuidance(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-large-import-job", []string{"mcp:admin"})
+	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	resp := performMCPToolCall(t, engine, headers, 14, "start_import_job", map[string]any{
+		"knowledgeBaseId": kbList.Items[0].ID,
+		"fileName":        "large-job.md",
+		"content":         strings.Repeat("a", 256*1024+1),
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "inline import content too large") || !strings.Contains(resp.Body.String(), "register_staged_upload") || !strings.Contains(resp.Body.String(), "/api/uploads") {
 		t.Fatalf("expected staged upload guidance, got %s", resp.Body.String())
 	}
 }

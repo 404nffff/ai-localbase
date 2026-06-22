@@ -71,7 +71,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				cfg := appService.GetConfig()
 				return NewTextResult(
 					fmt.Sprintf("当前 Chat 模型为 %s/%s，Embedding 模型为 %s/%s。", cfg.Chat.Provider, cfg.Chat.Model, cfg.Embedding.Provider, cfg.Embedding.Model),
-					map[string]any{"config": cfg},
+					map[string]any{"config": buildSafeConfigSummary(cfg)},
 				), nil
 			},
 		},
@@ -1441,12 +1441,36 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 			"type":                  "api_key_scope",
 			"legacyTokenCompatible": true,
 			"legacyTokenConfigured": strings.TrimSpace(cfg.MCP.Token) != "",
+			"legacyTokenPermission": "mcp:admin-compatible",
 			"adminScope":            scopeMCPAdmin,
 		},
 		"dangerousToolGate": map[string]any{
 			"type":         "confirmNonce",
 			"endpoint":     "/api/config/mcp/danger-confirmations",
 			"legacyHeader": "X-MCP-Confirm",
+		},
+	}
+}
+
+func buildSafeConfigSummary(cfg model.AppConfig) map[string]any {
+	return map[string]any{
+		"chat": map[string]any{
+			"provider":              cfg.Chat.Provider,
+			"model":                 cfg.Chat.Model,
+			"baseUrlConfigured":     strings.TrimSpace(cfg.Chat.BaseURL) != "",
+			"credentialsConfigured": strings.TrimSpace(cfg.Chat.APIKey) != "",
+			"temperature":           cfg.Chat.Temperature,
+			"contextMessageLimit":   cfg.Chat.ContextMessageLimit,
+		},
+		"embedding": map[string]any{
+			"provider":              cfg.Embedding.Provider,
+			"model":                 cfg.Embedding.Model,
+			"baseUrlConfigured":     strings.TrimSpace(cfg.Embedding.BaseURL) != "",
+			"credentialsConfigured": strings.TrimSpace(cfg.Embedding.APIKey) != "",
+		},
+		"mcp": map[string]any{
+			"enabled":  cfg.MCP.Enabled,
+			"basePath": cfg.MCP.BasePath,
 		},
 	}
 }

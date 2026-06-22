@@ -122,7 +122,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
         <div className="settings-card-header">
           <div className="settings-card-header-copy">
             <h3>MCP 配置</h3>
-            <p>MCP 默认关闭；服务器启用时必须同时开启认证。旧 Token 仅作为兼容凭证保留。</p>
+            <p>MCP 默认关闭；服务器启用时必须同时开启认证。旧 Token 仅作为全权限兼容凭证保留。</p>
           </div>
           <span className={`settings-status-pill ${config.enabled ? 'enabled' : 'disabled'}`}>
             {config.enabled ? '已启用' : '未启用'}
@@ -166,7 +166,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
                   </button>
                 </div>
               </div>
-              <small>旧版 MCP Bearer Token，仅用于兼容既有客户端；新接入建议使用带 MCP scope 的 API Key。</small>
+              <small>旧版 MCP Bearer Token 等价 MCP 全权限，仅用于迁移既有客户端；新接入请使用带 MCP scope 的 API Key。</small>
               {tokenFeedback && <small className="settings-feedback">{tokenFeedback}</small>}
             </div>
           </div>

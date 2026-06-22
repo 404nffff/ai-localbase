@@ -27,6 +27,10 @@ export default defineConfig({
         target: proxyTarget,
         changeOrigin: true,
       },
+      '/mcp': {
+        target: proxyTarget,
+        changeOrigin: true,
+      },
       '/upload': {
         target: proxyTarget,
         changeOrigin: true,

@@ -10,7 +10,7 @@
 - 提供 HTTP 形式的 MCP 入口
 - 提供工具列表发现能力
 - 提供只读 / 写入 / 危险工具调用能力
-- 提供 API Key Scope 鉴权，兼容旧 MCP Token
+- 提供 API Key Scope 鉴权，并短期兼容旧 MCP 全权限 Token
 - 提供调用日志与耗时记录
 - 提供工具权限分级（只读 / 写入 / 危险）
 - 提供 MCP 级限流与超时保护
@@ -27,7 +27,7 @@
 - `MCP_BASE_PATH`：MCP 挂载路径，默认 `/mcp`
 - `MCP_REQUEST_TIMEOUT_SECONDS`：单次 MCP 请求超时时间，默认 `15`
 - `MCP_REQUESTS_PER_MINUTE`：MCP 每分钟最大请求数，默认 `120`
-- MCP Token 会在首次启动时自动生成并持久化到应用配置中，仅作为旧客户端兼容凭证
+- MCP Token 会在首次启动时自动生成并持久化到应用配置中，等价 MCP 全权限，仅作为旧客户端迁移凭证
 
 示例：
 
@@ -39,7 +39,7 @@ MCP_REQUEST_TIMEOUT_SECONDS=15
 MCP_REQUESTS_PER_MINUTE=120
 ```
 
-MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_AUTH=true`，并使用 API Key Scope 模式接入。旧版 MCP Token 仅作为兼容凭证保留，且为空时不会放行旧 Token 请求。
+MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_AUTH=true`，并使用 API Key Scope 模式接入。旧版 MCP Token 等价 MCP 全权限，仅作为兼容凭证保留，且为空时不会放行旧 Token 请求。
 
 启动后可访问：
 
@@ -49,7 +49,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - `POST /api/config/mcp/danger-confirmations`：创建危险工具一次性确认 nonce
 - `POST /api/config/mcp/reset-token`：重置 MCP Token
 
-> 所有 MCP 接口均需携带请求头 `Authorization: Bearer <API_KEY>`。旧版 MCP Token 仍短期兼容；新客户端必须使用带 MCP scope 的 API Key。
+> 所有 MCP 接口均需携带请求头 `Authorization: Bearer <API_KEY>`。旧版 MCP Token 仍短期兼容且等价全权限；新客户端必须使用带 MCP scope 的 API Key。
 
 ---
 
@@ -1058,7 +1058,7 @@ backend/internal/mcp/
 
 - 查看 MCP 是否启用
 - 查看 MCP Base Path
-- 查看当前兼容 Token
+- 查看当前全权限兼容 Token
 - 一键复制 Token
 - 一键重置 Token
 

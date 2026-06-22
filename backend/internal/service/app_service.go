@@ -45,6 +45,7 @@ const (
 	documentDetailChunkTextLimit  = 1200
 	retrievalDebugContextLimit    = 3000
 	retrievalDebugChunkTextLimit  = 1600
+	mcpImportJobContentLimit      = 256 * 1024
 )
 
 type AppService struct {
@@ -775,6 +776,9 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 	if fileName == "" {
 		return model.MCPJob{}, fmt.Errorf("fileName is required")
 	}
+	if int64(len([]byte(req.Content))) > mcpImportJobContentLimit {
+		return model.MCPJob{}, fmt.Errorf("inline import content too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len([]byte(req.Content)))), util.FormatFileSize(mcpImportJobContentLimit))
+	}
 
 	now := util.NowRFC3339()
 	job := model.MCPJob{
@@ -853,10 +857,22 @@ func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req mode
 		job.Progress = 70
 		job.Summary = "正在注册并索引文档。"
 	})
+	select {
+	case <-ctx.Done():
+		s.completeMCPJob(jobID, "cancelled", 70, "导入任务已取消。", nil, "")
+		return
+	default:
+	}
 	uploaded, err := s.RegisterStagedUpload(staged.ID, req.KnowledgeBaseID, req.FileName)
 	if err != nil {
 		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
 		return
+	}
+	select {
+	case <-ctx.Done():
+		s.completeMCPJob(jobID, "cancelled", 100, "导入任务已取消。", nil, "")
+		return
+	default:
 	}
 	s.completeMCPJob(jobID, "succeeded", 100, fmt.Sprintf("文档《%s》导入完成。", uploaded.Name), map[string]any{
 		"uploaded":        uploaded,
@@ -935,6 +951,9 @@ func (s *AppService) updateMCPJob(jobID string, update func(*model.MCPJob)) {
 	if !ok {
 		return
 	}
+	if isMCPJobTerminalStatus(job.Status) {
+		return
+	}
 	update(&job)
 	job.UpdatedAt = util.NowRFC3339()
 	s.mcpJobs[jobID] = job
@@ -947,6 +966,9 @@ func (s *AppService) completeMCPJob(jobID, status string, progress int, summary 
 	if !ok {
 		return
 	}
+	if isMCPJobTerminalStatus(job.Status) {
+		return
+	}
 	job.Status = status
 	job.Progress = progress
 	job.Summary = summary
@@ -956,6 +978,15 @@ func (s *AppService) completeMCPJob(jobID, status string, progress int, summary 
 	job.CompletedAt = job.UpdatedAt
 	s.mcpJobs[jobID] = job
 	delete(s.mcpJobCancels, jobID)
+}
+
+func isMCPJobTerminalStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "succeeded", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *AppService) pruneMCPJobsLocked() {
