@@ -8,7 +8,7 @@
 - Web session 通过 **HttpOnly + SameSite=Lax Cookie** 下发，前端不再把 session token 存在 `localStorage`。
 - root 密码只保存 bcrypt 哈希，不再把明文环境变量作为运行态密码。
 - OpenAI-compatible `/v1` 接口支持独立 API Key，不需要复用网页登录 token。
-- MCP 默认关闭；服务器启用 MCP 时必须同时开启认证。旧 MCP Token 仅作为兼容凭证保留，新接入优先使用 API Key Scope。
+- MCP 默认关闭；服务器启用 MCP 时必须同时开启认证。旧 MCP Token 仅作为兼容凭证保留，新接入使用 API Key Scope。
 - 暂不包含多用户、OIDC 和复杂 RBAC。
 
 ---
@@ -168,8 +168,19 @@ Cookie: ai_localbase_session=<web-session-cookie>
 - `knowledge:read`：预留给知识库读取 API。
 - `knowledge:write`：预留给知识库变更 API。
 - `config:read`：预留给配置读取 API。
+- `mcp:read`：允许 MCP 工具发现、列表、检索和只读查询。
+- `mcp:write`：允许 MCP 普通写入工具，例如创建知识库、保存会话、重建索引。
+- `mcp:upload`：允许 MCP 上传类工具，例如上传文档、注册暂存文件。
+- `mcp:eval`：允许 MCP 评估类工具，例如生成评估数据集。
+- `mcp:danger`：允许 MCP 危险工具，例如删除知识库、文档或会话。
+- `mcp:admin`：允许调用全部 MCP 工具。
 
-MCP 相关 scope 会在 MCP 加固流程中扩展，并用于替代旧版独立 MCP Token。
+MCP API Key 使用方式：
+
+```bash
+curl http://localhost:8080/mcp/tools \
+  -H "Authorization: Bearer ailb_sk_xxx"
+```
 
 响应中的 `token` **只显示一次**：
 

@@ -10,7 +10,7 @@
 - 提供 HTTP 形式的 MCP 入口
 - 提供工具列表发现能力
 - 提供只读 / 写入 / 危险工具调用能力
-- 提供认证开启后的 Bearer 凭证鉴权
+- 提供 API Key Scope 鉴权，兼容旧 MCP Token
 - 提供调用日志与耗时记录
 - 提供工具权限分级（只读 / 写入 / 危险）
 - 提供 MCP 级限流与超时保护
@@ -39,7 +39,7 @@ MCP_REQUEST_TIMEOUT_SECONDS=15
 MCP_REQUESTS_PER_MINUTE=120
 ```
 
-MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_AUTH=true`，并优先使用 API Key Scope 模式接入。旧版 MCP Token 为空时不会放行请求。
+MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_AUTH=true`，并使用 API Key Scope 模式接入。旧版 MCP Token 仅作为兼容凭证保留，且为空时不会放行旧 Token 请求。
 
 启动后可访问：
 
@@ -48,7 +48,24 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - `POST /mcp`：通过 JSON-RPC 调用 MCP 方法
 - `POST /api/config/mcp/reset-token`：重置 MCP Token
 
-> 所有 MCP 接口均需携带请求头 `Authorization: Bearer <token>`。当前旧版 MCP Token 仅用于兼容；新客户端建议使用带 MCP scope 的 API Key。
+> 所有 MCP 接口均需携带请求头 `Authorization: Bearer <API_KEY>`。旧版 MCP Token 仍短期兼容；新客户端必须使用带 MCP scope 的 API Key。
+
+---
+
+## API Key Scope
+
+在 Settings 的“系统授权”页创建 API Key，并选择所需 MCP scope：
+
+| Scope | 权限 |
+|------|------|
+| `mcp:read` | 工具发现、列表、检索、文档详情、会话读取等只读工具 |
+| `mcp:write` | 创建知识库、保存会话、重建索引等写入工具 |
+| `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload` |
+| `mcp:eval` | `generate_eval_dataset` |
+| `mcp:danger` | 删除知识库、删除文档、删除会话 |
+| `mcp:admin` | 允许调用全部 MCP 工具 |
+
+权限是精确匹配的：`mcp:write` 不包含上传、评估或危险工具权限；需要批量授权时可以使用 `mcp:admin`。
 
 ---
 
@@ -496,7 +513,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 当前 MCP 接口已具备：
 
-- 认证开启后的 Bearer 凭证鉴权
+- API Key Scope 鉴权
 - 工具调用日志
 - 调用耗时日志
 - 方法不存在日志
@@ -552,7 +569,7 @@ MCP 工具调用统一包裹请求超时：
 
 ```bash
 curl -X GET http://localhost:8080/mcp/tools \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>"
+  -H "Authorization: Bearer <MCP_API_KEY>"
 ```
 
 ### 2. 创建知识库
@@ -560,7 +577,7 @@ curl -X GET http://localhost:8080/mcp/tools \
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -580,7 +597,7 @@ curl -X POST http://localhost:8080/mcp \
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 2,
@@ -610,7 +627,7 @@ curl -X POST http://localhost:8080/api/uploads \
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 3,
@@ -639,7 +656,7 @@ base64 -i ./example.pdf
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 4,
@@ -662,7 +679,7 @@ curl -X POST http://localhost:8080/mcp \
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 4,
@@ -679,11 +696,12 @@ curl -X POST http://localhost:8080/mcp \
 
 ### 6. 删除文档（危险工具）
 
+该示例需要 API Key 具备 `mcp:danger` 或 `mcp:admin` scope。
+
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
-  -H "X-MCP-Confirm: <MCP_TOKEN>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 5,
@@ -703,7 +721,7 @@ curl -X POST http://localhost:8080/mcp \
 ```bash
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <MCP_TOKEN_OR_API_KEY>" \
+  -H "Authorization: Bearer <MCP_API_KEY>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 6,
@@ -736,7 +754,7 @@ curl -X POST http://localhost:8080/mcp \
 - **URL**：`http://127.0.0.1:8080/mcp`
 - **请求头**：
   - `Content-Type: application/json`
-  - `Authorization: Bearer <你的 MCP Token 或 MCP API Key>`
+  - `Authorization: Bearer <带 MCP scope 的 API Key>`
 
 
 ![Cherry Studio MCP 设置页面](../assets/mcp_setting.png)
@@ -792,7 +810,7 @@ backend/internal/mcp/
 - 一键复制 Token
 - 一键重置 Token
 
-这部分主要用于兼容既有 MCP 客户端。新接入建议在系统授权中创建带 MCP scope 的 API Key。
+这部分主要用于兼容既有 MCP 客户端。新接入请在系统授权中创建带 MCP scope 的 API Key。
 
 ---
 

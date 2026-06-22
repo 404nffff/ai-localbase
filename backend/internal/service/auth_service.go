@@ -31,6 +31,12 @@ const (
 	apiKeyScopeKnowledgeRead    = "knowledge:read"
 	apiKeyScopeKnowledgeWrite   = "knowledge:write"
 	apiKeyScopeConfigRead       = "config:read"
+	apiKeyScopeMCPRead          = "mcp:read"
+	apiKeyScopeMCPWrite         = "mcp:write"
+	apiKeyScopeMCPDanger        = "mcp:danger"
+	apiKeyScopeMCPUpload        = "mcp:upload"
+	apiKeyScopeMCPEval          = "mcp:eval"
+	apiKeyScopeMCPAdmin         = "mcp:admin"
 	defaultAPIKeyScope          = apiKeyScopeOpenAIChat
 	sessionTokenPrefix          = "ailb_sess_"
 	apiKeyTokenPrefix           = "ailb_sk_"
@@ -54,6 +60,12 @@ var allowedAPIKeyScopes = map[string]struct{}{
 	apiKeyScopeKnowledgeRead:  {},
 	apiKeyScopeKnowledgeWrite: {},
 	apiKeyScopeConfigRead:     {},
+	apiKeyScopeMCPRead:        {},
+	apiKeyScopeMCPWrite:       {},
+	apiKeyScopeMCPDanger:      {},
+	apiKeyScopeMCPUpload:      {},
+	apiKeyScopeMCPEval:        {},
+	apiKeyScopeMCPAdmin:       {},
 }
 
 type AuthService struct {

@@ -65,7 +65,7 @@ func main() {
 	appHandler := handler.NewAppHandler(serverConfig, appService, llmService, toolPlanner)
 	configHandler := handler.NewConfigHandler(appService, qdrantService)
 	authHandler := handler.NewAuthHandler(authService, serverConfig.EnableAuth)
-	mcpServer := mcp.NewServer(mcpRegistry, appService, serverConfig)
+	mcpServer := mcp.NewServer(mcpRegistry, appService, authService, serverConfig)
 	r := router.NewRouter(appHandler, configHandler, authHandler, authService, serverConfig, mcpServer, frontendFS())
 
 	log.Printf("backend server listening on :%s", serverConfig.Port)

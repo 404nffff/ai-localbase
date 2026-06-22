@@ -155,16 +155,140 @@ func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	}
 }
 
-func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
+func TestMCPCompatibleTokenStillWorks(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
 	cfg := getTestConfig(t, engine, sessionHeaders)
 	if strings.TrimSpace(cfg.MCP.Token) == "" {
-		t.Fatal("expected mcp token to be populated")
+		t.Fatal("expected compatible mcp token")
 	}
 
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+	resp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", map[string]string{
+		"Authorization": "Bearer " + cfg.MCP.Token,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected compatible token to authorize mcp info, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestMCPAPIKeyScopeEnforcement(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	readHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-read-only", []string{"mcp:read"})
+	infoResp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", readHeaders)
+	if infoResp.Code != http.StatusOK {
+		t.Fatalf("expected mcp:read to authorize info, got %d, body=%s", infoResp.Code, infoResp.Body.String())
+	}
+
+	writeWithReadResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      200,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "create_knowledge_base",
+				"arguments": map[string]any{
+					"name": "should-not-create",
+				},
+			},
+		})),
+		"application/json",
+		readHeaders,
+	)
+	if writeWithReadResp.Code != http.StatusForbidden {
+		t.Fatalf("expected mcp:read to reject write tool, got %d, body=%s", writeWithReadResp.Code, writeWithReadResp.Body.String())
+	}
+	if !strings.Contains(writeWithReadResp.Body.String(), "mcp:write") {
+		t.Fatalf("expected required mcp:write scope, got %s", writeWithReadResp.Body.String())
+	}
+
+	evalWithReadResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      201,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "generate_eval_dataset",
+				"arguments": map[string]any{},
+			},
+		})),
+		"application/json",
+		readHeaders,
+	)
+	if evalWithReadResp.Code != http.StatusForbidden {
+		t.Fatalf("expected mcp:read to reject eval tool, got %d, body=%s", evalWithReadResp.Code, evalWithReadResp.Body.String())
+	}
+	if !strings.Contains(evalWithReadResp.Body.String(), "mcp:eval") {
+		t.Fatalf("expected required mcp:eval scope, got %s", evalWithReadResp.Body.String())
+	}
+
+	writeHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-write-only", []string{"mcp:write"})
+	uploadWithWriteResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      202,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "upload_text_document",
+				"arguments": map[string]any{},
+			},
+		})),
+		"application/json",
+		writeHeaders,
+	)
+	if uploadWithWriteResp.Code != http.StatusForbidden {
+		t.Fatalf("expected mcp:write to reject upload tool, got %d, body=%s", uploadWithWriteResp.Code, uploadWithWriteResp.Body.String())
+	}
+	if !strings.Contains(uploadWithWriteResp.Body.String(), "mcp:upload") {
+		t.Fatalf("expected required mcp:upload scope, got %s", uploadWithWriteResp.Body.String())
+	}
+
+	dangerWithWriteResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/mcp",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      203,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name": "delete_conversation",
+				"arguments": map[string]any{
+					"id": "conv-does-not-matter",
+				},
+			},
+		})),
+		"application/json",
+		writeHeaders,
+	)
+	if dangerWithWriteResp.Code != http.StatusForbidden {
+		t.Fatalf("expected mcp:write to reject danger tool, got %d, body=%s", dangerWithWriteResp.Code, dangerWithWriteResp.Body.String())
+	}
+	if !strings.Contains(dangerWithWriteResp.Body.String(), "mcp:danger") {
+		t.Fatalf("expected required mcp:danger scope, got %s", dangerWithWriteResp.Body.String())
+	}
+}
+
+func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-tools", []string{"mcp:admin"})
 
 	infoResp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", headers)
 	if infoResp.Code != http.StatusOK {
@@ -339,8 +463,7 @@ func TestMCPUploadTextDocument(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-upload-text", []string{"mcp:admin"})
 
 	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
 	if kbListResp.Code != http.StatusOK {
@@ -397,8 +520,7 @@ func TestMCPStructuredDataQueryAndEvalDataset(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-structured", []string{"mcp:admin"})
 
 	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
 	if kbListResp.Code != http.StatusOK {
@@ -599,8 +721,7 @@ func TestHTTPStageUploadAndMCPRegisterStagedUpload(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-register", []string{"mcp:admin"})
 
 	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
 	if kbListResp.Code != http.StatusOK {
@@ -669,8 +790,7 @@ func TestMCPInlineUploadTooLargeReturnsGuidance(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-large-upload", []string{"mcp:admin"})
 
 	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
 	if kbListResp.Code != http.StatusOK {
@@ -865,12 +985,8 @@ func TestMCPDangerToolsDeleteKnowledgeBaseAndDocument(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	headers := map[string]string{"Authorization": "Bearer " + cfg.MCP.Token}
-	dangerHeaders := map[string]string{
-		"Authorization": "Bearer " + cfg.MCP.Token,
-		"X-MCP-Confirm": cfg.MCP.Token,
-	}
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-danger", []string{"mcp:admin"})
+	dangerHeaders := headers
 
 	createKBResp := performRequestWithHeaders(
 		t,
@@ -1319,7 +1435,7 @@ func newTestRouterWithServerConfig(t *testing.T, configure func(*model.ServerCon
 		t.Fatalf("create auth service: %v", err)
 	}
 	authHandler := handler.NewAuthHandler(authService, serverConfig.EnableAuth)
-	mcpServer := mcp.NewServer(mcpRegistry, appService, serverConfig)
+	mcpServer := mcp.NewServer(mcpRegistry, appService, authService, serverConfig)
 	ginEngine := NewRouter(appHandler, configHandler, authHandler, authService, serverConfig, mcpServer, fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html><body>test</body></html>")},
 	})
@@ -1361,6 +1477,31 @@ func getTestConfig(t *testing.T, handler http.Handler, headers map[string]string
 	var cfg model.AppConfig
 	decodeJSONResponse(t, configResp.Body.Bytes(), &cfg)
 	return cfg
+}
+
+func createTestAPIKeyHeaders(t *testing.T, handler http.Handler, sessionHeaders map[string]string, name string, scopes []string) map[string]string {
+	t.Helper()
+	resp := performRequestWithHeaders(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/auth/api-keys",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{
+			"name":   name,
+			"scopes": scopes,
+		})),
+		"application/json",
+		sessionHeaders,
+	)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected api key status 201, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	var created service.CreatedAPIKey
+	decodeJSONResponse(t, resp.Body.Bytes(), &created)
+	if !strings.HasPrefix(created.Token, "ailb_sk_") {
+		t.Fatalf("expected api key token, got %+v", created)
+	}
+	return map[string]string{"Authorization": "Bearer " + created.Token}
 }
 
 func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {

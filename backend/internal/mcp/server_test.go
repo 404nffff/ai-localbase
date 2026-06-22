@@ -32,7 +32,7 @@ func TestMCPRejectsEmptyCompatibleToken(t *testing.T) {
 	})
 	server := NewServer(registry, staticTokenProvider{config: model.AppConfig{
 		MCP: model.MCPConfig{Token: ""},
-	}}, model.ServerConfig{
+	}}, nil, model.ServerConfig{
 		EnableAuth:  true,
 		EnableMCP:   true,
 		MCPBasePath: "/mcp",

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ai-localbase/internal/model"
+	"ai-localbase/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,9 +22,14 @@ type TokenProvider interface {
 	GetConfig() model.AppConfig
 }
 
+type APIKeyValidator interface {
+	ValidateAPIKey(token string) (service.AuthPrincipal, error)
+}
+
 type Server struct {
 	registry        *ToolRegistry
 	tokenProvider   TokenProvider
+	apiKeyValidator APIKeyValidator
 	serverConfig    model.ServerConfig
 	requestTimeout  time.Duration
 	requestsPerMin  int
@@ -32,7 +38,24 @@ type Server struct {
 	rateCount       int
 }
 
-func NewServer(registry *ToolRegistry, tokenProvider TokenProvider, serverConfig model.ServerConfig) *Server {
+type authContext struct {
+	Mode      string
+	Principal service.AuthPrincipal
+}
+
+const (
+	authModeAPIKey          = "api_key"
+	authModeCompatibleToken = "compatible_token"
+
+	scopeMCPRead   = "mcp:read"
+	scopeMCPWrite  = "mcp:write"
+	scopeMCPDanger = "mcp:danger"
+	scopeMCPUpload = "mcp:upload"
+	scopeMCPEval   = "mcp:eval"
+	scopeMCPAdmin  = "mcp:admin"
+)
+
+func NewServer(registry *ToolRegistry, tokenProvider TokenProvider, apiKeyValidator APIKeyValidator, serverConfig model.ServerConfig) *Server {
 	timeout := time.Duration(serverConfig.MCPRequestTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -42,11 +65,12 @@ func NewServer(registry *ToolRegistry, tokenProvider TokenProvider, serverConfig
 		requestsPerMin = 120
 	}
 	return &Server{
-		registry:       registry,
-		tokenProvider:  tokenProvider,
-		serverConfig:   serverConfig,
-		requestTimeout: timeout,
-		requestsPerMin: requestsPerMin,
+		registry:        registry,
+		tokenProvider:   tokenProvider,
+		apiKeyValidator: apiKeyValidator,
+		serverConfig:    serverConfig,
+		requestTimeout:  timeout,
+		requestsPerMin:  requestsPerMin,
 	}
 }
 
@@ -61,7 +85,8 @@ func (s *Server) RegisterRoutes(group *gin.RouterGroup) {
 }
 
 func (s *Server) handleInfo(c *gin.Context) {
-	if !s.authorize(c) {
+	authCtx, ok := s.authenticate(c)
+	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
 	}
 	if !s.allowRequest(c) {
@@ -79,7 +104,8 @@ func (s *Server) handleInfo(c *gin.Context) {
 }
 
 func (s *Server) handleListTools(c *gin.Context) {
-	if !s.authorize(c) {
+	authCtx, ok := s.authenticate(c)
+	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
 	}
 	if !s.allowRequest(c) {
@@ -91,7 +117,8 @@ func (s *Server) handleListTools(c *gin.Context) {
 }
 
 func (s *Server) handleJSONRPC(c *gin.Context) {
-	if !s.authorize(c) {
+	authCtx, ok := s.authenticate(c)
+	if !ok {
 		return
 	}
 	if !s.allowRequest(c) {
@@ -116,6 +143,9 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 	method := strings.TrimSpace(request.Method)
 	switch method {
 	case "initialize":
+		if !s.authorizeScopes(c, authCtx, scopeMCPRead) {
+			return
+		}
 		log.Printf("mcp request method=%s remote=%s duration_ms=%d", method, c.ClientIP(), time.Since(startedAt).Milliseconds())
 		c.JSON(http.StatusOK, JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
@@ -134,6 +164,9 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 			},
 		})
 	case "tools/list":
+		if !s.authorizeScopes(c, authCtx, scopeMCPRead) {
+			return
+		}
 		log.Printf("mcp request method=%s remote=%s duration_ms=%d", method, c.ClientIP(), time.Since(startedAt).Milliseconds())
 		c.JSON(http.StatusOK, JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
@@ -147,13 +180,23 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 		arguments, _ := request.Params["arguments"].(map[string]any)
 		toolName = strings.TrimSpace(toolName)
 		permissionLevel := "unknown"
+		var definition ToolDefinition
+		hasDefinition := false
 		for _, tool := range s.registry.List() {
 			if tool.Name == toolName {
 				permissionLevel = string(tool.PermissionLevel)
+				definition = tool
+				hasDefinition = true
 				break
 			}
 		}
-		if !s.authorizeDangerousTool(c, toolName) {
+		if hasDefinition && !s.authorizeScopes(c, authCtx, requiredScopesForTool(definition)...) {
+			return
+		}
+		if !hasDefinition && !s.authorizeScopes(c, authCtx, scopeMCPRead) {
+			return
+		}
+		if !s.authorizeDangerousTool(c, toolName, authCtx) {
 			return
 		}
 		log.Printf("mcp tool call start tool=%s permission=%s remote=%s args=%s", toolName, permissionLevel, c.ClientIP(), summarizeToolArguments(arguments))
@@ -200,6 +243,7 @@ func (s *Server) toolDescriptors() []map[string]any {
 			"annotations": map[string]any{
 				"readOnlyHint":    tool.ReadOnly,
 				"permissionLevel": tool.PermissionLevel,
+				"requiredScopes":  requiredScopesForTool(tool),
 			},
 		})
 	}
@@ -298,54 +342,86 @@ func sortedMapKeys(items map[string]any) []string {
 	return keys
 }
 
-func (s *Server) authorize(c *gin.Context) bool {
+func (s *Server) authenticate(c *gin.Context) (authContext, bool) {
 	if s == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mcp server is unavailable"})
-		return false
+		return authContext{}, false
 	}
 	if !s.serverConfig.EnableAuth {
 		c.JSON(http.StatusForbidden, gin.H{"error": "mcp requires ENABLE_AUTH=true and an API key or compatible token"})
-		return false
+		return authContext{}, false
 	}
+
+	authorization := strings.TrimSpace(c.GetHeader("Authorization"))
+	if authorization == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+		return authContext{}, false
+	}
+
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(strings.ToLower(authorization), strings.ToLower(bearerPrefix)) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization scheme"})
+		return authContext{}, false
+	}
+
+	providedToken := strings.TrimSpace(authorization[len(bearerPrefix):])
+	if providedToken == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
+		return authContext{}, false
+	}
+
+	if strings.HasPrefix(providedToken, "ailb_sk_") {
+		if s.apiKeyValidator == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mcp api key validator is unavailable"})
+			return authContext{}, false
+		}
+		principal, err := s.apiKeyValidator.ValidateAPIKey(providedToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired api key"})
+			return authContext{}, false
+		}
+		return authContext{Mode: authModeAPIKey, Principal: principal}, true
+	}
+
 	if s.tokenProvider == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mcp token provider is unavailable"})
-		return false
+		return authContext{}, false
 	}
 
 	cfg := s.tokenProvider.GetConfig()
 	expectedToken := strings.TrimSpace(cfg.MCP.Token)
 	if expectedToken == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "mcp token is not configured"})
-		return false
-	}
-
-	authorization := strings.TrimSpace(c.GetHeader("Authorization"))
-	if authorization == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
-		return false
-	}
-
-	const bearerPrefix = "Bearer "
-	if !strings.HasPrefix(strings.ToLower(authorization), strings.ToLower(bearerPrefix)) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization scheme"})
-		return false
-	}
-
-	providedToken := strings.TrimSpace(authorization[len(bearerPrefix):])
-	if providedToken == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid mcp token"})
-		return false
+		return authContext{}, false
 	}
 
 	if subtle.ConstantTimeCompare([]byte(providedToken), []byte(expectedToken)) != 1 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid mcp token"})
-		return false
+		return authContext{}, false
 	}
 
-	return true
+	return authContext{Mode: authModeCompatibleToken}, true
 }
 
-func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string) bool {
+func (s *Server) authorizeScopes(c *gin.Context, authCtx authContext, requiredScopes ...string) bool {
+	if authCtx.Mode == authModeCompatibleToken {
+		return true
+	}
+	if authCtx.Mode != authModeAPIKey {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid mcp authorization"})
+		return false
+	}
+	if hasMCPScopes(authCtx.Principal.Scopes, requiredScopes...) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error":          "api key does not have required mcp scope",
+		"requiredScopes": requiredScopes,
+	})
+	return false
+}
+
+func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string, authCtx authContext) bool {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" || s == nil || s.registry == nil {
 		return true
@@ -353,6 +429,9 @@ func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string) bool {
 
 	definition, ok := s.registry.tools[toolName]
 	if !ok || definition.PermissionLevel != ToolPermissionDanger {
+		return true
+	}
+	if authCtx.Mode == authModeAPIKey {
 		return true
 	}
 
@@ -377,6 +456,52 @@ func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string) bool {
 		return false
 	}
 
+	return true
+}
+
+func requiredScopesForTool(tool ToolDefinition) []string {
+	switch {
+	case tool.PermissionLevel == ToolPermissionDanger:
+		return []string{scopeMCPDanger}
+	case tool.Name == "generate_eval_dataset":
+		return []string{scopeMCPEval}
+	case isMCPUploadTool(tool.Name):
+		return []string{scopeMCPUpload}
+	case tool.PermissionLevel == ToolPermissionWrite:
+		return []string{scopeMCPWrite}
+	default:
+		return []string{scopeMCPRead}
+	}
+}
+
+func isMCPUploadTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "upload_text_document", "upload_document", "register_staged_upload":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasMCPScopes(grantedScopes []string, requiredScopes ...string) bool {
+	if len(requiredScopes) == 0 {
+		return true
+	}
+	granted := make(map[string]struct{}, len(grantedScopes))
+	for _, scope := range grantedScopes {
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		if scope != "" {
+			granted[scope] = struct{}{}
+		}
+	}
+	if _, ok := granted[scopeMCPAdmin]; ok {
+		return true
+	}
+	for _, scope := range requiredScopes {
+		if _, ok := granted[strings.ToLower(strings.TrimSpace(scope))]; !ok {
+			return false
+		}
+	}
 	return true
 }
 

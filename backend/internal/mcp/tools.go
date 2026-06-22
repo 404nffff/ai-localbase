@@ -749,22 +749,28 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 			"name":            tool.Name,
 			"readOnly":        tool.ReadOnly,
 			"permissionLevel": permission,
+			"requiredScopes":  requiredScopesForTool(tool),
 		})
 	}
 
 	return map[string]any{
-		"name":              serverName,
-		"version":           serverVersion,
-		"protocolVersion":   protocolVersion,
-		"jsonrpc":           jsonRPCVersion,
-		"transport":         "http",
-		"enabled":           cfg.MCP.Enabled,
-		"basePath":          cfg.MCP.BasePath,
-		"toolCount":         len(tools),
-		"permissionCounts":  permissionCounts,
-		"tools":             toolItems,
-		"capabilities":      map[string]any{"tools": map[string]any{"listChanged": false}},
-		"auth":              map[string]any{"type": "bearer", "tokenConfigured": strings.TrimSpace(cfg.MCP.Token) != ""},
+		"name":             serverName,
+		"version":          serverVersion,
+		"protocolVersion":  protocolVersion,
+		"jsonrpc":          jsonRPCVersion,
+		"transport":        "http",
+		"enabled":          cfg.MCP.Enabled,
+		"basePath":         cfg.MCP.BasePath,
+		"toolCount":        len(tools),
+		"permissionCounts": permissionCounts,
+		"tools":            toolItems,
+		"capabilities":     map[string]any{"tools": map[string]any{"listChanged": false}},
+		"auth": map[string]any{
+			"type":                  "api_key_scope",
+			"legacyTokenCompatible": true,
+			"legacyTokenConfigured": strings.TrimSpace(cfg.MCP.Token) != "",
+			"adminScope":            scopeMCPAdmin,
+		},
 		"dangerousToolGate": "X-MCP-Confirm",
 	}
 }

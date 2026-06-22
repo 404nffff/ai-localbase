@@ -90,6 +90,36 @@ const apiKeyScopeOptions = [
     label: '读取配置',
     description: '预留给配置读取 API',
   },
+  {
+    value: 'mcp:read',
+    label: 'MCP 读取',
+    description: '工具发现、检索、列表和只读查询',
+  },
+  {
+    value: 'mcp:write',
+    label: 'MCP 写入',
+    description: '创建知识库、保存会话和重建索引',
+  },
+  {
+    value: 'mcp:upload',
+    label: 'MCP 上传',
+    description: '上传文档和注册暂存文件',
+  },
+  {
+    value: 'mcp:eval',
+    label: 'MCP 评估',
+    description: '生成评估数据集',
+  },
+  {
+    value: 'mcp:danger',
+    label: 'MCP 危险',
+    description: '删除知识库、文档或会话',
+  },
+  {
+    value: 'mcp:admin',
+    label: 'MCP 管理',
+    description: '允许调用全部 MCP 工具',
+  },
 ]
 
 const defaultAPIKeyScopes = ['openai:chat']
@@ -429,8 +459,8 @@ const SystemSettings: React.FC<SystemSettingsProps> = ({ onLogout }) => {
         <section className="settings-setting-section">
           <div className="settings-setting-section-header">
             <div>
-              <h3>OpenAI-compatible API Key</h3>
-              <p>用于外部客户端调用 /v1/chat/completions，和网页登录会话分离。</p>
+              <h3>API Key</h3>
+              <p>用于外部客户端调用 OpenAI-compatible API 或 MCP 工具，和网页登录会话分离。</p>
             </div>
           </div>
           <div className="settings-inline-panel settings-inline-panel-quiet">

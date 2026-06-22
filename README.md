@@ -192,7 +192,7 @@ docker compose -f docker-compose.dev.yml up --build
 - HTTP 形式 MCP 入口
 - 工具列表发现能力
 - 只读 / 写入 / 危险工具权限分级
-- 认证开启后的 Bearer 凭证鉴权
+- API Key Scope 鉴权，旧 MCP Token 兼容
 - 限流、超时与审计日志
 - 危险工具二次确认机制
 - 复用现有知识库、会话、配置与检索服务
@@ -212,7 +212,7 @@ docker compose -f docker-compose.dev.yml up --build
 - `MCP_REQUEST_TIMEOUT_SECONDS`：请求超时，默认 `15`
 - `MCP_REQUESTS_PER_MINUTE`：每分钟限流，默认 `120`
 
-MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时请只在 `ENABLE_AUTH=true` 后再开启。当前 Settings 中的 MCP Token 是旧客户端兼容凭证；后续新接入推荐使用带 MCP scope 的 API Key。
+MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时请只在 `ENABLE_AUTH=true` 后再开启。新接入推荐使用带 `mcp:*` scope 的 API Key，Settings 中的 MCP Token 仅作为旧客户端兼容凭证。
 
 ### Cherry Studio 接入示例
 
@@ -222,7 +222,7 @@ MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时
 - **URL**：`http://127.0.0.1:8080/mcp`
 - **请求头**：
   - `Content-Type: application/json`
-  - `Authorization: Bearer <你的 MCP Token 或 MCP API Key>`
+  - `Authorization: Bearer <带 MCP scope 的 API Key>`
 
 ![Cherry Studio MCP 设置页面](./assets/mcp_setting.png)
 
