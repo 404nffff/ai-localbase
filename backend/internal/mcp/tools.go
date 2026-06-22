@@ -33,6 +33,10 @@ type AppServiceReader interface {
 	DeleteConversation(id string) error
 	StageInlineUpload(fileName string, content []byte, source string) (model.StagedUpload, error)
 	RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error)
+	StartMCPImportJob(req model.MCPStartImportJobRequest) (model.MCPJob, error)
+	GetMCPJobStatus(jobID string) (model.MCPJob, error)
+	CancelMCPJob(jobID string) (model.MCPJob, error)
+	ListRecentMCPJobs(limit int) []model.MCPJob
 }
 
 func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
@@ -725,6 +729,107 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				return NewTextResult(
 					fmt.Sprintf("暂存文件《%s》已注册到知识库。", uploaded.Name),
 					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "uploadId": uploadID},
+				), nil
+			},
+		},
+		{
+			Name:        "start_import_job",
+			Description: "启动异步文本文档导入任务。参数 knowledgeBaseId、fileName 为必填，content 为文本内容。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID"},
+					"fileName":        map[string]any{"type": "string", "description": "文件名，需带扩展名"},
+					"content":         map[string]any{"type": "string", "description": "纯文本内容；留空会创建失败状态用于排查"},
+				},
+				[]string{"knowledgeBaseId", "fileName"},
+			),
+			ReadOnly:        false,
+			PermissionLevel: ToolPermissionWrite,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				fileName, err := requiredStringArg(args, "fileName")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				job, err := appService.StartMCPImportJob(model.MCPStartImportJobRequest{
+					KnowledgeBaseID: knowledgeBaseID,
+					FileName:        fileName,
+					Content:         optionalStringArg(args, "content"),
+				})
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				return NewTextResult(
+					fmt.Sprintf("导入任务已启动：%s。", job.ID),
+					map[string]any{"job": job},
+				), nil
+			},
+		},
+		{
+			Name:            "get_job_status",
+			Description:     "查询 MCP 长任务状态。参数 jobId 为必填。",
+			InputSchema:     requiredStringPropertySchema("jobId", "Job ID"),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				jobID, err := requiredStringArg(args, "jobId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				job, err := appService.GetMCPJobStatus(jobID)
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				return NewTextResult(
+					fmt.Sprintf("任务 %s 当前状态为 %s，进度 %d%%。", job.ID, job.Status, job.Progress),
+					map[string]any{"job": job},
+				), nil
+			},
+		},
+		{
+			Name:            "cancel_job",
+			Description:     "取消 MCP 长任务。参数 jobId 为必填。",
+			InputSchema:     requiredStringPropertySchema("jobId", "Job ID"),
+			ReadOnly:        false,
+			PermissionLevel: ToolPermissionWrite,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				jobID, err := requiredStringArg(args, "jobId")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				job, err := appService.CancelMCPJob(jobID)
+				if err != nil {
+					return ToolCallResult{}, err
+				}
+				return NewTextResult(
+					fmt.Sprintf("任务 %s 当前状态为 %s。", job.ID, job.Status),
+					map[string]any{"job": job},
+				), nil
+			},
+		},
+		{
+			Name:        "list_recent_jobs",
+			Description: "列出最近 MCP 长任务。参数 limit 可选，默认 20。",
+			InputSchema: objectSchema(
+				map[string]any{
+					"limit": map[string]any{"type": "integer", "description": "最多返回多少个 job，默认 20，最大 20"},
+				},
+				[]string{},
+			),
+			ReadOnly:        true,
+			PermissionLevel: ToolPermissionReadOnly,
+			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
+				_ = ctx
+				jobs := appService.ListRecentMCPJobs(optionalIntArg(args, "limit"))
+				return NewTextResult(
+					fmt.Sprintf("最近共有 %d 个 MCP 任务。", len(jobs)),
+					map[string]any{"jobs": jobs},
 				), nil
 			},
 		},

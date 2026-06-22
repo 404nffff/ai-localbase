@@ -198,6 +198,7 @@ docker compose -f docker-compose.dev.yml up --build
 - 复用现有知识库、会话、配置与检索服务
 - MCP 能力自检工具：`get_mcp_capabilities`
 - 文档详情、检索调试、结构化查询、评估集生成和重建索引工具
+- MCP Job 工作流：异步导入、状态查询、取消和最近任务列表
 
 默认入口：
 

@@ -61,7 +61,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 |------|------|
 | `mcp:read` | 工具发现、列表、检索、文档详情、会话读取等只读工具 |
 | `mcp:write` | 创建知识库、保存会话、重建索引等写入工具 |
-| `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload` |
+| `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload`、`start_import_job` |
 | `mcp:eval` | `generate_eval_dataset` |
 | `mcp:danger` | 删除知识库、删除文档、删除会话 |
 | `mcp:admin` | 允许调用全部 MCP 工具 |
@@ -102,7 +102,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 ## 当前内置工具
 
-当前共提供 **21 个 MCP 工具**，分为 **12 个只读工具**、**6 个写工具**、**3 个危险工具**。
+当前共提供 **25 个 MCP 工具**，分为 **14 个只读工具**、**8 个写工具**、**3 个危险工具**。
 
 ### 权限级别说明
 
@@ -132,6 +132,10 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `upload_document` | `write` | 上传 Base64 编码的真实文件 |
 | `register_staged_upload` | `write` | 注册 HTTP 暂存上传文件 |
 | `reindex_document` | `write` | 重建文档索引 |
+| `start_import_job` | `write` | 启动异步导入任务 |
+| `get_job_status` | `read-only` | 查询 Job 状态 |
+| `cancel_job` | `write` | 取消 Job |
+| `list_recent_jobs` | `read-only` | 列出最近 Job |
 | `delete_knowledge_base` | `danger` | 删除知识库 |
 | `delete_document` | `danger` | 删除文档 |
 | `delete_conversation` | `danger` | 删除会话 |
@@ -467,6 +471,53 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 - 重建后的文档对象
 - 知识库 ID
+
+### Job 工作流工具
+
+Job 工具用于避免长任务占用一次 JSON-RPC 调用。当前实现使用内存状态，不引入新数据库；服务重启后历史 Job 会清空。
+
+统一 Job 返回结构：
+
+- `jobId`：任务 ID
+- `status`：`queued` / `running` / `succeeded` / `failed` / `cancelled`
+- `progress`：0-100 的进度值
+- `summary`：简短状态摘要
+- `result`：成功结果
+- `error`：失败原因
+
+#### `start_import_job`
+
+权限级别：`write`，需要 `mcp:upload` 或 `mcp:admin`
+
+输入参数：
+
+- `knowledgeBaseId`（必填）
+- `fileName`（必填）
+- `content`（选填，文本内容；留空会形成失败 Job）
+
+#### `get_job_status`
+
+权限级别：`read-only`
+
+输入参数：
+
+- `jobId`（必填）
+
+#### `cancel_job`
+
+权限级别：`write`
+
+输入参数：
+
+- `jobId`（必填）
+
+#### `list_recent_jobs`
+
+权限级别：`read-only`
+
+输入参数：
+
+- `limit`（选填，默认 20，最大 20）
 
 ### 危险工具
 

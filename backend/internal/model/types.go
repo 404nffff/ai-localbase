@@ -142,6 +142,25 @@ type MCPDangerConfirmationResponse struct {
 	ParamHash    string `json:"paramHash"`
 }
 
+type MCPStartImportJobRequest struct {
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	FileName        string `json:"fileName"`
+	Content         string `json:"content,omitempty"`
+}
+
+type MCPJob struct {
+	ID          string         `json:"jobId"`
+	Type        string         `json:"type"`
+	Status      string         `json:"status"`
+	Progress    int            `json:"progress"`
+	Summary     string         `json:"summary"`
+	Result      map[string]any `json:"result,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	CreatedAt   string         `json:"createdAt"`
+	UpdatedAt   string         `json:"updatedAt"`
+	CompletedAt string         `json:"completedAt,omitempty"`
+}
+
 type RetrievalConfig struct {
 	DefaultSearchMode        string `json:"defaultSearchMode"`
 	HybridSearchEnabled      bool   `json:"hybridSearchEnabled"`

@@ -384,6 +384,18 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if !containsString(toolNames, "generate_eval_dataset") {
 		t.Fatalf("expected generate_eval_dataset in tools list, got %v", toolNames)
 	}
+	if !containsString(toolNames, "start_import_job") {
+		t.Fatalf("expected start_import_job in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "get_job_status") {
+		t.Fatalf("expected get_job_status in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "cancel_job") {
+		t.Fatalf("expected cancel_job in tools list, got %v", toolNames)
+	}
+	if !containsString(toolNames, "list_recent_jobs") {
+		t.Fatalf("expected list_recent_jobs in tools list, got %v", toolNames)
+	}
 
 	capabilitiesResp := performRequestWithHeaders(
 		t,
@@ -405,7 +417,7 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if capabilitiesResp.Code != http.StatusOK {
 		t.Fatalf("expected capabilities status 200, got %d, body=%s", capabilitiesResp.Code, capabilitiesResp.Body.String())
 	}
-	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":21`) ||
+	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":25`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"version":"0.2.0"`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) {
 		t.Fatalf("expected mcp capability summary, got %s", capabilitiesResp.Body.String())
@@ -835,6 +847,80 @@ func TestMCPInlineUploadTooLargeReturnsGuidance(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "register_staged_upload") || !strings.Contains(resp.Body.String(), "/api/uploads") {
 		t.Fatalf("expected staged upload guidance, got %s", resp.Body.String())
+	}
+}
+
+func TestMCPJobWorkflow(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-job-admin", []string{"mcp:admin"})
+	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	knowledgeBaseID := kbList.Items[0].ID
+
+	startResp := performMCPToolCall(t, engine, headers, 501, "start_import_job", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"fileName":        "job-import.md",
+		"content":         "# Job Import\n\n这是通过 MCP Job 导入的文档。",
+	})
+	if startResp.Code != http.StatusOK {
+		t.Fatalf("expected start job status 200, got %d, body=%s", startResp.Code, startResp.Body.String())
+	}
+	importJob := decodeMCPJobFromResponse(t, startResp)
+	importJob = waitForMCPJobStatus(t, engine, headers, importJob.ID, "succeeded")
+	if importJob.Progress != 100 || importJob.Result == nil {
+		t.Fatalf("expected succeeded import job with result, got %+v", importJob)
+	}
+
+	failResp := performMCPToolCall(t, engine, headers, 502, "start_import_job", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"fileName":        "job-failure.md",
+	})
+	if failResp.Code != http.StatusOK {
+		t.Fatalf("expected failed job start status 200, got %d, body=%s", failResp.Code, failResp.Body.String())
+	}
+	failedJob := decodeMCPJobFromResponse(t, failResp)
+	failedJob = waitForMCPJobStatus(t, engine, headers, failedJob.ID, "failed")
+	if failedJob.Error == "" {
+		t.Fatalf("expected failed job error, got %+v", failedJob)
+	}
+
+	cancelStartResp := performMCPToolCall(t, engine, headers, 503, "start_import_job", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"fileName":        "job-cancel.md",
+		"content":         "这个任务会立刻取消。",
+	})
+	if cancelStartResp.Code != http.StatusOK {
+		t.Fatalf("expected cancel job start status 200, got %d, body=%s", cancelStartResp.Code, cancelStartResp.Body.String())
+	}
+	cancelJob := decodeMCPJobFromResponse(t, cancelStartResp)
+	cancelResp := performMCPToolCall(t, engine, headers, 504, "cancel_job", map[string]any{
+		"jobId": cancelJob.ID,
+	})
+	if cancelResp.Code != http.StatusOK {
+		t.Fatalf("expected cancel status 200, got %d, body=%s", cancelResp.Code, cancelResp.Body.String())
+	}
+	cancelJob = waitForMCPJobStatus(t, engine, headers, cancelJob.ID, "cancelled")
+	if cancelJob.Status != "cancelled" {
+		t.Fatalf("expected cancelled job, got %+v", cancelJob)
+	}
+
+	listResp := performMCPToolCall(t, engine, headers, 505, "list_recent_jobs", map[string]any{"limit": 5})
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected list jobs status 200, got %d, body=%s", listResp.Code, listResp.Body.String())
+	}
+	if !strings.Contains(listResp.Body.String(), importJob.ID) || !strings.Contains(listResp.Body.String(), failedJob.ID) {
+		t.Fatalf("expected recent jobs list to include completed jobs, got %s", listResp.Body.String())
 	}
 }
 
@@ -1674,6 +1760,40 @@ func hasSecurityEvent(items []model.SecurityEvent, eventType, messagePart string
 		}
 	}
 	return false
+}
+
+func decodeMCPJobFromResponse(t *testing.T, resp *httptest.ResponseRecorder) model.MCPJob {
+	t.Helper()
+	var rpcResp struct {
+		Result struct {
+			Data struct {
+				Job model.MCPJob `json:"job"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
+	if strings.TrimSpace(rpcResp.Result.Data.Job.ID) == "" {
+		t.Fatalf("expected job in response, got %s", resp.Body.String())
+	}
+	return rpcResp.Result.Data.Job
+}
+
+func waitForMCPJobStatus(t *testing.T, handler http.Handler, headers map[string]string, jobID, expectedStatus string) model.MCPJob {
+	t.Helper()
+	var job model.MCPJob
+	for i := 0; i < 40; i++ {
+		resp := performMCPToolCall(t, handler, headers, 600+i, "get_job_status", map[string]any{"jobId": jobID})
+		if resp.Code != http.StatusOK {
+			t.Fatalf("expected get job status 200, got %d, body=%s", resp.Code, resp.Body.String())
+		}
+		job = decodeMCPJobFromResponse(t, resp)
+		if job.Status == expectedStatus {
+			return job
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("expected job %s to reach status %s, last status=%s job=%+v", jobID, expectedStatus, job.Status, job)
+	return job
 }
 
 func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {

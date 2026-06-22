@@ -596,7 +596,7 @@ func requiredScopesForTool(tool ToolDefinition) []string {
 
 func isMCPUploadTool(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "upload_text_document", "upload_document", "register_staged_upload":
+	case "upload_text_document", "upload_document", "register_staged_upload", "start_import_job":
 		return true
 	default:
 		return false

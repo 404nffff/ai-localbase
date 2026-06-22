@@ -61,6 +61,9 @@ type AppService struct {
 	contextCompressor ContextCompressor
 	mcpDangerMu       sync.Mutex
 	mcpDangerConfirms map[string]mcpDangerConfirmationRecord
+	mcpJobMu          sync.Mutex
+	mcpJobs           map[string]model.MCPJob
+	mcpJobCancels     map[string]context.CancelFunc
 }
 
 type mcpDangerConfirmationRecord struct {
@@ -144,6 +147,8 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		serverConfig:      serverConfig,
 		staging:           NewUploadStagingService(filepath.Join("data", "staging"), 30*time.Minute),
 		mcpDangerConfirms: map[string]mcpDangerConfirmationRecord{},
+		mcpJobs:           map[string]model.MCPJob{},
+		mcpJobCancels:     map[string]context.CancelFunc{},
 	}
 	service.rag.SetQdrantService(qdrant)
 
@@ -756,6 +761,248 @@ func sanitizeMCPDangerValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (model.MCPJob, error) {
+	if s == nil {
+		return model.MCPJob{}, fmt.Errorf("app service is nil")
+	}
+	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	fileName := strings.TrimSpace(req.FileName)
+	if knowledgeBaseID == "" {
+		return model.MCPJob{}, fmt.Errorf("knowledgeBaseId is required")
+	}
+	if fileName == "" {
+		return model.MCPJob{}, fmt.Errorf("fileName is required")
+	}
+
+	now := util.NowRFC3339()
+	job := model.MCPJob{
+		ID:        util.NextID("job"),
+		Type:      "import",
+		Status:    "queued",
+		Progress:  0,
+		Summary:   fmt.Sprintf("准备导入《%s》。", fileName),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s.mcpJobMu.Lock()
+	if s.mcpJobs == nil {
+		s.mcpJobs = map[string]model.MCPJob{}
+	}
+	if s.mcpJobCancels == nil {
+		s.mcpJobCancels = map[string]context.CancelFunc{}
+	}
+	s.mcpJobs[job.ID] = job
+	s.mcpJobCancels[job.ID] = cancel
+	s.pruneMCPJobsLocked()
+	s.mcpJobMu.Unlock()
+
+	go s.runMCPImportJob(ctx, job.ID, model.MCPStartImportJobRequest{
+		KnowledgeBaseID: knowledgeBaseID,
+		FileName:        fileName,
+		Content:         req.Content,
+	})
+
+	return job, nil
+}
+
+func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req model.MCPStartImportJobRequest) {
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Status = "running"
+		job.Progress = 10
+		job.Summary = fmt.Sprintf("正在导入《%s》。", req.FileName)
+	})
+
+	select {
+	case <-ctx.Done():
+		s.completeMCPJob(jobID, "cancelled", 0, "导入任务已取消。", nil, "")
+		return
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if strings.TrimSpace(req.Content) == "" {
+		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, "content is required")
+		return
+	}
+	if err := validateMCPJobTextFileName(req.FileName, s.GetConfig()); err != nil {
+		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
+		return
+	}
+
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Progress = 45
+		job.Summary = "文件已进入暂存。"
+	})
+	staged, err := s.StageInlineUpload(req.FileName, []byte(req.Content), "mcp-job-import")
+	if err != nil {
+		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		s.completeMCPJob(jobID, "cancelled", 50, "导入任务已取消。", nil, "")
+		return
+	default:
+	}
+
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Progress = 70
+		job.Summary = "正在注册并索引文档。"
+	})
+	uploaded, err := s.RegisterStagedUpload(staged.ID, req.KnowledgeBaseID, req.FileName)
+	if err != nil {
+		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
+		return
+	}
+	s.completeMCPJob(jobID, "succeeded", 100, fmt.Sprintf("文档《%s》导入完成。", uploaded.Name), map[string]any{
+		"uploaded":        uploaded,
+		"knowledgeBaseId": uploaded.KnowledgeBaseID,
+		"stagedUploadId":  staged.ID,
+	}, "")
+}
+
+func (s *AppService) GetMCPJobStatus(jobID string) (model.MCPJob, error) {
+	if s == nil {
+		return model.MCPJob{}, fmt.Errorf("app service is nil")
+	}
+	jobID = strings.TrimSpace(jobID)
+	s.mcpJobMu.Lock()
+	defer s.mcpJobMu.Unlock()
+	job, ok := s.mcpJobs[jobID]
+	if !ok {
+		return model.MCPJob{}, fmt.Errorf("job not found")
+	}
+	return cloneMCPJob(job), nil
+}
+
+func (s *AppService) CancelMCPJob(jobID string) (model.MCPJob, error) {
+	if s == nil {
+		return model.MCPJob{}, fmt.Errorf("app service is nil")
+	}
+	jobID = strings.TrimSpace(jobID)
+	s.mcpJobMu.Lock()
+	job, ok := s.mcpJobs[jobID]
+	if !ok {
+		s.mcpJobMu.Unlock()
+		return model.MCPJob{}, fmt.Errorf("job not found")
+	}
+	cancel := s.mcpJobCancels[jobID]
+	if job.Status == "queued" || job.Status == "running" {
+		job.Status = "cancelled"
+		job.Summary = "任务已取消。"
+		job.UpdatedAt = util.NowRFC3339()
+		job.CompletedAt = job.UpdatedAt
+		s.mcpJobs[jobID] = job
+		delete(s.mcpJobCancels, jobID)
+	}
+	s.mcpJobMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return cloneMCPJob(job), nil
+}
+
+func (s *AppService) ListRecentMCPJobs(limit int) []model.MCPJob {
+	if s == nil {
+		return nil
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 20
+	}
+	s.mcpJobMu.Lock()
+	defer s.mcpJobMu.Unlock()
+	items := make([]model.MCPJob, 0, len(s.mcpJobs))
+	for _, job := range s.mcpJobs {
+		items = append(items, cloneMCPJob(job))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func (s *AppService) updateMCPJob(jobID string, update func(*model.MCPJob)) {
+	s.mcpJobMu.Lock()
+	defer s.mcpJobMu.Unlock()
+	job, ok := s.mcpJobs[jobID]
+	if !ok {
+		return
+	}
+	update(&job)
+	job.UpdatedAt = util.NowRFC3339()
+	s.mcpJobs[jobID] = job
+}
+
+func (s *AppService) completeMCPJob(jobID, status string, progress int, summary string, result map[string]any, errorMessage string) {
+	s.mcpJobMu.Lock()
+	defer s.mcpJobMu.Unlock()
+	job, ok := s.mcpJobs[jobID]
+	if !ok {
+		return
+	}
+	job.Status = status
+	job.Progress = progress
+	job.Summary = summary
+	job.Result = result
+	job.Error = errorMessage
+	job.UpdatedAt = util.NowRFC3339()
+	job.CompletedAt = job.UpdatedAt
+	s.mcpJobs[jobID] = job
+	delete(s.mcpJobCancels, jobID)
+}
+
+func (s *AppService) pruneMCPJobsLocked() {
+	if len(s.mcpJobs) <= 50 {
+		return
+	}
+	items := make([]model.MCPJob, 0, len(s.mcpJobs))
+	for _, job := range s.mcpJobs {
+		items = append(items, job)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+	for _, job := range items[50:] {
+		delete(s.mcpJobs, job.ID)
+		delete(s.mcpJobCancels, job.ID)
+	}
+}
+
+func cloneMCPJob(job model.MCPJob) model.MCPJob {
+	if job.Result != nil {
+		result := make(map[string]any, len(job.Result))
+		for key, value := range job.Result {
+			result[key] = value
+		}
+		job.Result = result
+	}
+	return job
+}
+
+func validateMCPJobTextFileName(fileName string, cfg model.AppConfig) error {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	allowed := map[string]struct{}{
+		".txt": {},
+		".md":  {},
+		".csv": {},
+	}
+	if _, ok := allowed[ext]; !ok {
+		if ext == "" {
+			return fmt.Errorf("unsupported text upload type: missing extension, allowed types are .txt, .md, .csv")
+		}
+		return fmt.Errorf("unsupported text upload type: %s, allowed types are .txt, .md, .csv", ext)
+	}
+	if IsSensitiveStructuredFileExtension(ext) && !IsLocalOllamaConfig(cfg.Chat, cfg.Embedding) {
+		return fmt.Errorf("sensitive structured file type %s requires local ollama for both chat and embedding", ext)
+	}
+	return nil
 }
 
 func IsSensitiveStructuredFileExtension(ext string) bool {
