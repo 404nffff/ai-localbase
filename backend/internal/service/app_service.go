@@ -46,6 +46,7 @@ const (
 	retrievalDebugContextLimit    = 3000
 	retrievalDebugChunkTextLimit  = 1600
 	mcpImportJobContentLimit      = 256 * 1024
+	mcpJobCancelWarning           = "任务取消是 best-effort；如果底层导入已进入注册或索引阶段，文档可能已经完成导入。"
 )
 
 type AppService struct {
@@ -776,8 +777,8 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 	if fileName == "" {
 		return model.MCPJob{}, fmt.Errorf("fileName is required")
 	}
-	if int64(len([]byte(req.Content))) > mcpImportJobContentLimit {
-		return model.MCPJob{}, fmt.Errorf("inline import content too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len([]byte(req.Content)))), util.FormatFileSize(mcpImportJobContentLimit))
+	if int64(len(req.Content)) > mcpImportJobContentLimit {
+		return model.MCPJob{}, fmt.Errorf("inline import content too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len(req.Content))), util.FormatFileSize(mcpImportJobContentLimit))
 	}
 
 	now := util.NowRFC3339()
@@ -910,6 +911,7 @@ func (s *AppService) CancelMCPJob(jobID string) (model.MCPJob, error) {
 	if job.Status == "queued" || job.Status == "running" {
 		job.Status = "cancelled"
 		job.Summary = "任务已取消。"
+		job.Warnings = appendMCPJobWarning(job.Warnings, mcpJobCancelWarning)
 		job.UpdatedAt = util.NowRFC3339()
 		job.CompletedAt = job.UpdatedAt
 		s.mcpJobs[jobID] = job
@@ -974,6 +976,9 @@ func (s *AppService) completeMCPJob(jobID, status string, progress int, summary 
 	job.Summary = summary
 	job.Result = result
 	job.Error = errorMessage
+	if status == "cancelled" {
+		job.Warnings = appendMCPJobWarning(job.Warnings, mcpJobCancelWarning)
+	}
 	job.UpdatedAt = util.NowRFC3339()
 	job.CompletedAt = job.UpdatedAt
 	s.mcpJobs[jobID] = job
@@ -987,6 +992,19 @@ func isMCPJobTerminalStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func appendMCPJobWarning(warnings []string, warning string) []string {
+	warning = strings.TrimSpace(warning)
+	if warning == "" {
+		return warnings
+	}
+	for _, item := range warnings {
+		if item == warning {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
 }
 
 func (s *AppService) pruneMCPJobsLocked() {
@@ -1014,6 +1032,7 @@ func cloneMCPJob(job model.MCPJob) model.MCPJob {
 		}
 		job.Result = result
 	}
+	job.Warnings = append([]string(nil), job.Warnings...)
 	return job
 }
 

@@ -932,6 +932,9 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
+				if int64(len(content)) > maxInlineUploadBytes {
+					return ToolCallResult{}, fmt.Errorf("inline text upload too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len(content))), util.FormatFileSize(maxInlineUploadBytes))
+				}
 				if err := validateTextUploadFileName(fileName, appService.GetConfig()); err != nil {
 					return ToolCallResult{}, err
 				}

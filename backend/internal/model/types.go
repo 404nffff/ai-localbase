@@ -156,6 +156,7 @@ type MCPJob struct {
 	Summary     string         `json:"summary"`
 	Result      map[string]any `json:"result,omitempty"`
 	Error       string         `json:"error,omitempty"`
+	Warnings    []string       `json:"warnings,omitempty"`
 	CreatedAt   string         `json:"createdAt"`
 	UpdatedAt   string         `json:"updatedAt"`
 	CompletedAt string         `json:"completedAt,omitempty"`

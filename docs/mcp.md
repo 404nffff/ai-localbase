@@ -24,7 +24,7 @@
 后端通过环境变量控制 MCP：
 
 - `ENABLE_MCP`：是否启用 MCP，默认 `false`
-- `MCP_BASE_PATH`：MCP 挂载路径，默认 `/mcp`
+- `MCP_BASE_PATH`：MCP 挂载路径，默认 `/mcp`。Docker 前端同源代理支持 `/mcp` 或以 `/mcp` 结尾的嵌套路径，例如 `/agent/mcp`
 - `MCP_REQUEST_TIMEOUT_SECONDS`：单次 MCP 请求超时时间，默认 `15`
 - `MCP_REQUESTS_PER_MINUTE`：MCP 每分钟最大请求数，默认 `120`
 - MCP Token 会在首次启动时自动生成并持久化到应用配置中，等价 MCP 全权限，仅作为旧客户端迁移凭证
@@ -40,6 +40,8 @@ MCP_REQUESTS_PER_MINUTE=120
 ```
 
 MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_AUTH=true`，并使用 API Key Scope 模式接入。旧版 MCP Token 等价 MCP 全权限，仅作为兼容凭证保留，且为空时不会放行旧 Token 请求。
+
+如果将 `MCP_BASE_PATH` 改成不以 `/mcp` 结尾的路径，需要自行配置外部反向代理，或让 MCP 客户端直接访问后端端口。
 
 启动后可访问：
 
@@ -599,6 +601,7 @@ Job 工具用于避免长任务占用一次 JSON-RPC 调用。当前实现使用
 - `summary`：简短状态摘要
 - `result`：成功结果
 - `error`：失败原因
+- `warnings`：警告列表；取消类 Job 会提示取消是 best-effort，底层导入进入注册或索引阶段后可能已经完成副作用
 
 #### `start_import_job`
 

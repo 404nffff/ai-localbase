@@ -217,6 +217,8 @@ docker compose -f docker-compose.dev.yml up --build
 
 MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时请只在 `ENABLE_AUTH=true` 后再开启。新接入推荐使用带 `mcp:*` scope 的 API Key，Settings 中的 MCP Token 等价 MCP 全权限，仅作为旧客户端迁移凭证。
 
+Docker 前端同源代理支持默认 `/mcp`，也支持以 `/mcp` 结尾的嵌套路径，例如 `/agent/mcp`。如果使用其他自定义路径，需要自行配置外部反向代理，或让 MCP 客户端直接访问后端端口。
+
 ### Cherry Studio 接入示例
 
 如果你希望在 Cherry Studio 中通过 MCP 接入 [`AI LocalBase`](README.md)，可以按以下方式配置：

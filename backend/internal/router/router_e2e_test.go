@@ -963,6 +963,36 @@ func TestMCPImportJobContentTooLargeReturnsGuidance(t *testing.T) {
 	}
 }
 
+func TestMCPTextUploadTooLargeReturnsGuidance(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	headers := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-admin-large-text-upload", []string{"mcp:admin"})
+	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	resp := performMCPToolCall(t, engine, headers, 15, "upload_text_document", map[string]any{
+		"knowledgeBaseId": kbList.Items[0].ID,
+		"fileName":        "large-text.md",
+		"content":         strings.Repeat("a", 256*1024+1),
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "inline text upload too large") || !strings.Contains(resp.Body.String(), "register_staged_upload") || !strings.Contains(resp.Body.String(), "/api/uploads") {
+		t.Fatalf("expected staged upload guidance, got %s", resp.Body.String())
+	}
+}
+
 func TestMCPJobWorkflow(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
@@ -1026,6 +1056,9 @@ func TestMCPJobWorkflow(t *testing.T) {
 	cancelJob = waitForMCPJobStatus(t, engine, headers, cancelJob.ID, "cancelled")
 	if cancelJob.Status != "cancelled" {
 		t.Fatalf("expected cancelled job, got %+v", cancelJob)
+	}
+	if len(cancelJob.Warnings) == 0 || !strings.Contains(cancelJob.Warnings[0], "best-effort") {
+		t.Fatalf("expected cancelled job warning, got %+v", cancelJob)
 	}
 
 	listResp := performMCPToolCall(t, engine, headers, 505, "list_recent_jobs", map[string]any{"limit": 5})

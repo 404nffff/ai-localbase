@@ -27,7 +27,7 @@ export default defineConfig({
         target: proxyTarget,
         changeOrigin: true,
       },
-      '/mcp': {
+      '^/(?:.+/)?mcp(?:/.*)?$': {
         target: proxyTarget,
         changeOrigin: true,
       },
