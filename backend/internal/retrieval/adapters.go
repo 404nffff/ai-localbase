@@ -67,18 +67,17 @@ func (a *RerankerAdapter) Rerank(ctx context.Context, query string, chunks []Chu
 	return convertRetrievedToChunks(reranked), nil
 }
 
-// EvidenceGateAdapter 暂时未实现，返回原始结果
-type EvidenceGateAdapter struct {
-	// 目前系统中没有独立的 EvidenceGate 接口，逻辑在 app_service 中
-}
+// EvidenceGateAdapter 实现 EvidenceGate 接口
+type EvidenceGateAdapter struct{}
 
 func NewEvidenceGateAdapter() *EvidenceGateAdapter {
 	return &EvidenceGateAdapter{}
 }
 
 func (a *EvidenceGateAdapter) Filter(ctx context.Context, query string, chunks []Chunk) ([]Chunk, error) {
-	// TODO: 从 app_service 中提取 evidence gate 逻辑
-	return chunks, nil
+	retrieved := convertChunksToRetrieved(chunks)
+	filtered := FilterRelevantChunks(query, retrieved)
+	return convertRetrievedToChunks(filtered), nil
 }
 
 // 辅助转换函数
