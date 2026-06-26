@@ -465,6 +465,11 @@ func (s *Server) authenticate(c *gin.Context) (authContext, bool) {
 		return authContext{Mode: authModeAPIKey, Principal: principal}, true
 	}
 
+	if !s.serverConfig.EnableMCPLegacyToken {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "mcp legacy token authentication is disabled; use an API key with mcp scopes"})
+		return authContext{}, false
+	}
+
 	if s.tokenProvider == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mcp token provider is unavailable"})
 		return authContext{}, false
@@ -532,6 +537,10 @@ func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string, args ma
 	}
 	if confirmToken == "" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "dangerous tool requires confirmNonce"})
+		return false
+	}
+	if !s.serverConfig.EnableMCPLegacyToken {
+		c.JSON(http.StatusForbidden, gin.H{"error": "legacy dangerous tool confirmation is disabled; use confirmNonce"})
 		return false
 	}
 

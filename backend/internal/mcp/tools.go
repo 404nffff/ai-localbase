@@ -1442,7 +1442,7 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 		"resultContractVersion": "1.0",
 		"auth": map[string]any{
 			"type":                  "api_key_scope",
-			"legacyTokenCompatible": true,
+			"legacyTokenCompatible": cfg.MCP.LegacyTokenEnabled,
 			"legacyTokenConfigured": strings.TrimSpace(cfg.MCP.Token) != "",
 			"legacyTokenPermission": "mcp:admin-compatible",
 			"adminScope":            scopeMCPAdmin,

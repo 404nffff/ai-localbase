@@ -66,8 +66,11 @@ const AISettings: React.FC<AISettingsProps> = ({
                 type="password"
                 value={config.chat.apiKey}
                 onChange={(event) => onChatConfigChange('apiKey', event.target.value)}
-                placeholder="选填"
+                placeholder={config.chat.apiKeyConfigured ? '已配置，输入新密钥覆盖' : '选填'}
               />
+              {config.chat.apiKeyConfigured && !config.chat.apiKey && (
+                <small>密钥已保存在后端，页面不会显示明文。</small>
+              )}
             </div>
             <div className="settings-form-group settings-form-group-full">
               <label className="settings-form-label settings-form-label-inline">
@@ -165,8 +168,11 @@ const AISettings: React.FC<AISettingsProps> = ({
                 type="password"
                 value={config.embedding.apiKey}
                 onChange={(event) => onEmbeddingConfigChange('apiKey', event.target.value)}
-                placeholder="选填"
+                placeholder={config.embedding.apiKeyConfigured ? '已配置，输入新密钥覆盖' : '选填'}
               />
+              {config.embedding.apiKeyConfigured && !config.embedding.apiKey && (
+                <small>密钥已保存在后端，页面不会显示明文。</small>
+              )}
             </div>
             <div className="settings-form-group settings-form-group-full">
               <div className="settings-action-row">

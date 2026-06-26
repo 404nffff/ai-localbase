@@ -85,13 +85,14 @@ func (h *ConfigHandler) TestChatModel(c *gin.Context) {
 	}
 
 	// 调用聊天接口
+	apiKey := h.resolveChatAPIKey(req.APIKey)
 	response, err := llmService.Chat(model.ChatCompletionRequest{
 		Messages: testMessages,
 		Config: model.ChatModelConfig{
 			Provider:    req.Provider,
 			BaseURL:     req.BaseURL,
 			Model:       req.Model,
-			APIKey:      req.APIKey,
+			APIKey:      apiKey,
 			Temperature: req.Temperature,
 		},
 	})
@@ -144,11 +145,12 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 	defer cancel()
 
 	// 调用嵌入接口
+	apiKey := h.resolveEmbeddingAPIKey(req.APIKey)
 	vectors, err := ragService.EmbedTexts(ctx, model.EmbeddingModelConfig{
 		Provider: req.Provider,
 		BaseURL:  req.BaseURL,
 		Model:    req.Model,
-		APIKey:   req.APIKey,
+		APIKey:   apiKey,
 	}, []string{testText}, 768)
 
 	latency := time.Since(start).Milliseconds()
@@ -178,6 +180,28 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 		VectorSize: len(vectors[0]),
 		ModelInfo:  fmt.Sprintf("Embedding successful (vector size: %d)", len(vectors[0])),
 	})
+}
+
+func (h *ConfigHandler) resolveChatAPIKey(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate != "" {
+		return candidate
+	}
+	if h == nil || h.appService == nil {
+		return ""
+	}
+	return strings.TrimSpace(h.appService.GetConfig().Chat.APIKey)
+}
+
+func (h *ConfigHandler) resolveEmbeddingAPIKey(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate != "" {
+		return candidate
+	}
+	if h == nil || h.appService == nil {
+		return ""
+	}
+	return strings.TrimSpace(h.appService.GetConfig().Embedding.APIKey)
 }
 
 // HealthSummary 综合健康检查

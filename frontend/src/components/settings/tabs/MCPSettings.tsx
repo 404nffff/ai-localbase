@@ -122,7 +122,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
         <div className="settings-card-header">
           <div className="settings-card-header-copy">
             <h3>MCP 配置</h3>
-            <p>MCP 默认关闭；服务器启用时必须同时开启认证。旧 Token 仅作为全权限兼容凭证保留。</p>
+            <p>MCP 默认关闭；服务器启用时必须同时开启认证。旧 Token 兼容模式默认关闭。</p>
           </div>
           <span className={`settings-status-pill ${config.enabled ? 'enabled' : 'disabled'}`}>
             {config.enabled ? '已启用' : '未启用'}
@@ -138,6 +138,10 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
               <span>Base Path</span>
               <strong>{config.basePath || '未配置'}</strong>
             </div>
+            <div className="settings-readonly-field">
+              <span>旧 Token 兼容</span>
+              <strong>{config.legacyTokenEnabled ? '已启用' : '已关闭'}</strong>
+            </div>
           </div>
 
           <div className="settings-form-grid settings-form-grid-dense">
@@ -147,6 +151,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
                 <input
                   type={isMcpTokenVisible ? 'text' : 'password'}
                   value={config.token}
+                  placeholder={config.tokenConfigured ? 'Token 已生成，明文不在配置接口返回' : 'Token 未生成'}
                   readOnly
                   className="settings-token-input"
                 />
@@ -155,18 +160,23 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ config, onCopyMcpToken, onRes
                     className="settings-action-btn"
                     onClick={() => setIsMcpTokenVisible((v) => !v)}
                     title={isMcpTokenVisible ? '隐藏 Token' : '显示 Token'}
+                    disabled={!config.token}
                   >
                     {isMcpTokenVisible ? '隐藏' : '显示'}
                   </button>
-                  <button className="settings-action-btn" onClick={() => void handleCopyToken()}>
+                  <button className="settings-action-btn" onClick={() => void handleCopyToken()} disabled={!config.token}>
                     复制
                   </button>
-                  <button className="settings-action-btn" onClick={() => void handleResetToken()}>
+                  <button
+                    className="settings-action-btn"
+                    onClick={() => void handleResetToken()}
+                    disabled={!config.legacyTokenEnabled}
+                  >
                     重置
                   </button>
                 </div>
               </div>
-              <small>旧版 MCP Bearer Token 等价 MCP 全权限，仅用于迁移既有客户端；新接入请使用带 MCP scope 的 API Key。</small>
+              <small>旧版 MCP Bearer Token 等价 MCP 全权限，仅用于迁移既有客户端；默认关闭，新接入请使用带 MCP scope 的 API Key。</small>
               {tokenFeedback && <small className="settings-feedback">{tokenFeedback}</small>}
             </div>
           </div>

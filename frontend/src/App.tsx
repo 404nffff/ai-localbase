@@ -126,6 +126,7 @@ export interface ChatConfig {
   baseUrl: string
   model: string
   apiKey: string
+  apiKeyConfigured?: boolean
   temperature: number
   contextMessageLimit: number
 }
@@ -135,12 +136,15 @@ export interface EmbeddingConfig {
   baseUrl: string
   model: string
   apiKey: string
+  apiKeyConfigured?: boolean
 }
 
 export interface MCPConfig {
   enabled: boolean
   basePath: string
   token: string
+  tokenConfigured?: boolean
+  legacyTokenEnabled?: boolean
 }
 
 export interface RetrievalConfig {
@@ -325,6 +329,21 @@ const clampNumber = (value: unknown, fallback: number, min: number, max: number)
   return Math.max(min, Math.min(max, Math.round(parsed)))
 }
 
+const normalizeSecretValue = (
+  incomingValue: unknown,
+  configured: unknown,
+  fallbackValue: string,
+) => {
+  const value = typeof incomingValue === 'string' ? incomingValue : ''
+  if (value) {
+    return value
+  }
+  if (configured && fallbackValue) {
+    return fallbackValue
+  }
+  return ''
+}
+
 const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): AppConfig => {
   const retrieval = {
     ...fallback.retrieval,
@@ -333,18 +352,44 @@ const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): Ap
   const topKDocument = clampNumber(retrieval.topKDocument, fallback.retrieval.topKDocument, 1, 30)
   const topKKnowledgeBase = clampNumber(retrieval.topKKnowledgeBase, fallback.retrieval.topKKnowledgeBase, 1, 40)
 
+  const chatConfig: Partial<ChatConfig> = config.chat ?? {}
+  const embeddingConfig: Partial<EmbeddingConfig> = config.embedding ?? {}
+  const mcpConfig: Partial<MCPConfig> = config.mcp ?? {}
+  const chatApiKey = normalizeSecretValue(
+    chatConfig.apiKey,
+    chatConfig.apiKeyConfigured,
+    fallback.chat.apiKey,
+  )
+  const embeddingApiKey = normalizeSecretValue(
+    embeddingConfig.apiKey,
+    embeddingConfig.apiKeyConfigured,
+    fallback.embedding.apiKey,
+  )
+  const mcpToken = normalizeSecretValue(
+    mcpConfig.token,
+    mcpConfig.tokenConfigured,
+    fallback.mcp.token,
+  )
+
   return {
     chat: {
       ...fallback.chat,
-      ...(config.chat ?? {}),
+      ...chatConfig,
+      apiKey: chatApiKey,
+      apiKeyConfigured: Boolean(chatConfig.apiKeyConfigured || chatApiKey),
     },
     embedding: {
       ...fallback.embedding,
-      ...(config.embedding ?? {}),
+      ...embeddingConfig,
+      apiKey: embeddingApiKey,
+      apiKeyConfigured: Boolean(embeddingConfig.apiKeyConfigured || embeddingApiKey),
     },
     mcp: {
       ...fallback.mcp,
-      ...(config.mcp ?? {}),
+      ...mcpConfig,
+      token: mcpToken,
+      tokenConfigured: Boolean(mcpConfig.tokenConfigured || mcpToken),
+      legacyTokenEnabled: Boolean(mcpConfig.legacyTokenEnabled),
     },
     retrieval: {
       defaultSearchMode: retrieval.defaultSearchMode === 'hybrid' ? 'hybrid' : 'dense',
@@ -549,7 +594,7 @@ function AppContent() {
 
   const handleCopyMcpToken = async () => {
     if (!config.mcp.token || typeof navigator === 'undefined' || !navigator.clipboard) {
-      return
+      throw new Error('mcp token is not available')
     }
 
     await navigator.clipboard.writeText(config.mcp.token)

@@ -55,12 +55,16 @@ func (h *AppHandler) Health(c *gin.Context) {
 }
 
 func (h *AppHandler) GetConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, h.appService.GetConfig())
+	c.JSON(http.StatusOK, h.appService.GetPublicConfig())
 }
 
 func (h *AppHandler) ResetMCPToken(c *gin.Context) {
 	mcpConfig, err := h.appService.ResetMCPToken()
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "disabled") {
+			writeError(c, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -326,13 +330,12 @@ func (h *AppHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	cfg, err := h.appService.UpdateConfig(req)
-	if err != nil {
+	if _, err := h.appService.UpdateConfig(req); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, cfg)
+	c.JSON(http.StatusOK, h.appService.GetPublicConfig())
 }
 
 func (h *AppHandler) ListKnowledgeBases(c *gin.Context) {

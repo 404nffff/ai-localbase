@@ -98,8 +98,11 @@ func TestRouterConfigEndpoints(t *testing.T) {
 	if fetched.Chat.Temperature != 0.4 {
 		t.Fatalf("expected persisted chat temperature 0.4, got %v", fetched.Chat.Temperature)
 	}
-	if fetched.Embedding.APIKey != "test-embed-key" {
-		t.Fatalf("expected persisted embedding apiKey, got %s", fetched.Embedding.APIKey)
+	if fetched.Embedding.APIKey != "" {
+		t.Fatalf("expected public config to redact embedding apiKey, got %s", fetched.Embedding.APIKey)
+	}
+	if !fetched.Embedding.APIKeyConfigured {
+		t.Fatal("expected public config to report embedding apiKey configured")
 	}
 }
 
@@ -146,7 +149,7 @@ func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	decodeJSONResponse(t, configResp.Body.Bytes(), &cfg)
 
 	resp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", map[string]string{
-		"Authorization": "Bearer " + cfg.MCP.Token,
+		"Authorization": "Bearer legacy-token",
 	})
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("expected status 403, got %d, body=%s", resp.Code, resp.Body.String())
@@ -156,17 +159,43 @@ func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	}
 }
 
-func TestMCPCompatibleTokenStillWorks(t *testing.T) {
+func TestMCPCompatibleTokenDisabledByDefault(t *testing.T) {
 	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
 	defer cleanup()
 
-	cfg := getTestConfig(t, engine, sessionHeaders)
-	if strings.TrimSpace(cfg.MCP.Token) == "" {
-		t.Fatal("expected compatible mcp token")
+	resp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", map[string]string{
+		"Authorization": "Bearer legacy-token",
+	})
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected disabled compatible token status 401, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "legacy token authentication is disabled") {
+		t.Fatalf("expected legacy token disabled error, got %s", resp.Body.String())
 	}
 
+	cfg := getTestConfig(t, engine, sessionHeaders)
+	if cfg.MCP.Token != "" {
+		t.Fatalf("expected public config to redact mcp token, got %q", cfg.MCP.Token)
+	}
+	if !cfg.MCP.TokenConfigured {
+		t.Fatal("expected public config to report configured mcp token")
+	}
+}
+
+func TestMCPCompatibleTokenWorksWhenExplicitlyEnabled(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithServerConfig(t, func(serverConfig *model.ServerConfig) {
+		serverConfig.EnableAuth = true
+		serverConfig.AuthUsername = "root"
+		serverConfig.AuthPassword = "correct-password"
+		serverConfig.EnableMCPLegacyToken = true
+	})
+	defer cleanup()
+
+	sessionHeaders := loginTestSessionHeaders(t, engine)
+	mcpToken := resetTestMCPToken(t, engine, sessionHeaders)
+
 	resp := performRequestWithHeaders(t, engine, http.MethodGet, "/mcp", nil, "", map[string]string{
-		"Authorization": "Bearer " + cfg.MCP.Token,
+		"Authorization": "Bearer " + mcpToken,
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected compatible token to authorize mcp info, got %d, body=%s", resp.Code, resp.Body.String())
@@ -1919,6 +1948,22 @@ func getTestConfig(t *testing.T, handler http.Handler, headers map[string]string
 	var cfg model.AppConfig
 	decodeJSONResponse(t, configResp.Body.Bytes(), &cfg)
 	return cfg
+}
+
+func resetTestMCPToken(t *testing.T, handler http.Handler, sessionHeaders map[string]string) string {
+	t.Helper()
+	resp := performRequestWithHeaders(t, handler, http.MethodPost, "/api/config/mcp/reset-token", nil, "", sessionHeaders)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected reset mcp token status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		MCP model.MCPConfig `json:"mcp"`
+	}
+	decodeJSONResponse(t, resp.Body.Bytes(), &payload)
+	if strings.TrimSpace(payload.MCP.Token) == "" {
+		t.Fatalf("expected reset mcp token response to include token, got %+v", payload.MCP)
+	}
+	return payload.MCP.Token
 }
 
 func createTestAPIKeyHeaders(t *testing.T, handler http.Handler, sessionHeaders map[string]string, name string, scopes []string) map[string]string {

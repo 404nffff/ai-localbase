@@ -28,6 +28,7 @@ func LoadServerConfig() model.ServerConfig {
 		EnableContextCompression:       getEnvAsBool("ENABLE_CONTEXT_COMPRESSION", false),
 		OllamaBaseURL:                  getEnv("OLLAMA_BASE_URL", "http://localhost:11434"),
 		EnableMCP:                      getEnvAsBool("ENABLE_MCP", false),
+		EnableMCPLegacyToken:           getEnvAsBool("ENABLE_MCP_LEGACY_TOKEN", false),
 		MCPBasePath:                    getEnv("MCP_BASE_PATH", "/mcp"),
 		MCPRequestTimeoutSeconds:       getEnvAsInt("MCP_REQUEST_TIMEOUT_SECONDS", 15),
 		MCPRequestsPerMinute:           getEnvAsInt("MCP_REQUESTS_PER_MINUTE", 120),

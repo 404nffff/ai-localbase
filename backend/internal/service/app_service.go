@@ -210,6 +210,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	ensureAuthState(&service.state.Auth)
 	service.state.Config.MCP.Enabled = serverConfig.EnableMCP
 	service.state.Config.MCP.BasePath = defaultMCPBasePath(service.state.Config.MCP.BasePath)
+	service.state.Config.MCP.LegacyTokenEnabled = serverConfig.EnableMCPLegacyToken
 	if strings.TrimSpace(service.state.Config.MCP.Token) == "" {
 		service.state.Config.MCP.Token = generateMCPToken()
 	}
@@ -362,19 +363,23 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 				BaseURL:             ollamaBaseURL,
 				Model:               "qwen3.5:0.8b",
 				APIKey:              "",
+				APIKeyConfigured:    false,
 				Temperature:         0.7,
 				ContextMessageLimit: 12,
 			},
 			Embedding: model.EmbeddingConfig{
-				Provider: "ollama",
-				BaseURL:  ollamaBaseURL,
-				Model:    "nomic-embed-text",
-				APIKey:   "",
+				Provider:         "ollama",
+				BaseURL:          ollamaBaseURL,
+				Model:            "nomic-embed-text",
+				APIKey:           "",
+				APIKeyConfigured: false,
 			},
 			MCP: model.MCPConfig{
-				Enabled:  serverConfig.EnableMCP,
-				BasePath: defaultMCPBasePath(serverConfig.MCPBasePath),
-				Token:    generateMCPToken(),
+				Enabled:            serverConfig.EnableMCP,
+				BasePath:           defaultMCPBasePath(serverConfig.MCPBasePath),
+				Token:              generateMCPToken(),
+				TokenConfigured:    true,
+				LegacyTokenEnabled: serverConfig.EnableMCPLegacyToken,
 			},
 			Retrieval: defaultRetrievalConfig(serverConfig),
 		},
@@ -425,11 +430,29 @@ func (s *AppService) GetConfig() model.AppConfig {
 	if cfg.Chat.ContextMessageLimit <= 0 {
 		cfg.Chat.ContextMessageLimit = 12
 	}
+	cfg.Chat.APIKeyConfigured = strings.TrimSpace(cfg.Chat.APIKey) != ""
+	cfg.Embedding.APIKeyConfigured = strings.TrimSpace(cfg.Embedding.APIKey) != ""
 	cfg.MCP.BasePath = defaultMCPBasePath(cfg.MCP.BasePath)
 	if strings.TrimSpace(cfg.MCP.Token) == "" {
 		cfg.MCP.Token = generateMCPToken()
 	}
+	cfg.MCP.TokenConfigured = strings.TrimSpace(cfg.MCP.Token) != ""
+	cfg.MCP.LegacyTokenEnabled = s.serverConfig.EnableMCPLegacyToken
 	cfg.Retrieval = normalizeRetrievalConfig(cfg.Retrieval, s.serverConfig)
+	return cfg
+}
+
+func (s *AppService) GetPublicConfig() model.AppConfig {
+	return redactAppConfigSecrets(s.GetConfig())
+}
+
+func redactAppConfigSecrets(cfg model.AppConfig) model.AppConfig {
+	cfg.Chat.APIKeyConfigured = strings.TrimSpace(cfg.Chat.APIKey) != ""
+	cfg.Chat.APIKey = ""
+	cfg.Embedding.APIKeyConfigured = strings.TrimSpace(cfg.Embedding.APIKey) != ""
+	cfg.Embedding.APIKey = ""
+	cfg.MCP.TokenConfigured = strings.TrimSpace(cfg.MCP.Token) != ""
+	cfg.MCP.Token = ""
 	return cfg
 }
 
@@ -1093,9 +1116,17 @@ func (s *AppService) defaultBaseURL(provider string) string {
 }
 
 func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfig, error) {
+	s.state.Mu.RLock()
+	previousConfig := s.state.Config
+	s.state.Mu.RUnlock()
+
 	chatProvider := strings.TrimSpace(req.Chat.Provider)
 	chatBaseURL := strings.TrimSpace(req.Chat.BaseURL)
 	chatModel := strings.TrimSpace(req.Chat.Model)
+	chatAPIKey := strings.TrimSpace(req.Chat.APIKey)
+	if chatAPIKey == "" && req.Chat.APIKeyConfigured {
+		chatAPIKey = strings.TrimSpace(previousConfig.Chat.APIKey)
+	}
 
 	if chatProvider == "" || chatModel == "" {
 		return model.AppConfig{}, fmt.Errorf("chat provider and model are required")
@@ -1110,6 +1141,10 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 	embedProvider := strings.TrimSpace(req.Embedding.Provider)
 	embedBaseURL := strings.TrimSpace(req.Embedding.BaseURL)
 	embedModel := strings.TrimSpace(req.Embedding.Model)
+	embedAPIKey := strings.TrimSpace(req.Embedding.APIKey)
+	if embedAPIKey == "" && req.Embedding.APIKeyConfigured {
+		embedAPIKey = strings.TrimSpace(previousConfig.Embedding.APIKey)
+	}
 
 	if embedProvider == "" || embedModel == "" {
 		return model.AppConfig{}, fmt.Errorf("embedding provider and model are required")
@@ -1128,6 +1163,9 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 
 	mcpBasePath := defaultMCPBasePath(req.MCP.BasePath)
 	mcpToken := strings.TrimSpace(req.MCP.Token)
+	if mcpToken == "" && req.MCP.TokenConfigured {
+		mcpToken = strings.TrimSpace(previousConfig.MCP.Token)
+	}
 	if mcpToken == "" {
 		mcpToken = generateMCPToken()
 	}
@@ -1137,20 +1175,24 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 			Provider:            chatProvider,
 			BaseURL:             chatBaseURL,
 			Model:               chatModel,
-			APIKey:              strings.TrimSpace(req.Chat.APIKey),
+			APIKey:              chatAPIKey,
+			APIKeyConfigured:    chatAPIKey != "",
 			Temperature:         req.Chat.Temperature,
 			ContextMessageLimit: contextMessageLimit,
 		},
 		Embedding: model.EmbeddingConfig{
-			Provider: embedProvider,
-			BaseURL:  embedBaseURL,
-			Model:    embedModel,
-			APIKey:   strings.TrimSpace(req.Embedding.APIKey),
+			Provider:         embedProvider,
+			BaseURL:          embedBaseURL,
+			Model:            embedModel,
+			APIKey:           embedAPIKey,
+			APIKeyConfigured: embedAPIKey != "",
 		},
 		MCP: model.MCPConfig{
-			Enabled:  req.MCP.Enabled,
-			BasePath: mcpBasePath,
-			Token:    mcpToken,
+			Enabled:            req.MCP.Enabled,
+			BasePath:           mcpBasePath,
+			Token:              mcpToken,
+			TokenConfigured:    mcpToken != "",
+			LegacyTokenEnabled: s.serverConfig.EnableMCPLegacyToken,
 		},
 		Retrieval: normalizeRetrievalConfig(req.Retrieval, s.serverConfig),
 	}
@@ -1162,7 +1204,6 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 	}
 
 	s.state.Mu.Lock()
-	previousConfig := s.state.Config
 	s.state.Config = nextConfig
 	s.state.Mu.Unlock()
 
@@ -1179,6 +1220,9 @@ func (s *AppService) ResetMCPToken() (model.MCPConfig, error) {
 	if s == nil {
 		return model.MCPConfig{}, fmt.Errorf("app service is nil")
 	}
+	if !s.serverConfig.EnableMCPLegacyToken {
+		return model.MCPConfig{}, fmt.Errorf("mcp legacy token authentication is disabled")
+	}
 
 	s.state.Mu.Lock()
 	previousConfig := s.state.Config
@@ -1186,6 +1230,8 @@ func (s *AppService) ResetMCPToken() (model.MCPConfig, error) {
 	nextConfig.MCP.Enabled = s.serverConfig.EnableMCP
 	nextConfig.MCP.BasePath = defaultMCPBasePath(nextConfig.MCP.BasePath)
 	nextConfig.MCP.Token = generateMCPToken()
+	nextConfig.MCP.TokenConfigured = true
+	nextConfig.MCP.LegacyTokenEnabled = s.serverConfig.EnableMCPLegacyToken
 	s.state.Config = nextConfig
 	s.state.Mu.Unlock()
 

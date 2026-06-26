@@ -115,6 +115,7 @@ docker compose up --build
 | `ENABLE_SEMANTIC_CACHE` | `false` | 启用语义缓存 |
 | `ENABLE_CONTEXT_COMPRESSION` | `false` | 启用上下文压缩 |
 | `ENABLE_MCP` | `false` | 启用内置 MCP Server；服务器部署需同时开启认证 |
+| `ENABLE_MCP_LEGACY_TOKEN` | `false` | 允许旧版 MCP Token 鉴权，仅迁移旧客户端时开启 |
 | `MCP_BASE_PATH` | `/mcp` | MCP HTTP 挂载路径 |
 | `MCP_REQUEST_TIMEOUT_SECONDS` | `15` | MCP 单次请求超时 |
 | `MCP_REQUESTS_PER_MINUTE` | `120` | MCP 每分钟限流 |

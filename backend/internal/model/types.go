@@ -21,6 +21,7 @@ type ServerConfig struct {
 	EnableContextCompression       bool
 	OllamaBaseURL                  string
 	EnableMCP                      bool
+	EnableMCPLegacyToken           bool
 	MCPBasePath                    string
 	MCPRequestTimeoutSeconds       int
 	MCPRequestsPerMinute           int
@@ -112,21 +113,25 @@ type ChatConfig struct {
 	BaseURL             string  `json:"baseUrl"`
 	Model               string  `json:"model"`
 	APIKey              string  `json:"apiKey"`
+	APIKeyConfigured    bool    `json:"apiKeyConfigured,omitempty"`
 	Temperature         float64 `json:"temperature"`
 	ContextMessageLimit int     `json:"contextMessageLimit"`
 }
 
 type EmbeddingConfig struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"baseUrl"`
-	Model    string `json:"model"`
-	APIKey   string `json:"apiKey"`
+	Provider         string `json:"provider"`
+	BaseURL          string `json:"baseUrl"`
+	Model            string `json:"model"`
+	APIKey           string `json:"apiKey"`
+	APIKeyConfigured bool   `json:"apiKeyConfigured,omitempty"`
 }
 
 type MCPConfig struct {
-	Enabled  bool   `json:"enabled"`
-	BasePath string `json:"basePath"`
-	Token    string `json:"token"`
+	Enabled            bool   `json:"enabled"`
+	BasePath           string `json:"basePath"`
+	Token              string `json:"token"`
+	TokenConfigured    bool   `json:"tokenConfigured,omitempty"`
+	LegacyTokenEnabled bool   `json:"legacyTokenEnabled,omitempty"`
 }
 
 type MCPDangerConfirmationRequest struct {
