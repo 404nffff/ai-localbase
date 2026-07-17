@@ -1,6 +1,7 @@
 import React from 'react'
 import type { DocumentDetailResponse } from '../../App'
 import MarkdownRenderer from '../chat/MarkdownRenderer'
+import KnowledgeIcon from './KnowledgeIcon'
 import { formatDocumentPreviewText, shouldUseRawDocumentPreview } from './documentPreviewText'
 
 interface DocumentDetailDialogProps {
@@ -34,7 +35,9 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
             <span>文档详情</span>
             <h3>{detail?.document.name ?? '正在加载'}</h3>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭文档详情">✕</button>
+          <button type="button" onClick={onClose} aria-label="关闭文档详情">
+            <KnowledgeIcon name="x" size={18} />
+          </button>
         </header>
 
         <div className="document-detail-body">

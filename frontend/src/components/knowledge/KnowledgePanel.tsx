@@ -11,6 +11,7 @@ import {
   OperationLogListResponse,
 } from '../../App'
 import DocumentDetailDialog from './DocumentDetailDialog'
+import KnowledgeIcon from './KnowledgeIcon'
 import { getDocumentPage } from './documentListPagination'
 import { formatDocumentPreviewText } from './documentPreviewText'
 
@@ -426,15 +427,16 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   return (
     <>
-      {/* 主弹窗 */}
-      <div className="kb-backdrop" onClick={onClose}>
-        <div className="kb-modal" onClick={(e) => e.stopPropagation()}>
+      {/* 保留当前业务状态，将承载方式切换为 origin 的全页知识库工作区。 */}
+      <section className="knowledge-workspace-page app-workspace" aria-labelledby="knowledge-panel-title">
+        <div className="kb-modal kb-modal--workspace">
           {/* 头部 */}
-          <div className="kb-header">
+          <div className="workspace-page-header kb-header">
             <div className="kb-header-left">
-              <div className="kb-header-icon">🗂️</div>
+              <div className="kb-header-icon"><KnowledgeIcon name="database" size={22} /></div>
               <div>
-                <h2 className="kb-header-title">知识库管理</h2>
+                <span className="workspace-page-kicker">本地资料工作区</span>
+                <h2 className="kb-header-title" id="knowledge-panel-title">知识库</h2>
                 <p className="kb-header-sub">
                   共 {knowledgeBases.length} 个知识库 ·{' '}
                   {knowledgeBases.reduce((s, kb) => s + kb.documents.length, 0)} 份文档
@@ -459,9 +461,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 </button>
               </div>
               <button className="kb-create-btn" onClick={handleOpenCreate}>
-                <span>＋</span> 新建知识库
+                <KnowledgeIcon name="plus" size={16} /><span>新建知识库</span>
               </button>
-              <button className="kb-close-btn" onClick={onClose} title="关闭">✕</button>
+              <button className="workspace-page-back" onClick={onClose} title="返回聊天" aria-label="返回聊天">
+                <KnowledgeIcon name="chevronLeft" size={18} />
+              </button>
             </div>
           </div>
 
@@ -589,11 +593,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               </section>
             ) : knowledgeBases.length === 0 ? (
               <div className="kb-empty">
-                <div className="kb-empty-icon">📚</div>
+                <div className="kb-empty-icon"><KnowledgeIcon name="book" size={34} /></div>
                 <p className="kb-empty-title">暂无知识库</p>
                 <p className="kb-empty-sub">创建第一个知识库，开始管理您的文档</p>
                 <button className="kb-create-btn" onClick={handleOpenCreate}>
-                  <span>＋</span> 新建知识库
+                  <KnowledgeIcon name="plus" size={16} /><span>新建知识库</span>
                 </button>
               </div>
             ) : (
@@ -660,7 +664,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                     <>
                       <div className="kb-detail-header">
                         <div className="kb-detail-summary">
-                          <div className="kb-card-icon">📁</div>
+                          <div className="kb-card-icon"><KnowledgeIcon name="database" size={22} /></div>
                           <div className="kb-card-info">
                             <span className="kb-card-name">{selectedKnowledgeBase.name}</span>
                             {selectedKnowledgeBase.description && (
@@ -683,7 +687,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             {knowledgeBaseFileUploadStates[selectedKnowledgeBase.id] ? (
                               <span className="kb-inline-spinner" aria-hidden="true" />
                             ) : (
-                              <span>📤</span>
+                              <KnowledgeIcon name="upload" size={16} />
                             )}
                             <span className="kb-upload-btn-label">
                               {knowledgeBaseFileUploadStates[selectedKnowledgeBase.id]
@@ -700,7 +704,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             />
                           </label>
                           <label className="kb-upload-btn kb-upload-btn--secondary" title="上传目录">
-                            <span>🗂️</span> 上传目录
+                            <KnowledgeIcon name="folderPlus" size={16} /> 上传目录
                             <input
                               ref={(element) => registerDirectoryInput(selectedKnowledgeBase.id, element)}
                               type="file"
@@ -722,7 +726,10 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             onClick={() => onToggleCollapse(selectedKnowledgeBase.id)}
                             title={collapsedKnowledgeBases[selectedKnowledgeBase.id] ? '展开文件列表' : '折叠文件列表'}
                           >
-                            {collapsedKnowledgeBases[selectedKnowledgeBase.id] ? '▸' : '▾'}
+                            <KnowledgeIcon
+                              name={collapsedKnowledgeBases[selectedKnowledgeBase.id] ? 'chevronDown' : 'chevronUp'}
+                              size={17}
+                            />
                           </button>
                           {deleteConfirmId === selectedKnowledgeBase.id ? (
                             <div className="kb-delete-confirm">
@@ -749,7 +756,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                               onClick={() => setDeleteConfirmId(selectedKnowledgeBase.id)}
                               title="删除知识库"
                             >
-                              🗑️
+                              <KnowledgeIcon name="trash" size={17} />
                             </button>
                           )}
                         </div>
@@ -986,12 +993,12 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                         <div className="kb-docs">
                           {selectedKnowledgeBase.documents.length === 0 ? (
                             <div className="kb-docs-empty">
-                              <span>📄</span>
+                              <KnowledgeIcon name="file" size={22} />
                               <span>暂无文档，点击「上传」添加文件</span>
                             </div>
                           ) : filteredAndSortedDocuments.length === 0 ? (
                             <div className="kb-docs-empty">
-                              <span>🔎</span>
+                              <KnowledgeIcon name="search" size={22} />
                               <span>没有匹配当前筛选条件的文件</span>
                             </div>
                           ) : (
@@ -1009,7 +1016,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                     onClick={() => onSelectDocument(selectedKnowledgeBase.id, doc.id)}
                                   >
                                     <div className="kb-doc-top">
-                                      <span className="kb-doc-icon">📄</span>
+                                      <span className="kb-doc-icon"><KnowledgeIcon name="file" size={17} /></span>
                                       <span className="kb-doc-name">{doc.name}</span>
                                       <span
                                         className="kb-doc-badge"
@@ -1054,7 +1061,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                       onClick={() => onRemoveDocument(selectedKnowledgeBase.id, doc.id)}
                                       title="删除文档"
                                     >
-                                      ✕
+                                      <KnowledgeIcon name="x" size={16} />
                                     </button>
                                   </div>
                                 </div>
@@ -1087,14 +1094,14 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                         </div>
                       ) : (
                         <div className="kb-docs-empty kb-docs-empty--collapsed">
-                          <span>🗂️</span>
+                          <KnowledgeIcon name="book" size={22} />
                           <span>文件列表已折叠，点击右上角展开。</span>
                         </div>
                       )}
                     </>
                   ) : (
                     <div className="kb-empty kb-empty--inner">
-                      <div className="kb-empty-icon">📁</div>
+                      <div className="kb-empty-icon"><KnowledgeIcon name="database" size={30} /></div>
                       <p className="kb-empty-title">请选择知识库</p>
                       <p className="kb-empty-sub">先在左侧选择一个知识库，再查看和筛选文件。</p>
                     </div>
@@ -1104,7 +1111,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
             )}
           </div>
         </div>
-      </div>
+      </section>
 
       {/* 新建知识库弹窗 */}
       {showCreateModal && (
@@ -1112,7 +1119,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           <div className="kb-create-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="kb-create-dialog-header">
               <h3>新建知识库</h3>
-              <button className="kb-close-btn" onClick={handleCancelCreate}>✕</button>
+              <button className="kb-close-btn" onClick={handleCancelCreate} aria-label="关闭新建知识库窗口">
+                <KnowledgeIcon name="x" size={18} />
+              </button>
             </div>
             <div className="kb-create-dialog-body">
               <div className="kb-form-field">

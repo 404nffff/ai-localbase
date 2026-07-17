@@ -1,5 +1,6 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentItem } from '../../App'
+import KnowledgeIcon from './KnowledgeIcon'
 import { DOCUMENT_SCOPE_RESULT_LIMIT, getDocumentScopeMatches } from './documentScopeOptions'
 
 interface DocumentScopePickerProps {
@@ -76,17 +77,17 @@ const DocumentScopePicker: React.FC<DocumentScopePickerProps> = ({
         onClick={() => setOpen((current) => !current)}
         title={selectedDocument?.name ?? (disabled ? '请先选择知识库' : '全部文档')}
       >
-        <span aria-hidden="true">🧭</span>
+        <KnowledgeIcon name="database" size={15} />
         <span className="document-scope-trigger-label">
           {selectedDocument?.name ?? (disabled ? '全部知识库' : '全部文档')}
         </span>
-        <span aria-hidden="true">▾</span>
+        <KnowledgeIcon name="chevronDown" size={15} />
       </button>
 
       {open && !disabled && (
         <div className="document-scope-popover" role="dialog" aria-label="选择文档检索范围">
           <label className="document-scope-search">
-            <span aria-hidden="true">🔎</span>
+            <KnowledgeIcon name="search" size={15} />
             <input
               ref={searchRef}
               type="search"
@@ -110,12 +111,12 @@ const DocumentScopePicker: React.FC<DocumentScopePickerProps> = ({
               className={!selectedDocumentId ? 'is-selected' : ''}
               onClick={() => selectDocument(null)}
             >
-              <span aria-hidden="true">📚</span>
+              <KnowledgeIcon name="book" size={17} />
               <span>
                 <strong>全部文档</strong>
                 <small>检索当前知识库的全部资料</small>
               </span>
-              {!selectedDocumentId && <span aria-hidden="true">✓</span>}
+              {!selectedDocumentId && <KnowledgeIcon name="check" size={15} />}
             </button>
 
             {matches.visible.map((document) => {
@@ -129,12 +130,12 @@ const DocumentScopePicker: React.FC<DocumentScopePickerProps> = ({
                   key={document.id}
                   onClick={() => selectDocument(document.id)}
                 >
-                  <span aria-hidden="true">📄</span>
+                  <KnowledgeIcon name="file" size={17} />
                   <span>
                     <strong title={document.name}>{document.name}</strong>
                     <small>{document.sizeLabel} · {document.chunkCount ?? 0} chunks</small>
                   </span>
-                  {selected && <span aria-hidden="true">✓</span>}
+                  {selected && <KnowledgeIcon name="check" size={15} />}
                 </button>
               )
             })}

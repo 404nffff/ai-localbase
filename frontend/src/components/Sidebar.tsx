@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react'
-import {
+import { useMemo, useState } from 'react'
+import type {
   AppConfig,
   Conversation,
   DirectoryUploadTask,
@@ -11,6 +11,8 @@ import {
   OperationLogFilters,
   OperationLogListResponse,
 } from '../App'
+import AppIcon from './common/AppIcon'
+import ThemeToggle from './common/ThemeToggle'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
 
@@ -69,7 +71,15 @@ const formatDateTime = (value: string) =>
     minute: '2-digit',
   })
 
-const Sidebar: React.FC<SidebarProps> = ({
+type WorkspaceId = 'chat' | 'knowledge' | 'settings'
+
+const workspaceItems = [
+  { id: 'chat', label: '会话', icon: 'message' },
+  { id: 'knowledge', label: '知识库', icon: 'book' },
+  { id: 'settings', label: '设置', icon: 'settings' },
+] as const
+
+const Sidebar = ({
   isOpen,
   onToggle,
   knowledgeBases,
@@ -110,219 +120,254 @@ const Sidebar: React.FC<SidebarProps> = ({
   operationLogError,
   onOperationLogFiltersChange,
   onRefreshOperationLogs,
-}) => {
-  const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<
-    Record<string, boolean>
-  >({})
+}: SidebarProps) => {
+  const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<Record<string, boolean>>({})
   const [menuConversationId, setMenuConversationId] = useState<string | null>(null)
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [isComposingTitle, setIsComposingTitle] = useState(false)
+  const [conversationFilter, setConversationFilter] = useState('')
 
+  const activeWorkspace: WorkspaceId = isSettingsOpen
+    ? 'settings'
+    : isKnowledgePanelOpen
+      ? 'knowledge'
+      : 'chat'
   const sortedKnowledgeBases = useMemo(() => knowledgeBases, [knowledgeBases])
+  const filteredConversations = useMemo(() => {
+    const query = conversationFilter.trim().toLowerCase()
+    if (!query) return conversations
+    return conversations.filter((conversation) => conversation.title.toLowerCase().includes(query))
+  }, [conversationFilter, conversations])
 
   const toggleKnowledgeBaseCollapse = (knowledgeBaseId: string) => {
-    setCollapsedKnowledgeBases((prev) => ({
-      ...prev,
-      [knowledgeBaseId]: !prev[knowledgeBaseId],
+    setCollapsedKnowledgeBases((current) => ({
+      ...current,
+      [knowledgeBaseId]: !current[knowledgeBaseId],
     }))
+  }
+
+  // 当前 App 仍分别维护两个弹窗开关，这里统一成工作区切换，避免知识库和设置同时打开。
+  const handleWorkspaceChange = (workspace: WorkspaceId) => {
+    if (workspace === 'chat') {
+      if (isSettingsOpen) onToggleSettings()
+      if (isKnowledgePanelOpen) onToggleKnowledgePanel()
+      return
+    }
+
+    if (workspace === 'knowledge') {
+      if (isSettingsOpen) onToggleSettings()
+      if (!isKnowledgePanelOpen) onToggleKnowledgePanel()
+      return
+    }
+
+    if (isKnowledgePanelOpen) onToggleKnowledgePanel()
+    if (!isSettingsOpen) onToggleSettings()
+  }
+
+  const finishRename = (conversation: Conversation) => {
+    if (isComposingTitle) return
+    const nextTitle = editingTitle.trim()
+    setEditingConversationId(null)
+    if (nextTitle && nextTitle !== conversation.title.trim()) {
+      onRenameConversation(conversation.id, nextTitle)
+    }
   }
 
   return (
     <>
-      <aside className={`sidebar ${isOpen ? 'open' : 'closed'}`}>
-        <div className="sidebar-header">
-          <button onClick={onToggle} className="toggle-btn" type="button">
-            {isOpen ? '◁' : '▷'}
-          </button>
-          <h2>AI LocalBase</h2>
-        </div>
+      <aside
+        className={`app-navigation ${isOpen ? 'context-open' : 'context-closed'} workspace-${activeWorkspace}`}
+        aria-label="应用导航"
+      >
+        <div className="app-rail">
+          <div className="app-brand-mark" title="AI LocalBase">
+            <AppIcon name="database" size={20} />
+            <span className="sr-only">AI LocalBase</span>
+          </div>
 
-        <div className="sidebar-body">
-          <section className="section section-conversations">
-            <div className="section-title-row">
-              <h3>会话</h3>
-              <button type="button" className="ghost-btn" onClick={onCreateConversation}>
-                ＋ 新建
+          <nav className="app-rail-nav" aria-label="工作区">
+            {workspaceItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`app-rail-button ${activeWorkspace === item.id ? 'active' : ''}`}
+                aria-current={activeWorkspace === item.id ? 'page' : undefined}
+                aria-label={item.label}
+                title={item.label}
+                onClick={() => handleWorkspaceChange(item.id)}
+              >
+                <AppIcon name={item.icon} size={20} />
+                <span>{item.label}</span>
               </button>
-            </div>
+            ))}
+          </nav>
 
-            <div className="conversation-list">
-              {conversations.map((conversation) => {
-                const isMenuOpen = menuConversationId === conversation.id
-                const isEditing = editingConversationId === conversation.id
-
-                return (
-                  <div
-                    key={conversation.id}
-                    className={`conversation-item-row ${isMenuOpen ? 'menu-open' : ''}`}
-                  >
-                    {isEditing ? (
-                      <div
-                        className={`conversation-item conversation-item-editing ${
-                          activeConversationId === conversation.id ? 'active' : ''
-                        }`}
-                      >
-                        <input
-                          className="conversation-title-input"
-                          type="text"
-                          value={editingTitle}
-                          autoFocus
-                          onFocus={(event) => {
-                            event.currentTarget.select()
-                          }}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => setEditingTitle(event.currentTarget.value)}
-                          onCompositionStart={() => setIsComposingTitle(true)}
-                          onCompositionEnd={(event) => {
-                            setIsComposingTitle(false)
-                            setEditingTitle(event.currentTarget.value)
-                          }}
-                          onKeyDown={(event) => {
-                            event.stopPropagation()
-
-                            if (isComposingTitle || event.nativeEvent.isComposing) {
-                              return
-                            }
-
-                            if (event.key === 'Enter') {
-                              const nextTitle = editingTitle.trim()
-                              setEditingConversationId(null)
-                              if (!nextTitle || nextTitle === conversation.title.trim()) {
-                                return
-                              }
-                              onRenameConversation(conversation.id, nextTitle)
-                            }
-
-                            if (event.key === 'Escape') {
-                              setEditingConversationId(null)
-                              setEditingTitle(conversation.title)
-                            }
-                          }}
-                          onKeyUp={(event) => {
-                            event.stopPropagation()
-                          }}
-                          onBlur={() => {
-                            if (isComposingTitle) {
-                              return
-                            }
-
-                            const nextTitle = editingTitle.trim()
-                            setEditingConversationId(null)
-                            if (!nextTitle || nextTitle === conversation.title.trim()) {
-                              return
-                            }
-                            onRenameConversation(conversation.id, nextTitle)
-                          }}
-                        />
-                        <span className="conversation-meta">
-                          {conversation.messages.length} 条消息 · {formatDateTime(conversation.updatedAt)}
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className={`conversation-item ${
-                          activeConversationId === conversation.id ? 'active' : ''
-                        }`}
-                        onClick={() => {
-                          setMenuConversationId(null)
-                          setEditingConversationId(null)
-                          onSelectConversation(conversation.id)
-                        }}
-                      >
-                        <span className="conversation-title">{conversation.title}</span>
-                        <span className="conversation-meta">
-                          {conversation.messages.length} 条消息 · {formatDateTime(conversation.updatedAt)}
-                        </span>
-                      </button>
-                    )}
-
-                    <div className="conversation-item-actions">
-                      <button
-                        type="button"
-                        className="conversation-menu-trigger"
-                        aria-label="打开会话菜单"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          setEditingConversationId(null)
-                          setMenuConversationId((current) =>
-                            current === conversation.id ? null : conversation.id,
-                          )
-                        }}
-                      >
-                        ⋯
-                      </button>
-
-                      {isMenuOpen && (
-                        <div className="conversation-menu" onClick={(event) => event.stopPropagation()}>
-                          <button
-                            type="button"
-                            className="conversation-menu-item"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                              setMenuConversationId(null)
-                              setEditingConversationId(conversation.id)
-                              setEditingTitle(conversation.title)
-                              setIsComposingTitle(false)
-                            }}
-                          >
-                            重命名
-                          </button>
-                          <button
-                            type="button"
-                            className="conversation-menu-item danger"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                              const confirmed = window.confirm(`确定删除会话“${conversation.title}”吗？`)
-                              setMenuConversationId(null)
-                              setEditingConversationId(null)
-                              if (!confirmed) {
-                                return
-                              }
-                              onDeleteConversation(conversation.id)
-                            }}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-
-          <div className="sidebar-footer sidebar-footer-icons">
+          <div className="app-rail-footer">
+            <ThemeToggle />
             <button
               type="button"
-              className={`sidebar-icon-btn ${isSettingsOpen ? 'active' : ''}`}
-              onClick={onToggleSettings}
-              title="设置"
+              className="app-rail-button app-rail-toggle"
+              onClick={onToggle}
+              aria-label={isOpen ? '收起会话栏' : '展开会话栏'}
+              title={isOpen ? '收起会话栏' : '展开会话栏'}
             >
-              <span className="sidebar-icon-glyph">⚙️</span>
-              <span>设置</span>
-            </button>
-            <button
-              type="button"
-              className={`sidebar-icon-btn ${isKnowledgePanelOpen ? 'active' : ''}`}
-              onClick={onToggleKnowledgePanel}
-              title="知识库"
-            >
-              <span className="sidebar-icon-glyph">📘</span>
-              <span>知识库</span>
+              <AppIcon name={isOpen ? 'panelClose' : 'panelOpen'} size={20} />
+              <span>{isOpen ? '收起' : '展开'}</span>
             </button>
           </div>
         </div>
+
+        <section className="conversation-sidebar" aria-hidden={!isOpen}>
+          <header className="conversation-sidebar-header">
+            <div>
+              <span className="conversation-sidebar-kicker">AI LocalBase</span>
+              <h1>会话</h1>
+            </div>
+            <button
+              type="button"
+              className="conversation-create-button"
+              onClick={onCreateConversation}
+              aria-label="新建会话"
+              title="新建会话"
+            >
+              <AppIcon name="plus" size={18} />
+            </button>
+          </header>
+
+          <label className="conversation-search">
+            <AppIcon name="search" size={16} />
+            <span className="sr-only">搜索会话</span>
+            <input
+              type="search"
+              placeholder="搜索会话"
+              value={conversationFilter}
+              onChange={(event) => setConversationFilter(event.target.value)}
+            />
+          </label>
+
+          <div className="conversation-list" aria-label="会话列表">
+            {filteredConversations.length === 0 && (
+              <p className="conversation-empty">没有匹配的会话</p>
+            )}
+
+            {filteredConversations.map((conversation) => {
+              const isMenuOpen = menuConversationId === conversation.id
+              const isEditing = editingConversationId === conversation.id
+              const isActive = activeConversationId === conversation.id
+
+              return (
+                <div
+                  key={conversation.id}
+                  className={`conversation-item-row ${isMenuOpen ? 'menu-open' : ''}`}
+                >
+                  {isEditing ? (
+                    <div className={`conversation-item conversation-item-editing ${isActive ? 'active' : ''}`}>
+                      <input
+                        className="conversation-title-input"
+                        type="text"
+                        value={editingTitle}
+                        autoFocus
+                        onFocus={(event) => event.currentTarget.select()}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => setEditingTitle(event.currentTarget.value)}
+                        onCompositionStart={() => setIsComposingTitle(true)}
+                        onCompositionEnd={(event) => {
+                          setIsComposingTitle(false)
+                          setEditingTitle(event.currentTarget.value)
+                        }}
+                        onKeyDown={(event) => {
+                          event.stopPropagation()
+                          if (isComposingTitle || event.nativeEvent.isComposing) return
+                          if (event.key === 'Enter') finishRename(conversation)
+                          if (event.key === 'Escape') {
+                            setEditingConversationId(null)
+                            setEditingTitle(conversation.title)
+                          }
+                        }}
+                        onBlur={() => finishRename(conversation)}
+                      />
+                      <span className="conversation-meta">
+                        {conversation.messages.length} 条消息 · {formatDateTime(conversation.updatedAt)}
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`conversation-item ${isActive ? 'active' : ''}`}
+                      onClick={() => {
+                        setMenuConversationId(null)
+                        setEditingConversationId(null)
+                        onSelectConversation(conversation.id)
+                        if (window.innerWidth <= 768 && isOpen) onToggle()
+                      }}
+                    >
+                      <span className="conversation-title">{conversation.title}</span>
+                      <span className="conversation-meta">
+                        {conversation.messages.length} 条消息 · {formatDateTime(conversation.updatedAt)}
+                      </span>
+                    </button>
+                  )}
+
+                  <div className="conversation-item-actions">
+                    <button
+                      type="button"
+                      className="conversation-menu-trigger"
+                      aria-label="打开会话菜单"
+                      title="会话操作"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setEditingConversationId(null)
+                        setMenuConversationId((current) =>
+                          current === conversation.id ? null : conversation.id,
+                        )
+                      }}
+                    >
+                      <AppIcon name="more" size={17} />
+                    </button>
+
+                    {isMenuOpen && (
+                      <div className="conversation-menu" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="conversation-menu-item"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setMenuConversationId(null)
+                            setEditingConversationId(conversation.id)
+                            setEditingTitle(conversation.title)
+                            setIsComposingTitle(false)
+                          }}
+                        >
+                          <AppIcon name="pencil" size={15} />
+                          重命名
+                        </button>
+                        <button
+                          type="button"
+                          className="conversation-menu-item danger"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            const confirmed = window.confirm(`确定删除会话“${conversation.title}”吗？`)
+                            setMenuConversationId(null)
+                            setEditingConversationId(null)
+                            if (confirmed) onDeleteConversation(conversation.id)
+                          }}
+                        >
+                          <AppIcon name="trash" size={15} />
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
       </aside>
 
       {isSettingsOpen && (
-        <SettingsPanel
-          config={config}
-          onClose={onToggleSettings}
-          onSaveConfig={onSaveConfig}
-        />
+        <SettingsPanel config={config} onClose={onToggleSettings} onSaveConfig={onSaveConfig} />
       )}
 
       <KnowledgePanel
