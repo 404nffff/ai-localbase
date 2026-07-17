@@ -2187,7 +2187,8 @@
   box-shadow: var(--shadow-modal);
 }
 
-.kb-detail-header {
+/* 文档详情样式必须限定在抽屉内，避免覆盖知识库主面板的同名头部。 */
+.kb-detail-dialog .kb-detail-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2197,14 +2198,14 @@
   background: var(--bg-secondary);
 }
 
-.kb-detail-header h3 {
+.kb-detail-dialog .kb-detail-header h3 {
   margin: 0;
   font-size: 17px;
   color: var(--text-primary);
   word-break: break-word;
 }
 
-.kb-detail-header p {
+.kb-detail-dialog .kb-detail-header p {
   margin: 5px 0 0;
   color: var(--text-secondary);
   font-size: 12px;

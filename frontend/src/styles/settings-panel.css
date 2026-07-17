@@ -474,6 +474,8 @@
    7. 表单控件 (Form Controls)
    ========================================================================== */
 
+/* 未显式声明 type 的 input 按 HTML 默认文本框处理，保持控件尺寸一致。 */
+.settings-form-group input:not([type]),
 .settings-form-group input[type="text"],
 .settings-form-group input[type="password"],
 .settings-form-group input[type="number"],

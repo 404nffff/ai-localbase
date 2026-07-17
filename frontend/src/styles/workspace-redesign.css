@@ -1664,10 +1664,14 @@ body,
 .settings-save-state small {
   overflow: hidden;
   max-width: min(52vw, 620px);
-  color: var(--color-error);
+  color: var(--text-secondary);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-save-bar.has-error .settings-save-state small {
+  color: var(--color-error);
 }
 
 .settings-save-actions {
@@ -1688,6 +1692,13 @@ body,
 
 .settings-tab-content {
   width: min(100%, 860px);
+  margin: 0 auto;
+}
+
+/* 全页设置工作区覆盖旧模态框的左对齐规则，保持内容在主区域内居中。 */
+.settings-workspace .settings-content-scroll > .settings-tab-content {
+  width: min(100%, 860px);
+  max-width: none;
   margin: 0 auto;
 }
 
@@ -2401,7 +2412,8 @@ body,
   font-weight: 650;
 }
 
-.knowledge-workspace-page .kb-document-select select {
+.knowledge-workspace-page .kb-document-select select,
+.knowledge-workspace-page .kb-document-sort select {
   width: 100%;
   min-height: 36px;
   padding: 0 28px 0 10px;
@@ -2412,14 +2424,33 @@ body,
   color: var(--text-secondary);
   font: inherit;
   font-size: 12px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2371717a' d='M6 8.825L1.175 4 2.238 2.938 6 6.7 9.763 2.938 10.825 4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.knowledge-workspace-page .kb-document-select select:focus {
+.knowledge-workspace-page .kb-document-select select:hover,
+.knowledge-workspace-page .kb-document-sort select:hover {
+  border-color: var(--border-color-hover);
+  background-color: var(--surface-secondary);
+}
+
+.knowledge-workspace-page .kb-document-select select:focus,
+.knowledge-workspace-page .kb-document-sort select:focus {
   border-color: var(--color-primary);
   outline: none;
   box-shadow: var(--shadow-focus);
+}
+
+/* 排序选择器保持紧凑宽度，避免在工具栏中退化成整列原生控件。 */
+.knowledge-workspace-page .kb-document-sort {
+  width: min(180px, 100%);
 }
 
 .knowledge-workspace-page .kb-bulk-checkbox {
@@ -2824,7 +2855,8 @@ body,
   animation: kb-detail-drawer-in 180ms ease-out;
 }
 
-.kb-detail-header {
+/* 文档详情抽屉样式只作用于抽屉，避免污染知识库主面板。 */
+.kb-detail-dialog .kb-detail-header {
   min-height: 92px;
   align-items: center;
   padding: 18px 22px;
@@ -2832,17 +2864,17 @@ body,
   background: var(--surface-primary);
 }
 
-.kb-detail-header > div {
+.kb-detail-dialog .kb-detail-header > div {
   min-width: 0;
 }
 
-.kb-detail-header > div > span {
+.kb-detail-dialog .kb-detail-header > div > span {
   color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 650;
 }
 
-.kb-detail-header h3 {
+.kb-detail-dialog .kb-detail-header h3 {
   margin-top: 4px;
   overflow: hidden;
   font-size: 17px;
@@ -2851,12 +2883,12 @@ body,
   white-space: nowrap;
 }
 
-.kb-detail-header p {
+.kb-detail-dialog .kb-detail-header p {
   margin-top: 4px;
   font-size: 11px;
 }
 
-.kb-detail-header .kb-close-btn {
+.kb-detail-dialog .kb-detail-header .kb-close-btn {
   display: inline-flex;
   width: 34px;
   height: 34px;
@@ -2869,7 +2901,7 @@ body,
   color: var(--text-secondary);
 }
 
-.kb-detail-header .kb-close-btn:hover {
+.kb-detail-dialog .kb-detail-header .kb-close-btn:hover {
   border-color: var(--border-color-hover);
   background: var(--surface-secondary);
   color: var(--text-primary);
@@ -2962,7 +2994,7 @@ body,
   font-weight: 680;
 }
 
-.kb-detail-summary {
+.kb-detail-dialog .kb-detail-summary {
   padding: 16px;
   border-left: 3px solid var(--color-primary);
   background: var(--surface-secondary);
@@ -3890,7 +3922,7 @@ body,
     width: 100%;
   }
 
-  .kb-detail-header {
+  .kb-detail-dialog .kb-detail-header {
     min-height: 82px;
     padding: 14px 16px;
   }
