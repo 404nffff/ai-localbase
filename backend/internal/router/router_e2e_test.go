@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"ai-localbase/internal/handler"
 	"ai-localbase/internal/model"
@@ -332,6 +333,115 @@ func TestRouterDeleteDocumentRemovesMarkdownArchive(t *testing.T) {
 	}
 }
 
+func TestRouterDocumentDiagnosticsAndReindexE2E(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+	uploadResp := performMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", kbID),
+		"diagnostics-reindex.md",
+		strings.Repeat("文档详情和健康接口需要返回可验证的分块信息。", 120),
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected upload status 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+
+	var uploadResult model.UploadResponse
+	decodeJSONResponse(t, uploadResp.Body.Bytes(), &uploadResult)
+	if uploadResult.Uploaded.ChunkCount == 0 || uploadResult.Uploaded.IndexedAt == "" {
+		t.Fatalf("expected upload to persist index metadata, got %#v", uploadResult.Uploaded)
+	}
+
+	healthResp := performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/knowledge-bases/%s/health", kbID), nil, "")
+	if healthResp.Code != http.StatusOK {
+		t.Fatalf("expected health status 200, got %d, body=%s", healthResp.Code, healthResp.Body.String())
+	}
+	var health model.KnowledgeBaseHealthResponse
+	decodeJSONResponse(t, healthResp.Body.Bytes(), &health)
+	if health.Metrics.DocumentCount != 1 || health.Metrics.IndexedCount != 1 || len(health.Documents) != 1 {
+		t.Fatalf("unexpected health response: %#v", health)
+	}
+	if health.Documents[0].NeedsReindex || health.Documents[0].ChunkCount == 0 {
+		t.Fatalf("expected healthy indexed document, got %#v", health.Documents[0])
+	}
+
+	detailPath := fmt.Sprintf("/api/knowledge-bases/%s/documents/%s", kbID, uploadResult.Uploaded.ID)
+	detailResp := performRequest(t, engine, http.MethodGet, detailPath, nil, "")
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected detail status 200, got %d, body=%s", detailResp.Code, detailResp.Body.String())
+	}
+	var detail model.DocumentDetailResponse
+	decodeJSONResponse(t, detailResp.Body.Bytes(), &detail)
+	if detail.Document.ID != uploadResult.Uploaded.ID || detail.Diagnostics.ChunkCount == 0 || len(detail.Chunks) == 0 {
+		t.Fatalf("unexpected document detail: %#v", detail)
+	}
+	if detail.Chunks[0].Kind != "text" || !detail.Diagnostics.QdrantEnabled {
+		t.Fatalf("expected text chunks with qdrant enabled, got %#v", detail.Diagnostics)
+	}
+
+	newContent := strings.Repeat("单文档重建后必须使用更新后的正文。", 140)
+	if err := os.WriteFile(uploadResult.Uploaded.Path, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("rewrite uploaded source: %v", err)
+	}
+	reindexResp := performRequest(t, engine, http.MethodPost, detailPath+"/reindex", nil, "")
+	if reindexResp.Code != http.StatusOK {
+		t.Fatalf("expected reindex status 200, got %d, body=%s", reindexResp.Code, reindexResp.Body.String())
+	}
+	var reindexResult struct {
+		Message         string         `json:"message"`
+		KnowledgeBaseID string         `json:"knowledgeBaseId"`
+		Document        model.Document `json:"document"`
+	}
+	decodeJSONResponse(t, reindexResp.Body.Bytes(), &reindexResult)
+	if reindexResult.Document.ID != uploadResult.Uploaded.ID || reindexResult.Document.ChunkCount == 0 {
+		t.Fatalf("unexpected reindex response: %#v", reindexResult)
+	}
+	if !strings.Contains(reindexResult.Document.ContentPreview, "单文档重建后必须使用更新后的正文") {
+		t.Fatalf("expected updated preview, got %q", reindexResult.Document.ContentPreview)
+	}
+
+	detailResp = performRequest(t, engine, http.MethodGet, detailPath, nil, "")
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected refreshed detail status 200, got %d, body=%s", detailResp.Code, detailResp.Body.String())
+	}
+	decodeJSONResponse(t, detailResp.Body.Bytes(), &detail)
+	if !strings.Contains(detail.RawContent, "单文档重建后必须使用更新后的正文") {
+		t.Fatalf("expected refreshed raw content, got %q", detail.RawContent)
+	}
+
+	healthResp = performRequest(t, engine, http.MethodGet, fmt.Sprintf("/api/knowledge-bases/%s/health", kbID), nil, "")
+	decodeJSONResponse(t, healthResp.Body.Bytes(), &health)
+	if health.Metrics.DocumentCount != 1 || len(health.Documents) != 1 {
+		t.Fatalf("expected reindex to replace document without duplication, got %#v", health)
+	}
+}
+
+func TestRouterDocumentDiagnosticsReturnErrorsForMissingResources(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	kbID := mustListFirstKnowledgeBaseID(t, engine)
+	tests := []struct {
+		method string
+		path   string
+		status int
+	}{
+		{method: http.MethodGet, path: "/api/knowledge-bases/kb-missing/health", status: http.StatusNotFound},
+		{method: http.MethodGet, path: fmt.Sprintf("/api/knowledge-bases/%s/documents/doc-missing", kbID), status: http.StatusNotFound},
+		{method: http.MethodPost, path: fmt.Sprintf("/api/knowledge-bases/%s/documents/doc-missing/reindex", kbID), status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		resp := performRequest(t, engine, test.method, test.path, nil, "")
+		if resp.Code != test.status {
+			t.Fatalf("expected %s %s status %d, got %d, body=%s", test.method, test.path, test.status, resp.Code, resp.Body.String())
+		}
+	}
+}
+
 func TestRouterUploadRetrievalAndChatE2E(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouter(t)
 	defer cleanup()
@@ -434,7 +544,7 @@ Redis 支持过期时间设置，适合用作会话缓存或临时数据存储�
 	}
 }
 
-func TestRouterStructuredCSVCountQuestionUsesCondensedAnswerRules(t *testing.T) {
+func TestRouterStructuredCSVCountQuestionUsesDeterministicAnswer(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouter(t)
 	defer cleanup()
 
@@ -497,14 +607,49 @@ func TestRouterStructuredCSVCountQuestionUsesCondensedAnswerRules(t *testing.T) 
 		t.Fatal("expected chat choices")
 	}
 	answer := chatResult.Choices[0].Message.Content
-	if !strings.Contains(answer, "该文档中共有 4 名员工") {
-		t.Fatalf("expected concise count answer, got %q", answer)
+	if !strings.Contains(answer, "**总记录数**：4 条") {
+		t.Fatalf("expected deterministic count answer, got %q", answer)
 	}
-	if strings.Count(answer, "4 名员工") != 1 {
-		t.Fatalf("expected count conclusion to appear once, got %q", answer)
+	if !strings.Contains(answer, "后端直接读取结构化文件行数") {
+		t.Fatalf("expected local structured evidence note, got %q", answer)
 	}
 	if strings.Contains(answer, "字段：") {
 		t.Fatalf("expected field list to be omitted for count question, got %q", answer)
+	}
+	if chatResult.Metadata["fallbackStrategy"] != "structured-data-query" {
+		t.Fatalf("expected structured fallback strategy, got %#v", chatResult.Metadata)
+	}
+	sources, ok := chatResult.Metadata["sources"].([]any)
+	if !ok || len(sources) != 1 {
+		t.Fatalf("expected one structured source, got %#v", chatResult.Metadata["sources"])
+	}
+	source, ok := sources[0].(map[string]any)
+	if !ok || source["sourceType"] != "structured-data" || source["documentId"] != uploadResult.Uploaded.ID {
+		t.Fatalf("unexpected structured source metadata: %#v", sources[0])
+	}
+
+	streamPayload := map[string]any{
+		"conversationId":  "conv-e2e-csv-count-stream",
+		"model":           "chat-test-model",
+		"knowledgeBaseId": knowledgeBaseID,
+		"documentId":      uploadResult.Uploaded.ID,
+		"messages": []map[string]string{{
+			"role":    "user",
+			"content": "这个表格有多少条员工记录",
+		}},
+	}
+	streamResp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions/stream", streamPayload)
+	if streamResp.Code != http.StatusOK {
+		t.Fatalf("expected structured stream status 200, got %d, body=%s", streamResp.Code, streamResp.Body.String())
+	}
+	streamBody := streamResp.Body.String()
+	if !strings.Contains(streamResp.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("expected event stream content type, got %q", streamResp.Header().Get("Content-Type"))
+	}
+	for _, expected := range []string{"event:meta", "event:chunk", "event:done", "structured-data-query", "总记录数"} {
+		if !strings.Contains(streamBody, expected) {
+			t.Fatalf("expected %q in structured stream body, got %q", expected, streamBody)
+		}
 	}
 }
 
@@ -899,8 +1044,8 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	if rpcResp.JSONRPC != "2.0" {
 		t.Fatalf("expected jsonrpc version 2.0, got %q", rpcResp.JSONRPC)
 	}
-	if len(rpcResp.Result.Tools) != 8 {
-		t.Fatalf("expected 8 tools, got %d", len(rpcResp.Result.Tools))
+	if len(rpcResp.Result.Tools) != 15 {
+		t.Fatalf("expected 15 tools, got %d", len(rpcResp.Result.Tools))
 	}
 	if rpcResp.Result.Tools[0].Name != "chat.ask" {
 		t.Fatalf("expected first tool chat.ask, got %q", rpcResp.Result.Tools[0].Name)
@@ -925,6 +1070,20 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	}
 	if rpcResp.Result.Tools[7].Name != "knowledge_base.list" {
 		t.Fatalf("expected eighth tool knowledge_base.list, got %q", rpcResp.Result.Tools[7].Name)
+	}
+	additionalTools := []string{
+		"document.list",
+		"document.detail",
+		"document.summarize",
+		"structured_data.query",
+		"knowledge_base.health",
+		"conversation.list",
+		"conversation.get",
+	}
+	for index, name := range additionalTools {
+		if rpcResp.Result.Tools[index+8].Name != name {
+			t.Fatalf("expected tool %d to be %s, got %q", index+9, name, rpcResp.Result.Tools[index+8].Name)
+		}
 	}
 	for _, tool := range rpcResp.Result.Tools {
 		if tool.Invocation.JSONRPC.Method != "tools/call" {
@@ -955,6 +1114,181 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	}
 	if len(chatTool.Response) == 0 || chatTool.Response[0].Name != "content" {
 		t.Fatalf("expected chat.ask response to describe content field, got %#v", chatTool.Response)
+	}
+}
+
+func TestMCPReadOnlyToolsReturnDocumentHealthStructuredDataAndConversations(t *testing.T) {
+	engine, appService, _, cleanup := newTestRouterWithAccessTokenAndService(t, "app-access-token")
+	defer cleanup()
+
+	listResp := performAuthorizedRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", "app-access-token")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected knowledge base list 200, got %d, body=%s", listResp.Code, listResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, listResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+	knowledgeBaseID := kbList.Items[0].ID
+
+	uploadResp := performAuthorizedMultipartUpload(
+		t,
+		engine,
+		http.MethodPost,
+		fmt.Sprintf("/api/knowledge-bases/%s/documents", knowledgeBaseID),
+		"mcp-readonly.csv",
+		"姓名,城市,薪资\n张三,上海,100\n李四,北京,200\n王五,上海,300\n",
+		"app-access-token",
+	)
+	if uploadResp.Code != http.StatusOK {
+		t.Fatalf("expected CSV upload 200, got %d, body=%s", uploadResp.Code, uploadResp.Body.String())
+	}
+	var uploadResult model.UploadResponse
+	decodeJSONResponse(t, uploadResp.Body.Bytes(), &uploadResult)
+
+	conversationID := "conv-mcp-readonly"
+	if _, err := appService.SaveConversation(model.SaveConversationRequest{
+		ID:              conversationID,
+		Title:           "MCP 只读会话",
+		KnowledgeBaseID: knowledgeBaseID,
+		DocumentID:      uploadResult.Uploaded.ID,
+		Messages: []model.StoredChatMessage{{
+			ID:        "msg-mcp-readonly",
+			Role:      "user",
+			Content:   "请查看结构化数据。",
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		}},
+	}); err != nil {
+		t.Fatalf("save conversation: %v", err)
+	}
+
+	callTool := func(id int, name string, arguments map[string]any) map[string]any {
+		t.Helper()
+		resp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/mcp", map[string]any{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      name,
+				"arguments": arguments,
+			},
+		}, "app-access-token")
+		if resp.Code != http.StatusOK {
+			t.Fatalf("expected %s status 200, got %d, body=%s", name, resp.Code, resp.Body.String())
+		}
+		var rpcResp struct {
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				StructuredContent map[string]any `json:"structuredContent"`
+			} `json:"result"`
+			Error *model.JSONRPCError `json:"error"`
+		}
+		decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
+		if rpcResp.Error != nil {
+			t.Fatalf("expected %s result, got error=%+v", name, *rpcResp.Error)
+		}
+		if len(rpcResp.Result.Content) == 0 || strings.TrimSpace(rpcResp.Result.Content[0].Text) == "" {
+			t.Fatalf("expected %s to include text content", name)
+		}
+		return rpcResp.Result.StructuredContent
+	}
+
+	documentList := callTool(20, "document.list", map[string]any{"knowledgeBaseId": knowledgeBaseID})
+	documentItems, ok := documentList["items"].([]any)
+	if !ok || len(documentItems) != 1 {
+		t.Fatalf("expected one document item, got %#v", documentList)
+	}
+
+	documentDetail := callTool(21, "document.detail", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"documentId":      uploadResult.Uploaded.ID,
+	})
+	detail, ok := documentDetail["detail"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected document detail object, got %#v", documentDetail)
+	}
+	detailDocument, _ := detail["document"].(map[string]any)
+	if detailDocument["id"] != uploadResult.Uploaded.ID {
+		t.Fatalf("expected detail document %q, got %#v", uploadResult.Uploaded.ID, detailDocument)
+	}
+
+	documentSummary := callTool(22, "document.summarize", map[string]any{
+		"knowledgeBaseId": knowledgeBaseID,
+		"documentId":      uploadResult.Uploaded.ID,
+	})
+	if strings.TrimSpace(fmt.Sprint(documentSummary["summary"])) == "" {
+		t.Fatalf("expected document summary, got %#v", documentSummary)
+	}
+	summaryChunks, ok := documentSummary["chunks"].([]any)
+	if !ok || len(summaryChunks) == 0 || len(summaryChunks) > 5 {
+		t.Fatalf("expected 1-5 summary chunks, got %#v", documentSummary["chunks"])
+	}
+
+	structuredResult := callTool(23, "structured_data.query", map[string]any{
+		"query":      "这个表格有多少条记录",
+		"documentId": uploadResult.Uploaded.ID,
+	})
+	if structuredResult["matched"] != true || !strings.Contains(fmt.Sprint(structuredResult["content"]), "总记录数") {
+		t.Fatalf("expected deterministic structured result, got %#v", structuredResult)
+	}
+
+	healthResult := callTool(24, "knowledge_base.health", map[string]any{"knowledgeBaseId": knowledgeBaseID})
+	health, ok := healthResult["health"].(map[string]any)
+	if !ok || health["knowledgeBaseId"] != knowledgeBaseID {
+		t.Fatalf("expected knowledge base health, got %#v", healthResult)
+	}
+
+	conversationList := callTool(25, "conversation.list", map[string]any{})
+	conversationItems, ok := conversationList["items"].([]any)
+	if !ok || len(conversationItems) != 1 {
+		t.Fatalf("expected one conversation, got %#v", conversationList)
+	}
+
+	conversationResult := callTool(26, "conversation.get", map[string]any{"conversationId": conversationID})
+	conversation, ok := conversationResult["conversation"].(map[string]any)
+	if !ok || conversation["id"] != conversationID {
+		t.Fatalf("expected conversation %q, got %#v", conversationID, conversationResult)
+	}
+}
+
+func TestMCPReadOnlyToolsRejectMissingRequiredScope(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithAccessToken(t, "app-access-token")
+	defer cleanup()
+
+	tests := []struct {
+		name      string
+		arguments map[string]any
+	}{
+		{name: "document.list", arguments: map[string]any{}},
+		{name: "document.detail", arguments: map[string]any{"knowledgeBaseId": "kb-default"}},
+		{name: "document.summarize", arguments: map[string]any{"documentId": "doc-missing"}},
+		{name: "structured_data.query", arguments: map[string]any{"query": "有多少条记录"}},
+		{name: "knowledge_base.health", arguments: map[string]any{}},
+		{name: "conversation.get", arguments: map[string]any{}},
+	}
+
+	for index, test := range tests {
+		resp := performAuthorizedJSONRequest(t, engine, http.MethodPost, "/mcp", map[string]any{
+			"jsonrpc": "2.0",
+			"id":      30 + index,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      test.name,
+				"arguments": test.arguments,
+			},
+		}, "app-access-token")
+		var rpcResp struct {
+			Error *model.JSONRPCError `json:"error"`
+		}
+		decodeJSONResponse(t, resp.Body.Bytes(), &rpcResp)
+		if rpcResp.Error == nil || rpcResp.Error.Message != "invalid params" {
+			t.Fatalf("expected %s invalid params error, got %#v", test.name, rpcResp.Error)
+		}
 	}
 }
 
@@ -1998,6 +2332,21 @@ func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {
 	collection := s.collections[collectionName]
 
 	switch {
+	case r.Method == http.MethodGet && len(segments) == 2:
+		// T-05 起写入前会读取真实集合 Schema；测试桩返回 named dense+sparse 模式。
+		writeJSON(http.StatusOK, map[string]any{
+			"result": map[string]any{
+				"config": map[string]any{
+					"params": map[string]any{
+						"vectors": map[string]any{
+							"dense": map[string]any{"size": 8, "distance": "Cosine"},
+						},
+						"sparse_vectors": map[string]any{"sparse": map[string]any{}},
+					},
+				},
+			},
+		})
+		return
 	case r.Method == http.MethodPut && len(segments) == 2:
 		writeJSON(http.StatusOK, map[string]any{"result": true})
 		return

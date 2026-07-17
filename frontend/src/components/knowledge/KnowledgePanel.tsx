@@ -1,12 +1,18 @@
-import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
+import React, { ChangeEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DirectoryUploadTask,
+  DocumentDetailResponse,
+  DocumentItem,
   KnowledgeBase,
   KnowledgeBaseFileUploadState,
+  KnowledgeBaseHealthResponse,
   OperationLogEntry,
   OperationLogFilters,
   OperationLogListResponse,
 } from '../../App'
+import DocumentDetailDialog from './DocumentDetailDialog'
+import { getDocumentPage } from './documentListPagination'
+import { formatDocumentPreviewText } from './documentPreviewText'
 
 interface KnowledgePanelProps {
   open: boolean
@@ -29,6 +35,12 @@ interface KnowledgePanelProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchKnowledgeBaseHealth: (knowledgeBaseId: string) => Promise<KnowledgeBaseHealthResponse>
+  onFetchDocumentDetail: (
+    knowledgeBaseId: string,
+    documentId: string,
+  ) => Promise<DocumentDetailResponse>
+  onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   operationLogs: OperationLogListResponse
   operationLogFilters: OperationLogFilters
   isOperationLogLoading: boolean
@@ -39,6 +51,7 @@ interface KnowledgePanelProps {
 }
 
 type KnowledgePanelView = 'knowledge' | 'logs'
+type DocumentSort = 'uploadedAt:desc' | 'uploadedAt:asc' | 'name:asc' | 'name:desc' | 'size:desc' | 'size:asc'
 
 const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   open,
@@ -61,6 +74,9 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchKnowledgeBaseHealth,
+  onFetchDocumentDetail,
+  onReindexDocument,
   operationLogs,
   operationLogFilters,
   isOperationLogLoading,
@@ -75,11 +91,22 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [newDescription, setNewDescription] = useState('')
   const [knowledgeBaseQuery, setKnowledgeBaseQuery] = useState('')
   const [documentQuery, setDocumentQuery] = useState('')
+  const deferredDocumentQuery = useDeferredValue(documentQuery)
+  const [documentSort, setDocumentSort] = useState<DocumentSort>('uploadedAt:desc')
+  const [documentPage, setDocumentPage] = useState(1)
+  const [knowledgeHealth, setKnowledgeHealth] = useState<KnowledgeBaseHealthResponse | null>(null)
+  const [knowledgeHealthError, setKnowledgeHealthError] = useState<string | null>(null)
+  const [isKnowledgeHealthLoading, setIsKnowledgeHealthLoading] = useState(false)
+  const [documentDetail, setDocumentDetail] = useState<DocumentDetailResponse | null>(null)
+  const [documentDetailError, setDocumentDetailError] = useState<string | null>(null)
+  const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
+  const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
   const [showFailedItems, setShowFailedItems] = useState(false)
   const [showSkippedItems, setShowSkippedItems] = useState(false)
   const directoryInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const fetchKnowledgeHealthRef = useRef(onFetchKnowledgeBaseHealth)
 
   const handleFileChange = (knowledgeBaseId: string, event: ChangeEvent<HTMLInputElement>) => {
     onUploadFiles(knowledgeBaseId, event.target.files)
@@ -123,6 +150,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const statusLabel = (status: string) => {
     if (status === 'indexed') return { text: '已索引', color: '#16a34a', bg: '#dcfce7' }
     if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
+    if (status === 'failed') return { text: '失败', color: '#b91c1c', bg: '#fee2e2' }
     return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
   }
 
@@ -237,22 +265,39 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     })
   }, [knowledgeBases, normalizedKnowledgeBaseQuery])
 
-  const normalizedDocumentQuery = documentQuery.trim().toLowerCase()
-  const filteredDocuments = useMemo(() => {
+  const normalizedDocumentQuery = deferredDocumentQuery.trim().toLowerCase()
+  const filteredAndSortedDocuments = useMemo(() => {
     if (!selectedKnowledgeBase) {
       return []
     }
 
-    if (!normalizedDocumentQuery) {
-      return selectedKnowledgeBase.documents
-    }
+    const filtered = normalizedDocumentQuery
+      ? selectedKnowledgeBase.documents.filter((document) =>
+          `${document.name} ${document.contentPreview ?? ''}`
+            .toLowerCase()
+            .includes(normalizedDocumentQuery),
+        )
+      : selectedKnowledgeBase.documents
 
-    return selectedKnowledgeBase.documents.filter((document) =>
-      `${document.name} ${document.contentPreview ?? ''}`
-        .toLowerCase()
-        .includes(normalizedDocumentQuery),
-    )
-  }, [normalizedDocumentQuery, selectedKnowledgeBase])
+    const [field, order] = documentSort.split(':') as ['uploadedAt' | 'name' | 'size', 'asc' | 'desc']
+    return [...filtered].sort((left, right) => {
+      let comparison = 0
+      if (field === 'name') comparison = left.name.localeCompare(right.name, 'zh-CN')
+      if (field === 'size') comparison = left.size - right.size
+      if (field === 'uploadedAt') {
+        comparison = new Date(left.uploadedAt).getTime() - new Date(right.uploadedAt).getTime()
+      }
+      return order === 'asc' ? comparison : -comparison
+    })
+  }, [documentSort, normalizedDocumentQuery, selectedKnowledgeBase])
+  const visibleDocumentPage = useMemo(
+    () => getDocumentPage(filteredAndSortedDocuments, documentPage),
+    [documentPage, filteredAndSortedDocuments],
+  )
+  const healthByDocumentId = useMemo(
+    () => new Map(knowledgeHealth?.documents.map((document) => [document.documentId, document]) ?? []),
+    [knowledgeHealth],
+  )
   const isBrowsingActiveKnowledgeBase =
     selectedKnowledgeBase?.id !== null && selectedKnowledgeBase?.id === activeKnowledgeBaseId
   const activeScopeText = activeDocument
@@ -275,6 +320,80 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     directoryUploadTask.status === 'uploading' ||
     directoryUploadTask.status === 'canceling'
 
+  const refreshKnowledgeHealth = async (knowledgeBaseId: string) => {
+    setIsKnowledgeHealthLoading(true)
+    setKnowledgeHealthError(null)
+    try {
+      const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
+      setKnowledgeHealth(health)
+    } catch (error) {
+      setKnowledgeHealth(null)
+      setKnowledgeHealthError(error instanceof Error ? error.message : '知识库健康状态加载失败')
+    } finally {
+      setIsKnowledgeHealthLoading(false)
+    }
+  }
+
+  const handleOpenDocumentDetail = async (knowledgeBaseId: string, documentId: string) => {
+    setDocumentDetail(null)
+    setDocumentDetailError(null)
+    setDocumentDetailLoadingId(documentId)
+    try {
+      setDocumentDetail(await onFetchDocumentDetail(knowledgeBaseId, documentId))
+    } catch (error) {
+      setDocumentDetailError(error instanceof Error ? error.message : '文档详情加载失败')
+    } finally {
+      setDocumentDetailLoadingId(null)
+    }
+  }
+
+  const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
+    setReindexingDocumentId(documentId)
+    try {
+      await onReindexDocument(knowledgeBaseId, documentId)
+      await refreshKnowledgeHealth(knowledgeBaseId)
+      if (documentDetail?.document.id === documentId) {
+        setDocumentDetail(await onFetchDocumentDetail(knowledgeBaseId, documentId))
+      }
+    } catch (error) {
+      window.alert(`重建索引失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally {
+      setReindexingDocumentId(null)
+    }
+  }
+
+  useEffect(() => {
+    fetchKnowledgeHealthRef.current = onFetchKnowledgeBaseHealth
+  }, [onFetchKnowledgeBaseHealth])
+
+  useEffect(() => {
+    if (!open || !selectedKnowledgeBaseId) {
+      setKnowledgeHealth(null)
+      setKnowledgeHealthError(null)
+      return
+    }
+
+    let canceled = false
+    setIsKnowledgeHealthLoading(true)
+    setKnowledgeHealthError(null)
+    void fetchKnowledgeHealthRef.current(selectedKnowledgeBaseId)
+      .then((health) => {
+        if (!canceled) setKnowledgeHealth(health)
+      })
+      .catch((error: unknown) => {
+        if (canceled) return
+        setKnowledgeHealth(null)
+        setKnowledgeHealthError(error instanceof Error ? error.message : '知识库健康状态加载失败')
+      })
+      .finally(() => {
+        if (!canceled) setIsKnowledgeHealthLoading(false)
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [open, selectedKnowledgeBaseId])
+
   useEffect(() => {
     if (isTaskActive) {
       setShowUploadTaskDetails(true)
@@ -288,7 +407,20 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   useEffect(() => {
     setDocumentQuery('')
+    setDocumentPage(1)
+    setDocumentDetail(null)
+    setDocumentDetailError(null)
   }, [selectedKnowledgeBaseId])
+
+  useEffect(() => {
+    setDocumentPage(1)
+  }, [deferredDocumentQuery, documentSort])
+
+  useEffect(() => {
+    if (documentPage !== visibleDocumentPage.page) {
+      setDocumentPage(visibleDocumentPage.page)
+    }
+  }, [documentPage, visibleDocumentPage.page])
 
   if (!open) return null
 
@@ -790,6 +922,31 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           </div>
                         )}
 
+                      <div className="kb-health-summary">
+                        <div>
+                          <span>索引健康</span>
+                          <strong>
+                            {isKnowledgeHealthLoading
+                              ? '检查中…'
+                              : knowledgeHealth
+                                ? `${knowledgeHealth.score} 分 · ${knowledgeHealth.status}`
+                                : '暂无结果'}
+                          </strong>
+                          {knowledgeHealth?.recommendations[0] && (
+                            <small>{knowledgeHealth.recommendations[0]}</small>
+                          )}
+                          {knowledgeHealthError && <small className="kb-health-error">{knowledgeHealthError}</small>}
+                        </div>
+                        <button
+                          type="button"
+                          className="kb-export-btn"
+                          disabled={isKnowledgeHealthLoading}
+                          onClick={() => void refreshKnowledgeHealth(selectedKnowledgeBase.id)}
+                        >
+                          刷新健康状态
+                        </button>
+                      </div>
+
                       <div className="kb-detail-toolbar">
                         <div className="kb-current-scope">
                           <button
@@ -809,6 +966,20 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                             placeholder="按文件名或预览内容筛选"
                           />
                         </label>
+                        <label className="kb-search-field kb-search-field--compact kb-document-sort">
+                          <span>排序</span>
+                          <select
+                            value={documentSort}
+                            onChange={(event) => setDocumentSort(event.target.value as DocumentSort)}
+                          >
+                            <option value="uploadedAt:desc">最近上传</option>
+                            <option value="uploadedAt:asc">最早上传</option>
+                            <option value="name:asc">名称升序</option>
+                            <option value="name:desc">名称降序</option>
+                            <option value="size:desc">文件较大</option>
+                            <option value="size:asc">文件较小</option>
+                          </select>
+                        </label>
                       </div>
 
                       {!collapsedKnowledgeBases[selectedKnowledgeBase.id] ? (
@@ -818,18 +989,20 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                               <span>📄</span>
                               <span>暂无文档，点击「上传」添加文件</span>
                             </div>
-                          ) : filteredDocuments.length === 0 ? (
+                          ) : filteredAndSortedDocuments.length === 0 ? (
                             <div className="kb-docs-empty">
                               <span>🔎</span>
                               <span>没有匹配当前筛选条件的文件</span>
                             </div>
                           ) : (
-                            filteredDocuments.map((doc) => {
+                            visibleDocumentPage.items.map((doc) => {
                               const badge = statusLabel(doc.status)
+                              const health = healthByDocumentId.get(doc.id)
+                              const needsReindex = Boolean(health?.needsReindex || doc.indexError)
                               return (
                                 <div
                                   key={doc.id}
-                                  className={`kb-doc-item${isBrowsingActiveKnowledgeBase && activeDocumentId === doc.id ? ' kb-doc-item--active' : ''}`}
+                                  className={`kb-doc-item${isBrowsingActiveKnowledgeBase && activeDocumentId === doc.id ? ' kb-doc-item--active' : ''}${needsReindex ? ' kb-doc-item--attention' : ''}`}
                                 >
                                   <button
                                     className="kb-doc-main"
@@ -846,24 +1019,70 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                                       </span>
                                     </div>
                                     {doc.contentPreview && (
-                                      <p className="kb-doc-preview">{doc.contentPreview}</p>
+                                      <p className="kb-doc-preview">{formatDocumentPreviewText(doc.contentPreview)}</p>
                                     )}
                                     <div className="kb-doc-meta">
                                       <span>{doc.sizeLabel}</span>
                                       <span>·</span>
+                                      <span>{health?.chunkCount ?? doc.chunkCount ?? 0} chunks</span>
+                                      <span>·</span>
                                       <span>{new Date(doc.uploadedAt).toLocaleDateString('zh-CN')}</span>
                                     </div>
+                                    {(doc.indexError || health?.recommendation) && (
+                                      <p className="kb-doc-issue">{doc.indexError || health?.recommendation}</p>
+                                    )}
                                   </button>
-                                  <button
-                                    className="kb-doc-remove"
-                                    onClick={() => onRemoveDocument(selectedKnowledgeBase.id, doc.id)}
-                                    title="删除文档"
-                                  >
-                                    ✕
-                                  </button>
+                                  <div className="kb-doc-actions">
+                                    <button
+                                      className="kb-doc-detail"
+                                      disabled={documentDetailLoadingId === doc.id}
+                                      onClick={() => void handleOpenDocumentDetail(selectedKnowledgeBase.id, doc.id)}
+                                      title="查看文档详情"
+                                    >
+                                      {documentDetailLoadingId === doc.id ? '…' : '详情'}
+                                    </button>
+                                    <button
+                                      className="kb-doc-reindex"
+                                      disabled={reindexingDocumentId === doc.id}
+                                      onClick={() => void handleReindexDocument(selectedKnowledgeBase.id, doc.id)}
+                                      title="重新建立索引"
+                                    >
+                                      {reindexingDocumentId === doc.id ? '重建中' : '重建'}
+                                    </button>
+                                    <button
+                                      className="kb-doc-remove"
+                                      onClick={() => onRemoveDocument(selectedKnowledgeBase.id, doc.id)}
+                                      title="删除文档"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
                                 </div>
                               )
                             })
+                          )}
+
+                          {filteredAndSortedDocuments.length > 50 && (
+                            <div className="kb-document-pagination" aria-label="文档分页">
+                              <span>共 {filteredAndSortedDocuments.length} 份文档</span>
+                              <div>
+                                <button
+                                  type="button"
+                                  disabled={visibleDocumentPage.page === 1}
+                                  onClick={() => setDocumentPage((page) => Math.max(1, page - 1))}
+                                >
+                                  上一页
+                                </button>
+                                <strong>第 {visibleDocumentPage.page} / {visibleDocumentPage.pageCount} 页</strong>
+                                <button
+                                  type="button"
+                                  disabled={visibleDocumentPage.page === visibleDocumentPage.pageCount}
+                                  onClick={() => setDocumentPage((page) => Math.min(visibleDocumentPage.pageCount, page + 1))}
+                                >
+                                  下一页
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -934,6 +1153,17 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
           </div>
         </div>
       )}
+
+      <DocumentDetailDialog
+        detail={documentDetail}
+        error={documentDetailError}
+        loading={documentDetailLoadingId !== null}
+        onClose={() => {
+          setDocumentDetail(null)
+          setDocumentDetailError(null)
+          setDocumentDetailLoadingId(null)
+        }}
+      />
     </>
   )
 }

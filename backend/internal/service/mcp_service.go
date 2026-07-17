@@ -322,6 +322,84 @@ func (s *MCPService) ToolsList() []model.MCPTool {
 				{Name: "items", Type: "array<object>", Description: "知识库列表，每项包含 id、knowledgeBaseId、name、description、createdAt、documentCount"},
 			},
 		),
+		newMCPTool(
+			"document.list",
+			"列出指定知识库中的文档元数据",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "知识库 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "items", Type: "array<object>", Description: "文档列表，包含 ID、名称、状态、大小、分块数、索引时间和内容预览"},
+			},
+		),
+		newMCPTool(
+			"document.detail",
+			"读取指定文档的索引诊断、摘要、原文和分块预览",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "知识库 ID"},
+				{Name: "documentId", Type: "string", Required: true, Description: "文档 ID"},
+				{Name: "focusChunkId", Type: "string", Required: false, Description: "需要额外返回的分块 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "detail", Type: "object", Description: "文档元数据、诊断指标、原文、摘要和分块预览"},
+			},
+		),
+		newMCPTool(
+			"document.summarize",
+			"读取指定文档的摘要、索引诊断和前 5 个分块预览",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "知识库 ID"},
+				{Name: "documentId", Type: "string", Required: true, Description: "文档 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "document", Type: "object", Description: "文档元数据"},
+				{Name: "diagnostics", Type: "object", Description: "文档索引诊断"},
+				{Name: "summary", Type: "string", Description: "文档摘要"},
+				{Name: "chunks", Type: "array<object>", Description: "最多 5 个分块预览"},
+			},
+		),
+		newMCPTool(
+			"structured_data.query",
+			"对 CSV/XLSX 文档执行预览、筛选、计数、极值、平均值或分组统计",
+			[]model.MCPToolParameter{
+				{Name: "query", Type: "string", Required: true, Description: "结构化数据问题"},
+				{Name: "knowledgeBaseId", Type: "string", Required: false, Description: "知识库 ID；与 documentId 至少提供一个"},
+				{Name: "documentId", Type: "string", Required: false, Description: "文档 ID；与 knowledgeBaseId 至少提供一个"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "content", Type: "string", Description: "确定性查询结果"},
+				{Name: "sources", Type: "array<object>", Description: "结构化数据来源"},
+				{Name: "matched", Type: "boolean", Description: "是否匹配结构化查询能力"},
+			},
+		),
+		newMCPTool(
+			"knowledge_base.health",
+			"读取指定知识库的索引健康评分、指标、建议和逐文档诊断",
+			[]model.MCPToolParameter{
+				{Name: "knowledgeBaseId", Type: "string", Required: true, Description: "知识库 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "health", Type: "object", Description: "知识库健康状态、评分、指标、建议和逐文档诊断"},
+			},
+		),
+		newMCPTool(
+			"conversation.list",
+			"列出已保存的会话",
+			[]model.MCPToolParameter{},
+			[]model.MCPToolResponse{
+				{Name: "items", Type: "array<object>", Description: "会话列表"},
+			},
+		),
+		newMCPTool(
+			"conversation.get",
+			"按会话 ID 读取完整会话内容",
+			[]model.MCPToolParameter{
+				{Name: "conversationId", Type: "string", Required: true, Description: "会话 ID"},
+			},
+			[]model.MCPToolResponse{
+				{Name: "conversation", Type: "object", Description: "完整会话及消息列表"},
+			},
+		),
 	}
 }
 
@@ -495,6 +573,48 @@ func (s *MCPService) CallTool(name string, arguments map[string]any) (map[string
 			return nil, err
 		}
 		return buildMCPToolResult("knowledge_base.list", result)
+	case "document.list":
+		result, err := s.CallDocumentList(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("document.list", result)
+	case "document.detail":
+		result, err := s.CallDocumentDetail(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("document.detail", result)
+	case "document.summarize":
+		result, err := s.CallDocumentSummarize(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("document.summarize", result)
+	case "structured_data.query":
+		result, err := s.CallStructuredDataQuery(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("structured_data.query", result)
+	case "knowledge_base.health":
+		result, err := s.CallKnowledgeBaseHealth(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("knowledge_base.health", result)
+	case "conversation.list":
+		result, err := s.CallConversationList(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("conversation.list", result)
+	case "conversation.get":
+		result, err := s.CallConversationGet(arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult("conversation.get", result)
 	default:
 		return nil, fmt.Errorf("tool not found")
 	}
@@ -604,6 +724,152 @@ func (s *MCPService) CallKnowledgeBaseList(arguments map[string]any) (map[string
 		})
 	}
 	return map[string]any{"items": items}, nil
+}
+
+// CallDocumentList 返回指定知识库下的文档元数据，不暴露服务端文件路径。
+func (s *MCPService) CallDocumentList(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPKnowledgeBaseReadArguments](arguments)
+	if err != nil || strings.TrimSpace(args.KnowledgeBaseID) == "" {
+		return nil, fmt.Errorf("invalid params")
+	}
+	documents, err := s.appService.GetKnowledgeBaseDocuments(strings.TrimSpace(args.KnowledgeBaseID))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(documents))
+	for _, document := range documents {
+		items = append(items, map[string]any{
+			"id":              document.ID,
+			"knowledgeBaseId": document.KnowledgeBaseID,
+			"name":            document.Name,
+			"size":            document.Size,
+			"sizeLabel":       document.SizeLabel,
+			"uploadedAt":      document.UploadedAt,
+			"status":          document.Status,
+			"chunkCount":      document.ChunkCount,
+			"indexedAt":       document.IndexedAt,
+			"contentPreview":  document.ContentPreview,
+		})
+	}
+	return map[string]any{
+		"knowledgeBaseId": strings.TrimSpace(args.KnowledgeBaseID),
+		"items":           items,
+	}, nil
+}
+
+// CallDocumentDetail 返回指定文档的完整诊断和受限长度预览。
+func (s *MCPService) CallDocumentDetail(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPDocumentReadArguments](arguments)
+	if err != nil || strings.TrimSpace(args.KnowledgeBaseID) == "" || strings.TrimSpace(args.DocumentID) == "" {
+		return nil, fmt.Errorf("invalid params")
+	}
+	detail, err := s.appService.GetDocumentDetail(
+		strings.TrimSpace(args.KnowledgeBaseID),
+		strings.TrimSpace(args.DocumentID),
+		strings.TrimSpace(args.FocusChunkID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"detail": detail}, nil
+}
+
+// CallDocumentSummarize 返回文档摘要、诊断和少量分块，便于 Agent 快速理解内容。
+func (s *MCPService) CallDocumentSummarize(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPDocumentReadArguments](arguments)
+	if err != nil || strings.TrimSpace(args.KnowledgeBaseID) == "" || strings.TrimSpace(args.DocumentID) == "" {
+		return nil, fmt.Errorf("invalid params")
+	}
+	detail, err := s.appService.GetDocumentDetail(
+		strings.TrimSpace(args.KnowledgeBaseID),
+		strings.TrimSpace(args.DocumentID),
+		"",
+	)
+	if err != nil {
+		return nil, err
+	}
+	chunks := detail.Chunks
+	if len(chunks) > 5 {
+		chunks = chunks[:5]
+	}
+	return map[string]any{
+		"knowledgeBaseId": detail.KnowledgeBaseID,
+		"document":        detail.Document,
+		"diagnostics":     detail.Diagnostics,
+		"summary":         detail.Summary,
+		"chunks":          chunks,
+	}, nil
+}
+
+// CallStructuredDataQuery 对明确的 CSV/XLSX 问题执行本地确定性查询。
+func (s *MCPService) CallStructuredDataQuery(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPStructuredDataQueryArguments](arguments)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params")
+	}
+	query := strings.TrimSpace(args.Query)
+	knowledgeBaseID := strings.TrimSpace(args.KnowledgeBaseID)
+	documentID := strings.TrimSpace(args.DocumentID)
+	if query == "" || (knowledgeBaseID == "" && documentID == "") {
+		return nil, fmt.Errorf("invalid params")
+	}
+	content, sources, matched, err := s.appService.TryBuildStructuredDataAnswer(model.ChatCompletionRequest{
+		KnowledgeBaseID: knowledgeBaseID,
+		DocumentID:      documentID,
+		Messages: []model.ChatMessage{{
+			Role:    "user",
+			Content: query,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"content":         content,
+		"sources":         sources,
+		"matched":         matched,
+		"query":           query,
+		"knowledgeBaseId": knowledgeBaseID,
+		"documentId":      documentID,
+	}, nil
+}
+
+// CallKnowledgeBaseHealth 返回知识库健康评分、指标、建议和逐文档诊断。
+func (s *MCPService) CallKnowledgeBaseHealth(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPKnowledgeBaseReadArguments](arguments)
+	if err != nil || strings.TrimSpace(args.KnowledgeBaseID) == "" {
+		return nil, fmt.Errorf("invalid params")
+	}
+	health, err := s.appService.GetKnowledgeBaseHealth(strings.TrimSpace(args.KnowledgeBaseID))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"health": health}, nil
+}
+
+// CallConversationList 返回已保存会话的轻量列表。
+func (s *MCPService) CallConversationList(arguments map[string]any) (map[string]any, error) {
+	items, err := s.appService.ListConversations()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"items": items}, nil
+}
+
+// CallConversationGet 按会话 ID 返回完整会话和消息。
+func (s *MCPService) CallConversationGet(arguments map[string]any) (map[string]any, error) {
+	args, err := decodeMCPArguments[model.MCPConversationGetArguments](arguments)
+	if err != nil || strings.TrimSpace(args.ConversationID) == "" {
+		return nil, fmt.Errorf("invalid params")
+	}
+	conversation, err := s.appService.GetConversation(strings.TrimSpace(args.ConversationID))
+	if err != nil {
+		return nil, err
+	}
+	if conversation == nil {
+		return nil, fmt.Errorf("conversation not found")
+	}
+	return map[string]any{"conversation": conversation}, nil
 }
 
 // CallDocumentUpload 执行 document.upload 工具，客户端可通过多次调用实现目录上传。
@@ -952,6 +1218,38 @@ func summarizeMCPToolResult(toolName string, structuredContent map[string]any) (
 				names = append(names, fmt.Sprintf("%s（%s）", name, knowledgeBaseID))
 			}
 			return fmt.Sprintf("共 %d 个知识库：%s", len(items), strings.Join(names, "、")), nil
+		}
+	case "document.list":
+		if items, ok := structuredContent["items"].([]map[string]any); ok {
+			return fmt.Sprintf("知识库中共有 %d 份文档", len(items)), nil
+		}
+	case "document.detail":
+		if detail, ok := structuredContent["detail"].(model.DocumentDetailResponse); ok {
+			return fmt.Sprintf("文档 %s 共有 %d 个分块", detail.Document.Name, detail.Diagnostics.ChunkCount), nil
+		}
+	case "document.summarize":
+		if document, ok := structuredContent["document"].(model.Document); ok {
+			return fmt.Sprintf("已生成文档 %s 的摘要和索引诊断", document.Name), nil
+		}
+	case "structured_data.query":
+		matched, _ := structuredContent["matched"].(bool)
+		if !matched {
+			return "当前问题未匹配结构化数据查询能力", nil
+		}
+		if content, ok := structuredContent["content"].(string); ok && strings.TrimSpace(content) != "" {
+			return content, nil
+		}
+	case "knowledge_base.health":
+		if health, ok := structuredContent["health"].(model.KnowledgeBaseHealthResponse); ok {
+			return fmt.Sprintf("知识库 %s 健康分为 %d，状态为 %s", health.Name, health.Score, health.Status), nil
+		}
+	case "conversation.list":
+		if items, ok := structuredContent["items"].([]model.ConversationListItem); ok {
+			return fmt.Sprintf("共有 %d 个已保存会话", len(items)), nil
+		}
+	case "conversation.get":
+		if conversation, ok := structuredContent["conversation"].(*model.Conversation); ok {
+			return fmt.Sprintf("会话 %s 共有 %d 条消息", conversation.Title, len(conversation.Messages)), nil
 		}
 	case "document.upload":
 		if uploaded, ok := structuredContent["uploaded"].(model.Document); ok {

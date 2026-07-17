@@ -23,7 +23,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `ai-localbase.sh`：Bash 版本
 - `ai-localbase.ps1`：Windows / PowerShell 版本
 
-两者都使用同一套子命令：`init`、`tools`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用 `knowledgeBaseId`。其中 `init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
+两者都使用同一套子命令：`init`、`tools`、`call`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用 `knowledgeBaseId`。其中 `call` 可按工具名和 arguments JSON 调用 `tools/list` 发现的任意 MCP 工具；`init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
 
 ## 使用场景
 
@@ -59,6 +59,26 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `parameters`：参数列表，包含 `name`、`type`、`required`、`description`
 - `inputSchema`：MCP 兼容 JSON Schema
 - `response`：执行成功后 `structuredContent` 中的关键响应字段
+
+`call` 子命令用于调用 `tools` 发现的任意工具，不需要为每个新工具继续修改 Skill 脚本。第二个参数必须是 JSON 对象，对应 MCP `arguments`：
+
+```bash
+./ai-localbase.sh call document.list '{"knowledgeBaseId":"kb-1"}'
+./ai-localbase.sh call document.detail '{"knowledgeBaseId":"kb-1","documentId":"doc-1"}'
+./ai-localbase.sh call document.summarize '{"knowledgeBaseId":"kb-1","documentId":"doc-1"}'
+./ai-localbase.sh call structured_data.query '{"documentId":"doc-1","query":"这个表格有多少条记录"}'
+./ai-localbase.sh call knowledge_base.health '{"knowledgeBaseId":"kb-1"}'
+./ai-localbase.sh call conversation.list '{}'
+./ai-localbase.sh call conversation.get '{"conversationId":"conv-1"}'
+```
+
+PowerShell 使用相同参数结构：
+
+```powershell
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" call "document.detail" '{"knowledgeBaseId":"kb-1","documentId":"doc-1"}'
+```
+
+MCP 客户端通常在连接时缓存工具清单；服务端新增工具后，若第一方 `mcp__ai_localbase__*` 工具尚未出现，重新连接 MCP 或开启新会话。`call` 子命令直接调用服务端，不依赖客户端工具命名空间刷新。
 
 `list` 子命令调用普通 HTTP 工具 `knowledge_base.list`，用于检索已有知识库。返回结构在 `structuredContent.items[]` 中，每项包含：
 
@@ -137,6 +157,7 @@ cp .env.example .env
 
 # 初始化前可显式查看工具能力和已有知识库
 "${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" tools
+"${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" call "document.list" '{"knowledgeBaseId":"kb-1"}'
 "${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" list
 
 # 初始化目录到知识库的映射，`/www/agents` 会映射为知识库名 `agents`
@@ -168,6 +189,7 @@ cp .env.example .env
 ```powershell
 # 初始化目录到知识库的映射，`C:\work\agents` 会映射为知识库名 `agents`
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" tools
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" call "document.list" '{"knowledgeBaseId":"kb-1"}'
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" list
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" init "C:\work\project"
 

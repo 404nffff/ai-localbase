@@ -193,6 +193,22 @@ func (h *AppHandler) DeleteKnowledgeBase(c *gin.Context) {
 	})
 }
 
+// GetKnowledgeBaseHealth 查询知识库索引健康度。
+// @Summary 查询知识库索引健康度
+// @Param id path string true "知识库 ID"
+// @Success 200 {object} model.KnowledgeBaseHealthResponse
+// @Failure 404 {object} map[string]string
+// @Router /api/knowledge-bases/{id}/health [get]
+func (h *AppHandler) GetKnowledgeBaseHealth(c *gin.Context) {
+	health, err := h.appService.GetKnowledgeBaseHealth(c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, health)
+}
+
 func (h *AppHandler) ListDocuments(c *gin.Context) {
 	items, err := h.appService.GetKnowledgeBaseDocuments(c.Param("id"))
 	if err != nil {
@@ -310,10 +326,69 @@ func (h *AppHandler) DeleteDocument(c *gin.Context) {
 	})
 }
 
+// GetDocumentDetail 查询文档原文预览、分块与索引诊断。
+// @Summary 查询文档详情与索引诊断
+// @Param id path string true "知识库 ID"
+// @Param documentId path string true "文档 ID"
+// @Param focusChunkId query string false "需要额外返回的分块 ID"
+// @Success 200 {object} model.DocumentDetailResponse
+// @Failure 404 {object} map[string]string
+// @Router /api/knowledge-bases/{id}/documents/{documentId} [get]
+func (h *AppHandler) GetDocumentDetail(c *gin.Context) {
+	detail, err := h.appService.GetDocumentDetail(c.Param("id"), c.Param("documentId"), c.Query("focusChunkId"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, detail)
+}
+
+// ReindexDocument 使用现有源文件重建单个文档索引。
+// @Summary 重建单个文档索引
+// @Param id path string true "知识库 ID"
+// @Param documentId path string true "文档 ID"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Router /api/knowledge-bases/{id}/documents/{documentId}/reindex [post]
+func (h *AppHandler) ReindexDocument(c *gin.Context) {
+	document, err := h.appService.ReindexDocument(c.Param("id"), c.Param("documentId"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":         "document reindexed",
+		"knowledgeBaseId": c.Param("id"),
+		"document":        document,
+	})
+}
+
 func (h *AppHandler) ChatCompletions(c *gin.Context) {
 	var req model.ChatCompletionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "invalid chat request body")
+		return
+	}
+
+	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	} else if ok {
+		metadata := structuredDataResponseMetadata(req, sources)
+		response := buildStructuredDataChatResponse(req, content, metadata)
+		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              req.ConversationID,
+			Title:           "",
+			KnowledgeBaseID: req.KnowledgeBaseID,
+			DocumentID:      req.DocumentID,
+			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
+		}); saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, response)
 		return
 	}
 
@@ -357,6 +432,38 @@ func (h *AppHandler) ChatCompletionsStream(c *gin.Context) {
 	var req model.ChatCompletionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "invalid chat request body")
+		return
+	}
+
+	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	} else if ok {
+		metadata := structuredDataResponseMetadata(req, sources)
+		flusher, supported := c.Writer.(http.Flusher)
+		if !supported {
+			writeError(c, http.StatusInternalServerError, "streaming is not supported")
+			return
+		}
+		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
+			ID:              req.ConversationID,
+			Title:           "",
+			KnowledgeBaseID: req.KnowledgeBaseID,
+			DocumentID:      req.DocumentID,
+			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
+		}); saveErr != nil {
+			writeError(c, http.StatusInternalServerError, saveErr.Error())
+			return
+		}
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Status(http.StatusOK)
+		c.SSEvent("meta", metadata)
+		c.SSEvent("chunk", gin.H{"content": content})
+		c.SSEvent("done", gin.H{"content": content, "metadata": metadata})
+		flusher.Flush()
 		return
 	}
 
@@ -785,6 +892,39 @@ func firstAssistantChoice(response model.ChatCompletionResponse) *model.ChatMess
 		}
 	}
 	return nil
+}
+
+// structuredDataResponseMetadata 标记回答来自本地结构化查询，并保留当前范围和来源。
+func structuredDataResponseMetadata(req model.ChatCompletionRequest, sources []map[string]string) map[string]any {
+	return map[string]any{
+		"fallbackStrategy": "structured-data-query",
+		"sources":          sources,
+		"knowledgeBaseId":  req.KnowledgeBaseID,
+		"documentId":       req.DocumentID,
+	}
+}
+
+// buildStructuredDataChatResponse 构造与 LLM 接口兼容的本地确定性响应。
+func buildStructuredDataChatResponse(req model.ChatCompletionRequest, content string, metadata map[string]any) model.ChatCompletionResponse {
+	now := time.Now().UTC()
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		modelName = "structured-data-local"
+	}
+	return model.ChatCompletionResponse{
+		ID:      fmt.Sprintf("chatcmpl-structured-%d", now.UnixNano()),
+		Object:  "chat.completion",
+		Created: now.Unix(),
+		Model:   modelName,
+		Choices: []model.ChatCompletionChoice{{
+			Index: 0,
+			Message: model.ChatMessage{
+				Role:    "assistant",
+				Content: content,
+			},
+		}},
+		Metadata: metadata,
+	}
 }
 
 func writeError(c *gin.Context, statusCode int, message string) {

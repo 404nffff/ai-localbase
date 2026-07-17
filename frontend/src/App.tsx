@@ -32,10 +32,14 @@ export interface Conversation {
 export interface DocumentItem {
   id: string
   name: string
+  size: number
   sizeLabel: string
   uploadedAt: string
-  status: 'indexed' | 'ready' | 'processing'
+  status: 'indexed' | 'ready' | 'processing' | 'failed'
   contentPreview?: string
+  chunkCount?: number
+  indexedAt?: string
+  indexError?: string
 }
 
 export interface KnowledgeBase {
@@ -44,6 +48,73 @@ export interface KnowledgeBase {
   description: string
   documents: DocumentItem[]
   createdAt: string
+}
+
+export interface DocumentChunkPreview {
+  id: string
+  index: number
+  kind: string
+  text: string
+}
+
+export interface DocumentIndexDiagnostics {
+  rawContentChars: number
+  chunkCount: number
+  vectorCount: number
+  summaryChunkCount: number
+  structuredRowCount: number
+  rawContentAvailable: boolean
+  qdrantEnabled: boolean
+  rawContentTruncated: boolean
+  chunkPreviewTruncated: boolean
+}
+
+export interface DocumentDetailResponse {
+  knowledgeBaseId: string
+  document: DocumentItem
+  diagnostics: DocumentIndexDiagnostics
+  rawContent: string
+  summary: string
+  chunks: DocumentChunkPreview[]
+}
+
+export interface KnowledgeBaseDocumentHealth {
+  documentId: string
+  documentName: string
+  status: string
+  indexedAt?: string
+  indexError?: string
+  chunkCount: number
+  vectorCount: number
+  summaryChunkCount: number
+  structuredRowCount: number
+  rawContentChars: number
+  rawContentAvailable: boolean
+  needsReindex: boolean
+  recommendation?: string
+}
+
+export interface KnowledgeBaseHealthResponse {
+  knowledgeBaseId: string
+  name: string
+  status: string
+  score: number
+  metrics: {
+    documentCount: number
+    indexedCount: number
+    processingCount: number
+    failedCount: number
+    emptyContentCount: number
+    chunkCount: number
+    vectorCount: number
+    summaryChunkCount: number
+    structuredRowCount: number
+    rawContentChars: number
+    qdrantEnabled: boolean
+    lastIndexedAt?: string
+  }
+  recommendations: string[]
+  documents: KnowledgeBaseDocumentHealth[]
 }
 
 export interface ChatConfig {
@@ -133,10 +204,14 @@ const createId = () =>
 interface BackendDocumentItem {
   id: string
   name: string
+  size?: number
   sizeLabel: string
   uploadedAt: string
-  status: 'indexed' | 'ready' | 'processing'
+  status: 'indexed' | 'ready' | 'processing' | 'failed'
   contentPreview?: string
+  chunkCount?: number
+  indexedAt?: string
+  indexError?: string
 }
 
 interface BackendKnowledgeBase {
@@ -310,10 +385,14 @@ const getFileExtension = (fileName: string) => {
 const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
   id: document.id,
   name: document.name,
+  size: document.size ?? 0,
   sizeLabel: document.sizeLabel,
   uploadedAt: document.uploadedAt,
   status: document.status,
   contentPreview: document.contentPreview,
+  chunkCount: document.chunkCount,
+  indexedAt: document.indexedAt,
+  indexError: document.indexError,
 })
 
 const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): KnowledgeBase => ({
@@ -664,6 +743,7 @@ function App() {
     const savedConfig = (await response.json()) as ConfigResponse
     setConfig(savedConfig)
     setBackendReady(true)
+    return savedConfig
   }
 
   const lockAppForAccessToken = (message: string) => {
@@ -1597,6 +1677,61 @@ function App() {
     }
   }
 
+  // 诊断接口继续复用统一 apiFetch，确保沿用当前访问令牌与 401 处理链路。
+  const handleFetchKnowledgeBaseHealth = async (knowledgeBaseId: string) => {
+    const response = await apiFetch(
+      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/health`,
+    )
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response))
+    }
+    return (await response.json()) as KnowledgeBaseHealthResponse
+  }
+
+  const handleFetchDocumentDetail = async (
+    knowledgeBaseId: string,
+    documentId: string,
+  ): Promise<DocumentDetailResponse> => {
+    const response = await apiFetch(
+      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}`,
+    )
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response))
+    }
+
+    const detail = (await response.json()) as Omit<DocumentDetailResponse, 'document'> & {
+      document: BackendDocumentItem
+    }
+    return {
+      ...detail,
+      document: normalizeDocument(detail.document),
+    }
+  }
+
+  const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
+    const response = await apiFetch(
+      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}/reindex`,
+      { method: 'POST' },
+    )
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response))
+    }
+
+    const result = (await response.json()) as { document: BackendDocumentItem }
+    const document = normalizeDocument(result.document)
+    setKnowledgeBases((current) => current.map((knowledgeBase) => (
+      knowledgeBase.id === knowledgeBaseId
+        ? {
+            ...knowledgeBase,
+            documents: knowledgeBase.documents.map((item) => (
+              item.id === documentId ? document : item
+            )),
+          }
+        : knowledgeBase
+    )))
+    return document
+  }
+
   const handleSendMessage = async (content: string) => {
     if (!activeConversation) {
       return
@@ -2005,23 +2140,20 @@ function App() {
     }
   }
 
-  const handleSaveChatConfig = async (nextChatConfig: ChatConfig) => {
-    const normalizedChatConfig: ChatConfig = {
-      ...nextChatConfig,
-      contextMessageLimit: Math.max(1, Math.min(100, Number(nextChatConfig.contextMessageLimit) || 1)),
+  // 设置面板按完整配置一次保存，避免两个分区分别 PUT 时后写覆盖前写。
+  const handleSaveConfig = async (nextConfig: AppConfig) => {
+    const normalizedConfig: AppConfig = {
+      ...nextConfig,
+      chat: {
+        ...nextConfig.chat,
+        contextMessageLimit: Math.max(
+          1,
+          Math.min(100, Number(nextConfig.chat.contextMessageLimit) || 1),
+        ),
+      },
     }
 
-    await persistConfigToBackend({
-      ...config,
-      chat: normalizedChatConfig,
-    })
-  }
-
-  const handleSaveEmbeddingConfig = async (nextEmbeddingConfig: EmbeddingConfig) => {
-    await persistConfigToBackend({
-      ...config,
-      embedding: nextEmbeddingConfig,
-    })
+    return persistConfigToBackend(normalizedConfig)
   }
 
   const handleToggleSettings = () => {
@@ -2093,6 +2225,9 @@ function App() {
         onCancelDirectoryUpload={handleCancelDirectoryUpload}
         onContinueDirectoryUpload={handleContinueDirectoryUpload}
         onRemoveDocument={handleRemoveDocument}
+        onFetchKnowledgeBaseHealth={handleFetchKnowledgeBaseHealth}
+        onFetchDocumentDetail={handleFetchDocumentDetail}
+        onReindexDocument={handleReindexDocument}
         conversations={conversations}
         activeConversationId={activeConversation?.id ?? null}
         onSelectConversation={handleSelectConversation}
@@ -2104,8 +2239,7 @@ function App() {
         isKnowledgePanelOpen={isKnowledgePanelOpen}
         onToggleSettings={handleToggleSettings}
         onToggleKnowledgePanel={handleToggleKnowledgePanel}
-        onSaveChatConfig={handleSaveChatConfig}
-        onSaveEmbeddingConfig={handleSaveEmbeddingConfig}
+        onSaveConfig={handleSaveConfig}
         operationLogs={operationLogs}
         operationLogFilters={operationLogFilters}
         isOperationLogLoading={isOperationLogLoading}
@@ -2125,6 +2259,11 @@ function App() {
         generatingConversationTitle={generatingConversationTitle}
         enforceSingleFlight={isOllamaSingleFlightMode}
         onSelectKnowledgeBase={handleSelectChatKnowledgeBase}
+        onSelectDocument={(documentId) => {
+          if (selectedKnowledgeBase) {
+            handleSelectDocument(selectedKnowledgeBase.id, documentId)
+          }
+        }}
         onSendMessage={handleSendMessage}
         onClearConversation={handleClearConversation}
       />

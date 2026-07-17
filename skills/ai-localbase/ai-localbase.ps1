@@ -17,6 +17,7 @@ function Show-Usage {
 用法:
   ./ai-localbase.ps1 init [目录]
   ./ai-localbase.ps1 tools
+  ./ai-localbase.ps1 call [工具名] [arguments JSON]
   ./ai-localbase.ps1 list
   ./ai-localbase.ps1 upload [文件名] [内容] [目录]
   ./ai-localbase.ps1 append [documentId] [内容] [目录]
@@ -28,6 +29,7 @@ function Show-Usage {
 说明:
   - init: 初始化当前目录对应的知识库映射并输出摘要 JSON
   - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
+  - call: 通过工具名和 arguments JSON 调用任意已发现 MCP 工具
   - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
   - upload: 上传文本内容到知识库
   - append: 向已有文档追加文本内容
@@ -320,6 +322,41 @@ function Invoke-Tools {
   Invoke-ToolsList | ConvertTo-Json -Depth 12
 }
 
+function Invoke-Call {
+  param(
+    [string]$ToolName,
+    [string]$ArgumentsJson
+  )
+
+  if ([string]::IsNullOrWhiteSpace($ToolName)) {
+    throw "错误: call 需要 [工具名] [arguments JSON]"
+  }
+  if ($ToolName -notmatch '^[A-Za-z0-9._-]+$') {
+    throw "错误: 工具名只能包含字母、数字、点、下划线和连字符"
+  }
+  if ([string]::IsNullOrWhiteSpace($ArgumentsJson)) {
+    $ArgumentsJson = "{}"
+  }
+
+  try {
+    $parsedArguments = $ArgumentsJson | ConvertFrom-Json
+  } catch {
+    throw "错误: arguments JSON 无效: $($_.Exception.Message)"
+  }
+  if ($null -eq $parsedArguments -or $parsedArguments -is [System.Array] -or $parsedArguments -is [System.ValueType] -or $parsedArguments -is [string]) {
+    throw "错误: arguments JSON 必须是对象"
+  }
+
+  $argumentsMap = @{}
+  foreach ($property in $parsedArguments.PSObject.Properties) {
+    $argumentsMap[$property.Name] = $property.Value
+  }
+
+  Ensure-Requirements
+  Load-EnvFile
+  Invoke-AiLocalBaseTool -ToolName $ToolName -ArgumentsMap $argumentsMap | ConvertTo-Json -Depth 12
+}
+
 function Invoke-List {
   Ensure-Requirements
   Load-EnvFile
@@ -462,6 +499,12 @@ switch ($Action) {
   }
   "tools" {
     Invoke-Tools
+    break
+  }
+  "call" {
+    $toolName = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $argumentsJson = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "{}" }
+    Invoke-Call $toolName $argumentsJson
     break
   }
   "list" {

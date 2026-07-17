@@ -3,8 +3,11 @@ import {
   AppConfig,
   Conversation,
   DirectoryUploadTask,
+  DocumentDetailResponse,
+  DocumentItem,
   KnowledgeBase,
   KnowledgeBaseFileUploadState,
+  KnowledgeBaseHealthResponse,
   OperationLogFilters,
   OperationLogListResponse,
 } from '../App'
@@ -32,6 +35,12 @@ interface SidebarProps {
   onCancelDirectoryUpload: () => void
   onContinueDirectoryUpload: () => void
   onRemoveDocument: (knowledgeBaseId: string, documentId: string) => void
+  onFetchKnowledgeBaseHealth: (knowledgeBaseId: string) => Promise<KnowledgeBaseHealthResponse>
+  onFetchDocumentDetail: (
+    knowledgeBaseId: string,
+    documentId: string,
+  ) => Promise<DocumentDetailResponse>
+  onReindexDocument: (knowledgeBaseId: string, documentId: string) => Promise<DocumentItem>
   conversations: Conversation[]
   activeConversationId: string | null
   onSelectConversation: (conversationId: string) => void
@@ -43,8 +52,7 @@ interface SidebarProps {
   isKnowledgePanelOpen: boolean
   onToggleSettings: () => void
   onToggleKnowledgePanel: () => void
-  onSaveChatConfig: (value: AppConfig['chat']) => Promise<void>
-  onSaveEmbeddingConfig: (value: AppConfig['embedding']) => Promise<void>
+  onSaveConfig: (value: AppConfig) => Promise<AppConfig>
   operationLogs: OperationLogListResponse
   operationLogFilters: OperationLogFilters
   isOperationLogLoading: boolean
@@ -81,6 +89,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onCancelDirectoryUpload,
   onContinueDirectoryUpload,
   onRemoveDocument,
+  onFetchKnowledgeBaseHealth,
+  onFetchDocumentDetail,
+  onReindexDocument,
   conversations,
   activeConversationId,
   onSelectConversation,
@@ -92,8 +103,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isKnowledgePanelOpen,
   onToggleSettings,
   onToggleKnowledgePanel,
-  onSaveChatConfig,
-  onSaveEmbeddingConfig,
+  onSaveConfig,
   operationLogs,
   operationLogFilters,
   isOperationLogLoading,
@@ -311,8 +321,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <SettingsPanel
           config={config}
           onClose={onToggleSettings}
-          onSaveChatConfig={onSaveChatConfig}
-          onSaveEmbeddingConfig={onSaveEmbeddingConfig}
+          onSaveConfig={onSaveConfig}
         />
       )}
 
@@ -337,6 +346,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         onCancelDirectoryUpload={onCancelDirectoryUpload}
         onContinueDirectoryUpload={onContinueDirectoryUpload}
         onRemoveDocument={onRemoveDocument}
+        onFetchKnowledgeBaseHealth={onFetchKnowledgeBaseHealth}
+        onFetchDocumentDetail={onFetchDocumentDetail}
+        onReindexDocument={onReindexDocument}
         operationLogs={operationLogs}
         operationLogFilters={operationLogFilters}
         isOperationLogLoading={isOperationLogLoading}

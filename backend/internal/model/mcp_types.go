@@ -126,6 +126,30 @@ type MCPDocumentDeleteArguments struct {
 	DocumentID      string `json:"documentId"`
 }
 
+// MCPKnowledgeBaseReadArguments 描述按知识库读取只读信息的工具参数。
+type MCPKnowledgeBaseReadArguments struct {
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+}
+
+// MCPDocumentReadArguments 描述文档详情和摘要工具的输入参数。
+type MCPDocumentReadArguments struct {
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	DocumentID      string `json:"documentId"`
+	FocusChunkID    string `json:"focusChunkId,omitempty"`
+}
+
+// MCPStructuredDataQueryArguments 描述结构化数据确定性查询工具的输入参数。
+type MCPStructuredDataQueryArguments struct {
+	Query           string `json:"query"`
+	KnowledgeBaseID string `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string `json:"documentId,omitempty"`
+}
+
+// MCPConversationGetArguments 描述按会话 ID 读取完整会话的输入参数。
+type MCPConversationGetArguments struct {
+	ConversationID string `json:"conversationId"`
+}
+
 // MCPResourceReadParams 描述 resources/read 的输入参数。
 type MCPResourceReadParams struct {
 	URI string `json:"uri"`

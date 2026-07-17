@@ -861,6 +861,9 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
+		document.ChunkCount = 0
+		document.IndexedAt = util.NowRFC3339()
+		document.IndexError = ""
 		indexSucceeded = true
 		added := s.AddDocument(document.KnowledgeBaseID, document)
 		s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
@@ -888,6 +891,9 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
+	document.ChunkCount = len(chunks)
+	document.IndexedAt = util.NowRFC3339()
+	document.IndexError = ""
 	indexSucceeded = true
 	added := s.AddDocument(document.KnowledgeBaseID, document)
 	s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
@@ -1260,6 +1266,9 @@ func (s *AppService) reindexExistingDocument(document model.Document, content st
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
+		document.ChunkCount = 0
+		document.IndexedAt = util.NowRFC3339()
+		document.IndexError = ""
 		return s.ReplaceDocument(document.KnowledgeBaseID, document)
 	}
 
@@ -1273,6 +1282,9 @@ func (s *AppService) reindexExistingDocument(document model.Document, content st
 
 	document.Status = "indexed"
 	document.ContentPreview = previewFromChunks(chunks)
+	document.ChunkCount = len(chunks)
+	document.IndexedAt = util.NowRFC3339()
+	document.IndexError = ""
 	return s.ReplaceDocument(document.KnowledgeBaseID, document)
 }
 
@@ -1502,8 +1514,9 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 			return fmt.Errorf("embedding dimension mismatch for chunk %s: expected %d, got %d", chunk.ID, vectorSize, len(vectors[index]))
 		}
 		points = append(points, QdrantPoint{
-			ID:     qdrantPointID(chunk.ID),
-			Vector: vectors[index],
+			ID:           qdrantPointID(chunk.ID),
+			Vector:       vectors[index],
+			SparseVector: BuildSparseVector(chunk.Text),
 			Payload: map[string]any{
 				"knowledge_base_id": chunk.KnowledgeBaseID,
 				"document_id":       chunk.DocumentID,

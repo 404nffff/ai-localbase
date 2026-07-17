@@ -28,9 +28,10 @@ type QdrantService struct {
 }
 
 type QdrantPoint struct {
-	ID      any            `json:"id"`
-	Vector  []float64      `json:"vector"`
-	Payload map[string]any `json:"payload"`
+	ID           any            `json:"id"`
+	Vector       any            `json:"vector"`
+	SparseVector SparseVector   `json:"-"`
+	Payload      map[string]any `json:"payload"`
 }
 
 type QdrantSearchResult struct {
@@ -53,14 +54,16 @@ type HybridSearchParams struct {
 }
 
 type qdrantCollectionRequest struct {
-	Vectors qdrantVectorConfig `json:"vectors"`
+	Vectors       any                                 `json:"vectors"`
+	SparseVectors map[string]qdrantSparseVectorConfig `json:"sparse_vectors,omitempty"`
 }
 
 type qdrantCollectionInfoResponse struct {
 	Result struct {
 		Config struct {
 			Params struct {
-				Vectors qdrantVectorConfig `json:"vectors"`
+				Vectors       json.RawMessage            `json:"vectors"`
+				SparseVectors map[string]json.RawMessage `json:"sparse_vectors"`
 			} `json:"params"`
 		} `json:"config"`
 	} `json:"result"`
@@ -79,6 +82,21 @@ type qdrantVectorConfig struct {
 	Distance string `json:"distance"`
 }
 
+type qdrantSparseVectorConfig struct{}
+
+type qdrantCollectionMode string
+
+const (
+	qdrantCollectionLegacyUnnamed qdrantCollectionMode = "legacy_unnamed"
+	qdrantCollectionNamed         qdrantCollectionMode = "named"
+)
+
+type qdrantCollectionSchema struct {
+	Mode      qdrantCollectionMode
+	Dense     qdrantVectorConfig
+	HasSparse bool
+}
+
 type qdrantPointUpsertRequest struct {
 	Points []QdrantPoint `json:"points"`
 }
@@ -88,7 +106,15 @@ type qdrantPointDeleteRequest struct {
 }
 
 type qdrantSearchRequest struct {
-	Vector      []float64      `json:"vector"`
+	Vector      any            `json:"vector"`
+	Limit       int            `json:"limit"`
+	Filter      map[string]any `json:"filter,omitempty"`
+	WithPayload bool           `json:"with_payload"`
+}
+
+type qdrantQueryRequest struct {
+	Query       any            `json:"query"`
+	Using       string         `json:"using,omitempty"`
 	Limit       int            `json:"limit"`
 	Filter      map[string]any `json:"filter,omitempty"`
 	WithPayload bool           `json:"with_payload"`
@@ -100,6 +126,43 @@ type qdrantSearchResponse struct {
 		Score   float64        `json:"score"`
 		Payload map[string]any `json:"payload"`
 	} `json:"result"`
+}
+
+// Qdrant 的 search 与 query 响应分别返回数组和 points 包装，统一解码供上层复用。
+func (r *qdrantSearchResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Result) == 0 || string(raw.Result) == "null" {
+		r.Result = nil
+		return nil
+	}
+
+	var points []struct {
+		ID      any            `json:"id"`
+		Score   float64        `json:"score"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(raw.Result, &points); err == nil {
+		r.Result = points
+		return nil
+	}
+
+	var queryResult struct {
+		Points []struct {
+			ID      any            `json:"id"`
+			Score   float64        `json:"score"`
+			Payload map[string]any `json:"payload"`
+		} `json:"points"`
+	}
+	if err := json.Unmarshal(raw.Result, &queryResult); err != nil {
+		return err
+	}
+	r.Result = queryResult.Points
+	return nil
 }
 
 func NewQdrantService(cfg model.ServerConfig) *QdrantService {
@@ -169,53 +232,81 @@ func (s *QdrantService) EnsureCollection(ctx context.Context, knowledgeBaseID st
 	}
 
 	collectionName := s.CollectionName(knowledgeBaseID)
-	if existing, err := s.getCollectionVectorConfig(ctx, collectionName); err == nil {
-		return s.validateCollectionVectorConfig(collectionName, existing)
+	if existing, err := s.getCollectionSchema(ctx, collectionName); err == nil {
+		return s.validateCollectionSchema(collectionName, existing)
 	} else if !isQdrantNotFound(err) {
 		return err
 	}
 
 	body := qdrantCollectionRequest{
-		Vectors: qdrantVectorConfig{
-			Size:     s.vectorSize,
-			Distance: s.distance,
+		Vectors: map[string]qdrantVectorConfig{
+			qdrantDenseVectorName: {
+				Size:     s.vectorSize,
+				Distance: s.distance,
+			},
+		},
+		SparseVectors: map[string]qdrantSparseVectorConfig{
+			qdrantSparseVectorName: {},
 		},
 	}
 
 	_, err := s.doJSON(ctx, http.MethodPut, "/collections/"+url.PathEscape(collectionName), body)
 	if err != nil && isQdrantConflict(err) {
-		existing, getErr := s.getCollectionVectorConfig(ctx, collectionName)
+		existing, getErr := s.getCollectionSchema(ctx, collectionName)
 		if getErr != nil {
 			return getErr
 		}
-		return s.validateCollectionVectorConfig(collectionName, existing)
+		return s.validateCollectionSchema(collectionName, existing)
 	}
 	return err
 }
 
-func (s *QdrantService) getCollectionVectorConfig(ctx context.Context, collectionName string) (qdrantVectorConfig, error) {
+// getCollectionSchema 识别历史 unnamed dense 与 named dense/sparse，禁止通过删除集合解决差异。
+func (s *QdrantService) getCollectionSchema(ctx context.Context, collectionName string) (qdrantCollectionSchema, error) {
 	responseBody, err := s.doJSON(ctx, http.MethodGet, "/collections/"+url.PathEscape(collectionName), nil)
 	if err != nil {
-		return qdrantVectorConfig{}, err
+		return qdrantCollectionSchema{}, err
 	}
 
 	var response qdrantCollectionInfoResponse
 	if err := json.Unmarshal(responseBody, &response); err != nil {
-		return qdrantVectorConfig{}, fmt.Errorf("decode qdrant collection info: %w", err)
+		return qdrantCollectionSchema{}, fmt.Errorf("decode qdrant collection info: %w", err)
 	}
-	return response.Result.Config.Params.Vectors, nil
+
+	var legacy qdrantVectorConfig
+	if err := json.Unmarshal(response.Result.Config.Params.Vectors, &legacy); err == nil && legacy.Size > 0 {
+		return qdrantCollectionSchema{
+			Mode:  qdrantCollectionLegacyUnnamed,
+			Dense: legacy,
+		}, nil
+	}
+
+	var named map[string]qdrantVectorConfig
+	if err := json.Unmarshal(response.Result.Config.Params.Vectors, &named); err != nil {
+		return qdrantCollectionSchema{}, fmt.Errorf("decode qdrant vector schema: %w", err)
+	}
+	dense, ok := named[qdrantDenseVectorName]
+	if !ok {
+		return qdrantCollectionSchema{}, fmt.Errorf("qdrant named collection %s is missing dense vector", collectionName)
+	}
+	_, hasSparse := response.Result.Config.Params.SparseVectors[qdrantSparseVectorName]
+	return qdrantCollectionSchema{
+		Mode:      qdrantCollectionNamed,
+		Dense:     dense,
+		HasSparse: hasSparse,
+	}, nil
 }
 
-func (s *QdrantService) validateCollectionVectorConfig(collectionName string, existing qdrantVectorConfig) error {
+func (s *QdrantService) validateCollectionSchema(collectionName string, existing qdrantCollectionSchema) error {
 	expectedDistance := normalizeQdrantDistance(s.distance)
-	actualDistance := normalizeQdrantDistance(existing.Distance)
-	if existing.Size != s.vectorSize || actualDistance != expectedDistance {
+	actualDistance := normalizeQdrantDistance(existing.Dense.Distance)
+	if existing.Dense.Size != s.vectorSize || actualDistance != expectedDistance {
 		return fmt.Errorf(
 			"qdrant collection schema mismatch for %s: expected vector size %d distance %s, got size %d distance %s",
 			collectionName,
 			s.vectorSize,
 			expectedDistance,
-			existing.Size,
+			existing.Dense.Size,
 			actualDistance,
 		)
 	}
@@ -277,22 +368,84 @@ func (s *QdrantService) DeleteCollectionByName(ctx context.Context, collectionNa
 	return err
 }
 
-const qdrantUpsertBatchSize = 100
+const (
+	qdrantUpsertBatchSize          = 100
+	qdrantDenseVectorName          = "dense"
+	qdrantSparseVectorName         = "sparse"
+	qdrantPayloadRetrievalChannels = "_retrieval_channels"
+	qdrantPayloadDenseRank         = "_dense_rank"
+	qdrantPayloadSparseRank        = "_sparse_rank"
+)
 
 func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string, points []QdrantPoint) error {
 	if !s.IsEnabled() || len(points) == 0 {
 		return nil
 	}
 
-	collPath := "/collections/" + url.PathEscape(s.CollectionName(knowledgeBaseID)) + "/points"
+	collectionName := s.CollectionName(knowledgeBaseID)
+	schema, err := s.getCollectionSchema(ctx, collectionName)
+	if err != nil {
+		return fmt.Errorf("read qdrant collection schema: %w", err)
+	}
+	if err := s.validateCollectionSchema(collectionName, schema); err != nil {
+		return err
+	}
+
+	collPath := "/collections/" + url.PathEscape(collectionName) + "/points"
 	for i := 0; i < len(points); i += qdrantUpsertBatchSize {
 		end := i + qdrantUpsertBatchSize
 		if end > len(points) {
 			end = len(points)
 		}
-		batch := points[i:end]
+		batch, err := prepareQdrantPoints(points[i:end], schema)
+		if err != nil {
+			return fmt.Errorf("prepare upsert batch [%d:%d]: %w", i, end, err)
+		}
 		if _, err := s.doJSONWithClient(ctx, s.writeHTTPClient, http.MethodPut, collPath, qdrantPointUpsertRequest{Points: batch}); err != nil {
 			return fmt.Errorf("upsert batch [%d:%d]: %w", i, end, err)
+		}
+	}
+	return nil
+}
+
+// prepareQdrantPoints 根据真实集合模式生成 wire payload，避免先失败再猜测 legacy。
+func prepareQdrantPoints(points []QdrantPoint, schema qdrantCollectionSchema) ([]QdrantPoint, error) {
+	prepared := make([]QdrantPoint, 0, len(points))
+	for _, point := range points {
+		dense := extractDenseVector(point.Vector)
+		if len(dense) == 0 {
+			return nil, fmt.Errorf("point %v is missing dense vector", point.ID)
+		}
+
+		next := point
+		if schema.Mode == qdrantCollectionLegacyUnnamed {
+			next.Vector = dense
+		} else {
+			next.Vector = qdrantPointVectors(dense, point.SparseVector, schema.HasSparse)
+		}
+		prepared = append(prepared, next)
+	}
+	return prepared, nil
+}
+
+func qdrantPointVectors(dense []float64, sparse SparseVector, includeSparse bool) map[string]any {
+	vectors := map[string]any{qdrantDenseVectorName: dense}
+	if includeSparse && len(sparse.Indices) > 0 && len(sparse.Values) > 0 {
+		vectors[qdrantSparseVectorName] = map[string]any{
+			"indices": sparse.Indices,
+			"values":  sparse.Values,
+		}
+	}
+	return vectors
+}
+
+func extractDenseVector(vector any) []float64 {
+	switch typed := vector.(type) {
+	case []float64:
+		return typed
+	case map[string]any:
+		if dense, ok := typed[qdrantDenseVectorName].([]float64); ok {
+			return dense
 		}
 	}
 	return nil
@@ -329,13 +482,45 @@ func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vect
 		limit = 5
 	}
 
-	body := qdrantSearchRequest{
+	results, err := s.queryWithBody(ctx, knowledgeBaseID, qdrantQueryRequest{
+		Query:       vector,
+		Using:       qdrantDenseVectorName,
+		Limit:       limit,
+		Filter:      filter,
+		WithPayload: true,
+	})
+	if err == nil {
+		return results, nil
+	}
+	if !isQdrantCompatibilityError(err) {
+		return nil, err
+	}
+
+	return s.searchWithBody(ctx, knowledgeBaseID, qdrantSearchRequest{
 		Vector:      vector,
 		Limit:       limit,
 		Filter:      filter,
 		WithPayload: true,
-	}
+	})
+}
 
+func (s *QdrantService) querySparse(ctx context.Context, knowledgeBaseID string, vector SparseVector, limit int, filter map[string]any) ([]QdrantSearchResult, error) {
+	if len(vector.Indices) == 0 || len(vector.Values) == 0 {
+		return nil, nil
+	}
+	return s.queryWithBody(ctx, knowledgeBaseID, qdrantQueryRequest{
+		Query: map[string]any{
+			"indices": vector.Indices,
+			"values":  vector.Values,
+		},
+		Using:       qdrantSparseVectorName,
+		Limit:       limit,
+		Filter:      filter,
+		WithPayload: true,
+	})
+}
+
+func (s *QdrantService) searchWithBody(ctx context.Context, knowledgeBaseID string, body qdrantSearchRequest) ([]QdrantSearchResult, error) {
 	var responseBody []byte
 	err := retryWithBackoff(ctx, 3, 200*time.Millisecond, func() error {
 		var err error
@@ -345,12 +530,27 @@ func (s *QdrantService) Search(ctx context.Context, knowledgeBaseID string, vect
 	if err != nil {
 		return nil, err
 	}
+	return decodeQdrantSearchResults(responseBody)
+}
 
+func (s *QdrantService) queryWithBody(ctx context.Context, knowledgeBaseID string, body qdrantQueryRequest) ([]QdrantSearchResult, error) {
+	var responseBody []byte
+	err := retryWithBackoff(ctx, 3, 200*time.Millisecond, func() error {
+		var err error
+		responseBody, err = s.doJSON(ctx, http.MethodPost, "/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID))+"/points/query", body)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeQdrantSearchResults(responseBody)
+}
+
+func decodeQdrantSearchResults(responseBody []byte) ([]QdrantSearchResult, error) {
 	var response qdrantSearchResponse
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, fmt.Errorf("decode qdrant search response: %w", err)
 	}
-
 	results := make([]QdrantSearchResult, 0, len(response.Result))
 	for _, item := range response.Result {
 		results = append(results, QdrantSearchResult{
@@ -383,6 +583,10 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 	}
 
 	denseVector := float32ToFloat64(params.DenseVector)
+	searchLimit := minInt(topK*2, 64)
+	if searchLimit < topK {
+		searchLimit = topK
+	}
 
 	var denseResults []SearchResult
 	var sparseResults []SearchResult
@@ -393,7 +597,7 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		results, err := s.Search(ctx, params.CollectionName, denseVector, topK, filter)
+		results, err := s.Search(ctx, params.CollectionName, denseVector, searchLimit, filter)
 		if err != nil {
 			denseErr = err
 			return
@@ -401,28 +605,28 @@ func (s *QdrantService) SearchHybrid(ctx context.Context, params HybridSearchPar
 		denseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		fallbackVector := sparseFallbackVector(params.SparseVector, len(denseVector))
-		if len(fallbackVector) == 0 {
-			return
-		}
-		// TODO: 升级 Qdrant SDK 后替换为真实 sparse vector search
-		results, err := s.Search(ctx, params.CollectionName, fallbackVector, topK, filter)
-		if err != nil {
-			sparseErr = err
-			return
-		}
-		sparseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
-	}()
+	if len(params.SparseVector.Indices) > 0 && len(params.SparseVector.Values) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results, err := s.querySparse(ctx, params.CollectionName, params.SparseVector, searchLimit, filter)
+			if err != nil {
+				sparseErr = err
+				return
+			}
+			sparseResults = applyScoreThreshold(results, float64(params.ScoreThreshold))
+		}()
+	}
 
 	wg.Wait()
 	if denseErr != nil {
 		return nil, denseErr
 	}
 	if sparseErr != nil {
-		return nil, sparseErr
+		return denseResults, nil
+	}
+	if len(sparseResults) == 0 {
+		return denseResults, nil
 	}
 
 	return rrfFusion(denseResults, sparseResults, topK), nil
@@ -437,25 +641,37 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 
 	scores := make(map[string]float64)
 	payloads := make(map[string]map[string]any)
-	addResults := func(results []SearchResult) {
+	denseRanks := make(map[string]int)
+	sparseRanks := make(map[string]int)
+	channels := make(map[string]map[string]struct{})
+	addResults := func(results []SearchResult, channel string, ranks map[string]int) {
 		for idx, item := range results {
 			rank := float64(idx + 1)
 			scores[item.ID] += 1.0 / (k + rank)
+			ranks[item.ID] = idx + 1
+			if _, ok := channels[item.ID]; !ok {
+				channels[item.ID] = make(map[string]struct{})
+			}
+			channels[item.ID][channel] = struct{}{}
 			if _, ok := payloads[item.ID]; !ok {
-				payloads[item.ID] = item.Payload
+				payloads[item.ID] = clonePayload(item.Payload)
 			}
 		}
 	}
 
-	addResults(denseResults)
-	addResults(sparseResults)
+	addResults(denseResults, qdrantDenseVectorName, denseRanks)
+	addResults(sparseResults, qdrantSparseVectorName, sparseRanks)
 
 	merged := make([]SearchResult, 0, len(scores))
 	for id, score := range scores {
+		payload := payloads[id]
+		payload[qdrantPayloadRetrievalChannels] = sortedChannelList(channels[id])
+		payload[qdrantPayloadDenseRank] = denseRanks[id]
+		payload[qdrantPayloadSparseRank] = sparseRanks[id]
 		merged = append(merged, SearchResult{
 			ID:      id,
 			Score:   score,
-			Payload: payloads[id],
+			Payload: payload,
 		})
 	}
 
@@ -470,6 +686,23 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 		return merged[:topK]
 	}
 	return merged
+}
+
+func clonePayload(payload map[string]any) map[string]any {
+	cloned := make(map[string]any, len(payload)+3)
+	for key, value := range payload {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func sortedChannelList(channels map[string]struct{}) []string {
+	result := make([]string, 0, len(channels))
+	for channel := range channels {
+		result = append(result, channel)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func applyScoreThreshold(results []SearchResult, threshold float64) []SearchResult {
@@ -494,22 +727,6 @@ func float32ToFloat64(input []float32) []float64 {
 		output[i] = float64(value)
 	}
 	return output
-}
-
-func sparseFallbackVector(vector SparseVector, vectorSize int) []float64 {
-	if vectorSize <= 0 || len(vector.Indices) == 0 || len(vector.Values) == 0 {
-		return nil
-	}
-	fallback := make([]float64, vectorSize)
-	for i, idx := range vector.Indices {
-		if i >= len(vector.Values) {
-			break
-		}
-		pos := int(idx % uint32(vectorSize))
-		fallback[pos] += float64(vector.Values[i])
-	}
-	normalizeVector(fallback)
-	return fallback
 }
 
 func (s *QdrantService) doJSON(ctx context.Context, method, requestPath string, payload any) ([]byte, error) {
@@ -593,6 +810,16 @@ func isQdrantNotFound(err error) bool {
 func isQdrantConflict(err error) bool {
 	requestErr, ok := err.(*qdrantRequestError)
 	return ok && requestErr.StatusCode == http.StatusConflict
+}
+
+func isQdrantCompatibilityError(err error) bool {
+	requestErr, ok := err.(*qdrantRequestError)
+	if !ok {
+		return false
+	}
+	return requestErr.StatusCode == http.StatusBadRequest ||
+		requestErr.StatusCode == http.StatusNotFound ||
+		requestErr.StatusCode == http.StatusUnprocessableEntity
 }
 
 type qdrantRequestError struct {

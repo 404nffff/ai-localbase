@@ -10,6 +10,7 @@ usage() {
 用法:
   ./ai-localbase.sh init [目录]
   ./ai-localbase.sh tools
+  ./ai-localbase.sh call [工具名] [arguments JSON]
   ./ai-localbase.sh list
   ./ai-localbase.sh upload [文件名] [内容] [目录]
   ./ai-localbase.sh append [documentId] [内容] [目录]
@@ -21,6 +22,7 @@ usage() {
 说明:
   - init: 初始化当前目录对应的知识库映射并输出摘要 JSON
   - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
+  - call: 通过工具名和 arguments JSON 调用任意已发现 MCP 工具
   - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
   - upload: 上传文本内容到知识库
   - append: 向已有文档追加文本内容
@@ -383,6 +385,50 @@ cmd_tools() {
   post_tools_list
 }
 
+cmd_call() {
+  local tool_name="${1:-}"
+  local arguments_json="${2-}"
+  local body
+
+  if [ -z "$tool_name" ]; then
+    echo "错误: call 需要 [工具名] [arguments JSON]"
+    usage
+    exit 1
+  fi
+  if ! [[ "$tool_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "错误: 工具名只能包含字母、数字、点、下划线和连字符"
+    exit 1
+  fi
+  if [ -z "$arguments_json" ]; then
+    arguments_json='{}'
+  fi
+
+  ensure_requirements
+  if ! body="$(ARGUMENTS_JSON="$arguments_json" python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    arguments = json.loads(os.environ["ARGUMENTS_JSON"])
+except Exception as exc:
+    print(f"错误: arguments JSON 无效: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(arguments, dict):
+    print("错误: arguments JSON 必须是对象", file=sys.stderr)
+    sys.exit(1)
+
+print(json.dumps({"arguments": arguments}, ensure_ascii=False, separators=(",", ":")))
+PY
+)"; then
+    exit 1
+  fi
+
+  load_env
+  post_tool_call "$tool_name" "$body"
+}
+
 cmd_list() {
   ensure_requirements
   load_env
@@ -520,6 +566,9 @@ main() {
       ;;
     tools)
       cmd_tools
+      ;;
+    call)
+      cmd_call "${1:-}" "${2-}"
       ;;
     list)
       cmd_list
