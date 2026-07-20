@@ -1,0 +1,8 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+ollama_storage
+.env
+.env.*
+!.env.example
