@@ -4580,6 +4580,11 @@ body,
   min-width: 0;
 }
 
+/* 知识库列表仅允许纵向滚动，避免长路径触发底部横向滚动条。 */
+.knowledge-workspace-page .kb-side-list {
+  overflow-x: hidden;
+}
+
 .knowledge-workspace-page .kb-doc-item {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
