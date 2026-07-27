@@ -115,12 +115,14 @@ func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversati
 	if err != nil {
 		return result, fmt.Errorf("llm rewrite query: %w", err)
 	}
+	if err := ChatResponseDegradationError(resp); err != nil {
+		return result, fmt.Errorf("llm rewrite query: %w", err)
+	}
 	if len(resp.Choices) == 0 {
 		return result, fmt.Errorf("llm rewrite empty response")
 	}
 
 	lines := parseQueryRewriteLines(resp.Choices[0].Message.Content)
-	lines = append(lines, trimmedQuery)
 	unique := make([]string, 0, len(lines))
 	seen := make(map[string]struct{}, len(lines))
 	for _, item := range lines {
@@ -134,6 +136,9 @@ func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversati
 		}
 		seen[key] = struct{}{}
 		unique = append(unique, clean)
+		if len(unique) >= maxVariants {
+			break
+		}
 	}
 
 	result.RewrittenQueries = unique

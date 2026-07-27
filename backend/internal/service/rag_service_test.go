@@ -602,8 +602,8 @@ func TestLLMQueryRewriterParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rewrite query: %v", err)
 	}
-	if len(result.RewrittenQueries) != 4 {
-		t.Fatalf("expected 4 queries, got %d", len(result.RewrittenQueries))
+	if len(result.RewrittenQueries) != 3 {
+		t.Fatalf("expected at most 3 rewritten queries, got %d", len(result.RewrittenQueries))
 	}
 	assertContains := func(target string) {
 		for _, item := range result.RewrittenQueries {
@@ -616,5 +616,37 @@ func TestLLMQueryRewriterParsing(t *testing.T) {
 	assertContains("查询一")
 	assertContains("查询二")
 	assertContains("查询三")
-	assertContains("示例问题")
+	for _, item := range result.RewrittenQueries {
+		if item == "示例问题" {
+			t.Fatal("expected original query to be merged by the retrieval caller, not the rewriter")
+		}
+	}
+}
+
+func TestLLMQueryRewriterRejectsDegradedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(openAIChatResponse{
+			Error: &openAICompatibleErrorPayload{Message: "rewrite unavailable"},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	llm := &LLMService{client: server.Client()}
+	rewriter := NewLLMQueryRewriter(llm, 3)
+	rewriter.SetChatConfigProvider(func() model.ChatModelConfig {
+		return model.ChatModelConfig{
+			Provider: "openai",
+			BaseURL:  server.URL,
+			Model:    "test-model",
+		}
+	})
+
+	result, err := rewriter.Rewrite(t.Context(), "示例问题", nil)
+	if err == nil {
+		t.Fatal("expected degraded model response to fail query rewrite")
+	}
+	if len(result.RewrittenQueries) != 0 {
+		t.Fatalf("expected no rewritten queries, got %v", result.RewrittenQueries)
+	}
 }

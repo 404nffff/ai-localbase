@@ -46,6 +46,7 @@ const (
 	retrievalDebugContextLimit    = 3000
 	retrievalDebugChunkTextLimit  = 1600
 	mcpImportJobContentLimit      = 256 * 1024
+	maxMultiQuerySearchQueries    = 8
 	mcpJobCancelWarning           = "任务取消是 best-effort；如果底层导入已进入注册或索引阶段，文档可能已经完成导入。"
 )
 
@@ -131,6 +132,9 @@ func (c *LLMContextCompressor) Compress(ctx context.Context, query string, chunk
 	}
 	resp, err := c.llmSvc.Chat(request)
 	if err != nil {
+		return "", err
+	}
+	if err := ChatResponseDegradationError(resp); err != nil {
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
@@ -1828,6 +1832,13 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 		"remaining_chunks": len(chunks),
 	})
 
+	continuationStartedAt := time.Now()
+	chunks = s.expandEvidenceSectionContinuations(req, query, chunks)
+	logRetrievalStageMetrics(req, query, "context_expand_section_continuations", continuationStartedAt, map[string]any{
+		"status":           "ok",
+		"remaining_chunks": len(chunks),
+	})
+
 	dedupStartedAt := time.Now()
 	chunks = deduplicateRetrievedChunks(chunks)
 	logRetrievalStageMetrics(req, query, "context_deduplicate", dedupStartedAt, map[string]any{
@@ -1838,7 +1849,7 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	maxContextChars := s.retrievalMaxContextChars()
 	trimStartedAt := time.Now()
 	if maxContextChars > 0 {
-		chunks = trimRetrievedChunksToContextLimit(chunks, maxContextChars)
+		chunks = trimRetrievedChunksToContextLimit(chunks, maxContextChars, query)
 	}
 	logRetrievalStageMetrics(req, query, "context_trim", trimStartedAt, map[string]any{
 		"status":            "ok",
@@ -2116,7 +2127,10 @@ func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query
 
 		if err == nil && len(rewriteResult.RewrittenQueries) > 0 {
 			queryVariants = rewriteResult.RewrittenQueries
-			queries := mergeRetrievalQueries([]string{query}, rewriteResult.RewrittenQueries, buildRuleBasedRetrievalQueries(query))
+			queries := limitRetrievalQueries(
+				mergeRetrievalQueries([]string{query}, rewriteResult.RewrittenQueries, buildRuleBasedRetrievalQueries(query)),
+				maxMultiQuerySearchQueries,
+			)
 			embeddingConfig := s.resolveEmbeddingConfig(req)
 
 			searchStart := time.Now()
@@ -2410,7 +2424,7 @@ func (s *AppService) ServerConfig() model.ServerConfig {
 	return s.serverConfig
 }
 
-func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, []map[string]string, error) {
+func (s *AppService) BuildChatContext(req model.ChatCompletionRequest, relevantDocumentIDs []string) (string, []map[string]string, error) {
 	s.state.Mu.RLock()
 	defer s.state.Mu.RUnlock()
 
@@ -2436,16 +2450,36 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, 
 			return "", nil, fmt.Errorf("knowledge base not found")
 		}
 
-		sources := make([]map[string]string, 0, len(kb.Documents))
-		for _, document := range kb.Documents {
-			sources = append(sources, map[string]string{
-				"knowledgeBaseId": kb.ID,
-				"documentId":      document.ID,
-				"documentName":    document.Name,
-			})
+		relevantIDs := make(map[string]struct{}, len(relevantDocumentIDs))
+		for _, documentID := range relevantDocumentIDs {
+			if documentID = strings.TrimSpace(documentID); documentID != "" {
+				relevantIDs[documentID] = struct{}{}
+			}
 		}
 
-		return fmt.Sprintf("当前问答范围为知识库“%s”，其中包含 %d 份文档。", kb.Name, len(kb.Documents)), sources, nil
+		summaryLines := []string{fmt.Sprintf("当前问答范围为知识库“%s”，其中包含 %d 份文档。", kb.Name, len(kb.Documents))}
+		previewDocuments := make([]model.Document, 0, minInt(len(relevantIDs), 3))
+		for _, document := range kb.Documents {
+			if _, ok := relevantIDs[document.ID]; !ok {
+				continue
+			}
+			previewDocuments = append(previewDocuments, document)
+			if len(previewDocuments) >= 3 {
+				break
+			}
+		}
+		if len(previewDocuments) > 0 {
+			summaryLines = append(summaryLines, "文档概览：")
+			for _, document := range previewDocuments {
+				preview := truncateRunes(strings.TrimSpace(document.ContentPreview), 120)
+				if preview == "" {
+					preview = "暂无内容预览"
+				}
+				summaryLines = append(summaryLines, fmt.Sprintf("- %s：%s", document.Name, preview))
+			}
+		}
+
+		return strings.Join(summaryLines, "\n"), nil, nil
 	}
 
 	if len(s.state.KnowledgeBases) == 0 {
@@ -2936,18 +2970,22 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			setter.SetMaxVariants(s.queryRewriteMaxVariantsForRequest(req))
 		}
 		history := recentConversationHistory(req.Messages, 3)
+		rewriteStartedAt := time.Now()
 		rewriteResult, err := s.queryRewriter.Rewrite(ctx, query, history)
 		if err != nil {
-			logRetrievalStageMetrics(req, query, "query_rewrite", time.Now(), map[string]any{
+			logRetrievalStageMetrics(req, query, "query_rewrite", rewriteStartedAt, map[string]any{
 				"status": "error",
 				"error":  err.Error(),
 			})
 		} else {
-			logRetrievalStageMetrics(req, query, "query_rewrite", time.Now(), map[string]any{
+			logRetrievalStageMetrics(req, query, "query_rewrite", rewriteStartedAt, map[string]any{
 				"status":  "ok",
 				"queries": len(rewriteResult.RewrittenQueries),
 			})
-			queries := mergeRetrievalQueries([]string{query}, rewriteResult.RewrittenQueries, buildRuleBasedRetrievalQueries(query))
+			queries := limitRetrievalQueries(
+				mergeRetrievalQueries([]string{query}, rewriteResult.RewrittenQueries, buildRuleBasedRetrievalQueries(query)),
+				maxMultiQuerySearchQueries,
+			)
 			embeddingConfig := s.resolveEmbeddingConfig(req)
 
 			candidates := make([]RetrievedChunk, 0)
@@ -3120,10 +3158,17 @@ func recentConversationHistory(messages []model.ChatMessage, maxItems int) []str
 	if maxItems <= 0 {
 		return nil
 	}
+	latestUserIndex := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
+			latestUserIndex = i
+			break
+		}
+	}
 	collected := make([]string, 0, maxItems)
-	for i := len(messages) - 1; i >= 0 && len(collected) < maxItems; i-- {
+	for i := latestUserIndex - 1; i >= 0 && len(collected) < maxItems; i-- {
 		content := strings.TrimSpace(messages[i].Content)
-		if content == "" {
+		if content == "" || IsDegradedFallbackContent(content) {
 			continue
 		}
 		collected = append(collected, content)
@@ -3561,6 +3606,91 @@ func (s *AppService) expandStructuredSourceRows(req model.ChatCompletionRequest,
 	return insertStructuredSourceRowChunks(chunks, rowChunksByDocument)
 }
 
+func (s *AppService) expandEvidenceSectionContinuations(req model.ChatCompletionRequest, query string, chunks []RetrievedChunk) []RetrievedChunk {
+	if s == nil || s.rag == nil || s.state == nil || len(chunks) == 0 {
+		return chunks
+	}
+	if !isMultiIntentQuery(query) && !isListDetailQuery(query) {
+		return chunks
+	}
+
+	continuationLimit := 1
+	if isListDetailQuery(query) {
+		continuationLimit = 2
+	}
+	result := make([]RetrievedChunk, 0, len(chunks)+continuationLimit)
+	for _, chunk := range chunks {
+		result = append(result, chunk)
+		if !containsEvidenceSectionHeading(chunk.Text) {
+			continue
+		}
+
+		document, ok := s.resolveEvidenceSourceDocument(req, chunk)
+		if !ok {
+			continue
+		}
+		text, err := util.ExtractDocumentText(document.Path)
+		if err != nil || strings.TrimSpace(text) == "" {
+			continue
+		}
+
+		sourceChunks := s.rag.BuildDocumentChunks(document, text)
+		for offset := 1; offset <= continuationLimit; offset++ {
+			for _, candidate := range sourceChunks {
+				if candidate.Index != chunk.Index+offset {
+					continue
+				}
+				continuation := RetrievedChunk{
+					DocumentChunk: candidate,
+					Score:         chunk.Score,
+					RawScore:      chunk.RawScore,
+					RetrievalChannels: append(
+						append([]string(nil), chunk.RetrievalChannels...),
+						"section-continuation",
+					),
+				}
+				if !containsRetrievedChunk(result, continuation) {
+					result = append(result, continuation)
+				}
+				break
+			}
+		}
+	}
+	return result
+}
+
+func (s *AppService) resolveEvidenceSourceDocument(req model.ChatCompletionRequest, chunk RetrievedChunk) (model.Document, bool) {
+	wantedKnowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	if wantedKnowledgeBaseID == "" {
+		wantedKnowledgeBaseID = strings.TrimSpace(chunk.KnowledgeBaseID)
+	}
+	wantedDocumentID := strings.TrimSpace(chunk.DocumentID)
+	if wantedDocumentID == "" {
+		return model.Document{}, false
+	}
+
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+	for knowledgeBaseID, knowledgeBase := range s.state.KnowledgeBases {
+		if wantedKnowledgeBaseID != "" && knowledgeBaseID != wantedKnowledgeBaseID {
+			continue
+		}
+		for _, document := range knowledgeBase.Documents {
+			if document.ID != wantedDocumentID || strings.TrimSpace(document.Path) == "" {
+				continue
+			}
+			return document, true
+		}
+	}
+	return model.Document{}, false
+}
+
+func isListDetailQuery(query string) bool {
+	return containsAnyText(strings.TrimSpace(query), []string{
+		"全部", "所有", "完整", "有哪些", "名单", "清单", "列出", "逐项", "分别", "多少个", "几个",
+	})
+}
+
 func shouldExpandStructuredSourceRows(req model.ChatCompletionRequest, query string, chunks []RetrievedChunk) bool {
 	if strings.TrimSpace(req.DocumentID) != "" && isStructuredDataDetailQuery(query) {
 		return true
@@ -3842,7 +3972,7 @@ func chunksTotalChars(chunks []RetrievedChunk) int {
 	}
 	count := 0
 	for _, chunk := range chunks {
-		count += len(chunk.Text)
+		count += len([]rune(chunk.Text))
 	}
 	return count
 }
@@ -3989,36 +4119,71 @@ func (s *AppService) rerankStrategyForRequest(req model.ChatCompletionRequest) s
 	return strategy
 }
 
-func trimRetrievedChunksToContextLimit(chunks []RetrievedChunk, maxChars int) []RetrievedChunk {
+func trimRetrievedChunksToContextLimit(chunks []RetrievedChunk, maxChars int, query string) []RetrievedChunk {
 	if len(chunks) == 0 || maxChars <= 0 {
 		return chunks
 	}
 
-	trimmed := make([]RetrievedChunk, 0, len(chunks))
-	total := 0
-	for _, chunk := range chunks {
+	chunkLimit := 3
+	if isListDetailQuery(query) {
+		chunkLimit = 4
+	}
+	chunkLimit = minInt(len(chunks), chunkLimit)
+	trimmed := make([]RetrievedChunk, 0, chunkLimit)
+	remaining := maxChars
+	for index, chunk := range chunks[:chunkLimit] {
 		text := strings.TrimSpace(chunk.Text)
 		if text == "" {
 			continue
 		}
-		remaining := maxChars - total
-		if remaining <= 0 {
+		remainingChunks := chunkLimit - index
+		if remaining <= 0 || remainingChunks <= 0 {
 			break
 		}
 
+		budget := remaining / remainingChunks
 		next := chunk
-		if len(text) > remaining {
-			next.Text = text[:remaining]
-			trimmed = append(trimmed, next)
-			break
-		}
-
-		next.Text = text
+		next.Text = relevantChunkExcerpt(query, text, budget)
 		trimmed = append(trimmed, next)
-		total += len(next.Text)
+		remaining -= len([]rune(next.Text))
 	}
 
 	return trimmed
+}
+
+func relevantChunkExcerpt(query, text string, limit int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if limit <= 0 || len(runes) <= limit {
+		return string(runes)
+	}
+
+	terms := queryEvidenceTerms(query)
+	sort.SliceStable(terms, func(i, j int) bool {
+		return len([]rune(terms[i])) > len([]rune(terms[j]))
+	})
+	lowered := strings.ToLower(string(runes))
+	matchRuneIndex := -1
+	for _, term := range terms {
+		byteIndex := strings.Index(lowered, strings.ToLower(term))
+		if byteIndex < 0 {
+			continue
+		}
+		matchRuneIndex = len([]rune(lowered[:byteIndex]))
+		break
+	}
+
+	start := 0
+	if matchRuneIndex > 0 {
+		start = matchRuneIndex - limit/4
+		if start < 0 {
+			start = 0
+		}
+		if start+limit > len(runes) {
+			start = len(runes) - limit
+		}
+	}
+	end := minInt(start+limit, len(runes))
+	return string(runes[start:end])
 }
 
 func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.ChatCompletionRequest, queryVector []float64, candidateTopK int, useHybrid bool, query string) ([]RetrievedChunk, error) {
@@ -4740,6 +4905,7 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 	filtered := make([]RetrievedChunk, 0, len(chunks))
 	factFiltered := make([]RetrievedChunk, 0, len(chunks))
 	preferStructuredSummary := shouldPreferStructuredSummary(query)
+	multiIntent := isMultiIntentQuery(query)
 
 	for _, chunk := range chunks {
 		if preferStructuredSummary && (chunk.Kind == "structured_summary" || chunk.Kind == "structured_row") {
@@ -4756,6 +4922,8 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 
 		// 原有的严格过滤逻辑（仅用于非结构化查询）
 		switch {
+		case multiIntent && chunkMatchesAnyQueryIntent(query, chunk):
+			filtered = append(filtered, chunk)
 		case hits >= 2:
 			filtered = append(filtered, chunk)
 		case coverage >= 0.25:
@@ -4764,6 +4932,15 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 			filtered = append(filtered, chunk)
 		case rawScore >= 0.82 && queryEvidenceCoverage(query, []RetrievedChunk{chunk}) > 0:
 			filtered = append(filtered, chunk)
+		}
+	}
+
+	if multiIntent {
+		combined := deduplicateRetrievedChunks(append(factFiltered, filtered...))
+		combined = appendEvidenceContinuationChunks(chunks, combined)
+		if len(combined) > 0 {
+			sortMultiIntentEvidenceChunks(query, combined)
+			return combined
 		}
 	}
 
@@ -4779,6 +4956,176 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 		return filtered
 	}
 	return nil
+}
+
+func isMultiIntentQuery(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false
+	}
+	if len(splitQueryIntents(trimmed)) > 1 {
+		return true
+	}
+	for _, connector := range []string{"以及", "并且", "同时", "还有", "分别"} {
+		if strings.Contains(trimmed, connector) {
+			return true
+		}
+	}
+	return false
+}
+
+func chunkMatchesAnyQueryIntent(query string, chunk RetrievedChunk) bool {
+	text := strings.TrimSpace(chunk.Text)
+	if text == "" {
+		return false
+	}
+	for _, intent := range splitQueryIntents(query) {
+		terms := queryEvidenceTerms(intent)
+		if len(terms) == 0 {
+			continue
+		}
+		hits := evidenceHitCount(terms, text)
+		coverage := float64(hits) / float64(len(terms))
+		if hits >= 2 || coverage >= 0.25 || (hits >= 1 && chunkRawScore(chunk) >= 0.5) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitQueryIntents(query string) []string {
+	normalized := strings.TrimSpace(query)
+	for _, connector := range []string{"以及", "并且", "同时", "还有", "分别"} {
+		normalized = strings.ReplaceAll(normalized, connector, "，")
+	}
+	parts := strings.FieldsFunc(normalized, func(r rune) bool {
+		switch r {
+		case ',', '，', ';', '；', '?', '？', '!', '！', '。':
+			return true
+		default:
+			return false
+		}
+	})
+	intents := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len([]rune(part)) >= 2 {
+			intents = append(intents, part)
+		}
+	}
+	return intents
+}
+
+func appendEvidenceContinuationChunks(allChunks, selected []RetrievedChunk) []RetrievedChunk {
+	if len(allChunks) == 0 || len(selected) == 0 {
+		return selected
+	}
+	result := append([]RetrievedChunk(nil), selected...)
+	for _, candidate := range allChunks {
+		if containsRetrievedChunk(result, candidate) {
+			continue
+		}
+		for _, anchor := range selected {
+			if candidate.DocumentID != anchor.DocumentID || absInt(candidate.Index-anchor.Index) != 1 {
+				continue
+			}
+			if containsEvidenceSectionMarker(anchor.Text) || containsEvidenceSectionMarker(candidate.Text) {
+				result = append(result, candidate)
+				break
+			}
+		}
+	}
+	return deduplicateRetrievedChunks(result)
+}
+
+func containsRetrievedChunk(chunks []RetrievedChunk, target RetrievedChunk) bool {
+	for _, chunk := range chunks {
+		if chunk.ID != "" && chunk.ID == target.ID {
+			return true
+		}
+		if chunk.DocumentID == target.DocumentID && chunk.Index == target.Index {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEvidenceSectionMarker(text string) bool {
+	lowered := strings.ToLower(text)
+	for _, marker := range []string{"主要人物", "人物设定", "角色名单", "主要角色", "核心角色"} {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEvidenceSectionHeading(text string) bool {
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, marker := range []string{"主要人物", "人物设定", "角色名单", "主要角色", "核心角色"} {
+		searchFrom := 0
+		for searchFrom < len(normalized) {
+			relativeIndex := strings.Index(normalized[searchFrom:], marker)
+			if relativeIndex < 0 {
+				break
+			}
+			index := searchFrom + relativeIndex
+			if index == 0 || evidenceHeadingPrefix(normalized[:index]) {
+				return true
+			}
+			searchFrom = index + len(marker)
+		}
+	}
+	return false
+}
+
+func evidenceHeadingPrefix(prefix string) bool {
+	runes := []rune(strings.TrimSpace(prefix))
+	if len(runes) > 16 {
+		runes = runes[len(runes)-16:]
+	}
+	window := strings.TrimSpace(string(runes))
+	if strings.Contains(window, "#") {
+		return true
+	}
+	for _, ordinal := range []string{
+		"一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、",
+	} {
+		if strings.HasSuffix(window, ordinal) {
+			return true
+		}
+	}
+	matched, _ := regexp.MatchString(`[0-9]+[.、]$`, window)
+	return matched
+}
+
+func sortMultiIntentEvidenceChunks(query string, chunks []RetrievedChunk) {
+	sort.SliceStable(chunks, func(i, j int) bool {
+		leftScore := multiIntentEvidenceScore(query, chunks[i])
+		rightScore := multiIntentEvidenceScore(query, chunks[j])
+		if leftScore == rightScore {
+			return chunkRawScore(chunks[i]) > chunkRawScore(chunks[j])
+		}
+		return leftScore > rightScore
+	})
+}
+
+func multiIntentEvidenceScore(query string, chunk RetrievedChunk) int {
+	score := factEvidenceScore(query, chunk)
+	for _, intent := range splitQueryIntents(query) {
+		if chunkMatchesAnyQueryIntent(intent, chunk) {
+			score += 10
+		}
+	}
+	if containsEvidenceSectionMarker(chunk.Text) {
+		score += 4
+	}
+	if strings.Contains(query, "作品") || strings.Contains(query, "小说") {
+		if strings.Contains(chunk.Text, "作品大纲") || strings.Contains(chunk.Text, "作者备注") {
+			score += 4
+		}
+	}
+	return score
 }
 
 func sortFactEvidenceChunks(query string, chunks []RetrievedChunk) {
@@ -5205,7 +5552,7 @@ func factAttributeAliasGroups() [][]string {
 		{"负责人", "联系人", "校长", "法人", "法定代表人", "负责人姓名"},
 		{"时间", "日期", "年份", "年度"},
 		{"数量", "人数", "规模", "总数", "个数"},
-		{"职称", "职位", "岗位", "职务", "角色"},
+		{"职称", "职位", "岗位", "职务", "角色", "人物", "主要人物", "人物设定", "角色名单"},
 		{"名称", "姓名", "名字"},
 	}
 }
@@ -5291,6 +5638,20 @@ func mergeRetrievalQueries(groups ...[]string) []string {
 		}
 	}
 	return merged
+}
+
+func limitRetrievalQueries(queries []string, limit int) []string {
+	if limit <= 0 || len(queries) <= limit {
+		return queries
+	}
+	return append([]string(nil), queries[:limit]...)
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func continuousCJKSegments(text string) []string {

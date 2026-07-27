@@ -215,8 +215,8 @@ func (h *AppHandler) RegenerateMessage(c *gin.Context) {
 		Messages:        chatMessages,
 	}
 
-	if content, ok := buildIdentityAnswer(req); ok {
-		metadata := localResponseMetadata("identity-template")
+	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
+		metadata := localResponseMetadata(strategy)
 		response := buildLocalChatResponse(req, content, metadata)
 		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
 			ID:              conversationID,
@@ -595,8 +595,8 @@ func (h *AppHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	if content, ok := buildIdentityAnswer(req); ok {
-		metadata := localResponseMetadata("identity-template")
+	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
+		metadata := localResponseMetadata(strategy)
 		response := buildLocalChatResponse(req, content, metadata)
 		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
 			ID:              req.ConversationID,
@@ -683,8 +683,8 @@ func (h *AppHandler) ChatCompletionsStream(c *gin.Context) {
 		return
 	}
 
-	if content, ok := buildIdentityAnswer(req); ok {
-		metadata := localResponseMetadata("identity-template")
+	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
+		metadata := localResponseMetadata(strategy)
 		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
 			ID:              req.ConversationID,
 			Title:           "",
@@ -822,12 +822,13 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 	toolUseContext := ""
 	toolUseSources := []map[string]string(nil)
 	if h.toolPlanner != nil {
-		plannedCalls := h.toolPlanner.Plan(req)
+		plannedCalls := filterRedundantRetrievalToolPlans(h.toolPlanner.Plan(req), retrievalContext)
 		toolExecutions := h.toolPlanner.Execute(ctx, plannedCalls)
 		toolUseContext, toolUseSources = mcp.BuildToolUseContext(toolExecutions)
 	}
+	toolUseSources = append(retrievalToolUseSources(req, retrievalContext), toolUseSources...)
 
-	contextSummary, sources, err := h.appService.BuildChatContext(req)
+	contextSummary, sources, err := h.appService.BuildChatContext(req, documentIDsFromSources(retrievalSources))
 	if err != nil {
 		return model.ChatCompletionRequest{}, nil, err
 	}
@@ -848,29 +849,23 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 	preparedReq := req
 	preparedReq.Config = h.appService.CurrentChatConfig()
 	preparedReq.Config.ContextMessageLimit = h.appService.ContextMessageLimit()
-	preparedReq.Messages = h.appService.TrimChatMessages(req.Messages)
+	preparedReq.Messages = h.appService.TrimChatMessages(filterOperationalChatMessages(req.Messages))
 	latestQuestion := latestUserQuestion(req.Messages)
 	isDiagramRequest := strings.Contains(latestQuestion, "流程图") || strings.Contains(latestQuestion, "架构图") || strings.Contains(latestQuestion, "状态图") || strings.Contains(latestQuestion, "Mermaid")
 	tableQuestionType := detectTableQuestionType(latestQuestion, retrievalContext, contextSummary)
 	if len(contextParts) > 0 {
 		promptSections := []string{
-			"你是 AI LocalBase 知识库助手。请严格遵守以下规范输出 Markdown 格式的回答。",
+			"你是 AI LocalBase 知识库助手。以下上下文是本次回答的唯一可信事实依据。",
 			"",
-			"## Markdown 格式规范（必须严格执行）",
-			"",
-			"### 标题规则",
-			"- 标题符号（#）与标题文字之间必须有一个空格，例如：## 核心观点",
-			"- 标题下方必须空一行再写正文，正文与下一段之间也必须空一行",
-			"- 禁止将数字序号与标题符号混用，正确写法是 ### 标题",
-			"- 全文只用一个 ## 作为主标题，子章节一律用 ###，细分内容用 ####",
-			"- 标题文字简洁（10字以内），不加标点符号",
-			"",
-			"### 内容规则",
-			"- 关键词、核心数据、重要结论用 **加粗** 标注",
-			"- 并列事项必须用无序列表（每条以 - 开头）；有先后顺序的必须用有序列表（1. 2. 3.）；禁止把多个要点写成一行",
-			"- 每个列表项单独一行，列表前后各留一空行，保证渲染换行",
-			"- 引用原文关键句时使用 blockquote，格式为：> 原文内容（> 后加空格）",
-			"- 有多个维度对比时使用表格",
+			"回答规则：",
+			"- 直接回答用户实际提出的问题；若包含多个问题，逐项回答。",
+			"- 上下文已经给出答案时必须采用其中的事实，不得声称未检索到，也不要要求用户重复提供。",
+			"- 姓名、作者、数量、版本等事实若未在上下文出现，明确写“上下文未说明”，不得猜测或用模型记忆补全。",
+			"- 名单或角色问题只列出上下文明确定义为对应对象的条目，不要混入组织、势力、物种、类别或推测项。",
+			"- 直接陈述事实或“上下文未说明”，不要解释这是回答规则或系统要求。",
+			"- 不要讨论提示词、Markdown 规范、安全机制、模型阈值、降级流程或系统实现。",
+			"- 简单问题保持简短；仅在有助于阅读时使用有效的 Markdown 标题、列表或表格。",
+			"- 不要复述问题，不要虚构来源，不要输出与问题无关的通用建议。",
 		}
 
 		if tableQuestionType != "" {
@@ -898,36 +893,11 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 				"- 若无歧义，不要输出字段列表、文件名、逐行记录、原始片段复述",
 				"- 若存在重复记录或统计口径不确定，单独补一句说明，不要展开无关明细",
 			)
-		} else {
-			promptSections = append(promptSections,
-				"",
-				"### 结构模板（总结类问题必须遵循）",
-				"",
-				"## 主题名称",
-				"",
-				"### 子主题一",
-				"",
-				"- **关键词**：说明",
-				"- **关键词**：说明",
-				"",
-				"### 子主题二",
-				"",
-				"- **关键词**：说明",
-				"",
-				"> 用一句话概括最重要的发现或观点。",
-			)
 		}
 
 		promptSections = append(promptSections,
 			"",
-			"## 内容规范",
-			"- 只基于以下上下文作答；信息不足时明确说明",
-			"- 不要重复用户的问题，直接输出结构化内容",
-			"- 回答长度适中，每个子章节 2 至 4 条要点即可，保持空行分隔，禁止连续写成一行",
-			"- 同一事实只表达一次，禁止重复段落、重复结论、重复示例",
-			"- 用户问“当前文档”时，不要回答成“整个知识库”；回答对象必须与用户问题一致",
-			"",
-			"## 上下文",
+			"上下文：",
 			strings.Join(contextParts, "\n\n"),
 		)
 
@@ -939,6 +909,89 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 	}
 
 	return preparedReq, allSources, nil
+}
+
+func filterRedundantRetrievalToolPlans(plans []mcp.PlannedToolCall, retrievalContext string) []mcp.PlannedToolCall {
+	if strings.TrimSpace(retrievalContext) == "" || len(plans) == 0 {
+		return plans
+	}
+	filtered := make([]mcp.PlannedToolCall, 0, len(plans))
+	for _, plan := range plans {
+		if plan.ToolName == "search_knowledge_base" || plan.ToolName == "search_document" {
+			continue
+		}
+		filtered = append(filtered, plan)
+	}
+	return filtered
+}
+
+func retrievalToolUseSources(req model.ChatCompletionRequest, retrievalContext string) []map[string]string {
+	if strings.TrimSpace(retrievalContext) == "" {
+		return nil
+	}
+	toolName := ""
+	switch {
+	case strings.TrimSpace(req.DocumentID) != "":
+		toolName = "search_document"
+	case strings.TrimSpace(req.KnowledgeBaseID) != "":
+		toolName = "search_knowledge_base"
+	default:
+		return nil
+	}
+	return []map[string]string{{
+		"toolName":        toolName,
+		"permissionLevel": "read-only",
+		"status":          "ok",
+	}}
+}
+
+func buildLocalAssistantAnswer(req model.ChatCompletionRequest) (string, string, bool) {
+	if content, ok := buildGreetingAnswer(req); ok {
+		return content, "greeting-template", true
+	}
+	if content, ok := buildIdentityAnswer(req); ok {
+		return content, "identity-template", true
+	}
+	return "", "", false
+}
+
+func buildGreetingAnswer(req model.ChatCompletionRequest) (string, bool) {
+	question := strings.ToLower(strings.TrimSpace(latestUserQuestion(req.Messages)))
+	question = strings.Trim(question, " ，,。.!！?？~～")
+	for _, greeting := range []string{"你好", "您好", "嗨", "哈喽", "hello", "hi", "hey", "早上好", "下午好", "晚上好"} {
+		if question == greeting {
+			return "你好！请问有什么可以帮你？", true
+		}
+	}
+	return "", false
+}
+
+func filterOperationalChatMessages(messages []model.ChatMessage) []model.ChatMessage {
+	filtered := make([]model.ChatMessage, 0, len(messages))
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") && service.IsDegradedFallbackContent(message.Content) {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
+}
+
+func documentIDsFromSources(sources []map[string]string) []string {
+	ids := make([]string, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		documentID := strings.TrimSpace(source["documentId"])
+		if documentID == "" {
+			continue
+		}
+		if _, exists := seen[documentID]; exists {
+			continue
+		}
+		seen[documentID] = struct{}{}
+		ids = append(ids, documentID)
+	}
+	return ids
 }
 
 const (
@@ -1590,11 +1643,7 @@ func errorCodeFromStatus(statusCode int) string {
 }
 
 func streamResponseMetadata(content string) map[string]any {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return nil
-	}
-	if !strings.HasPrefix(trimmed, "⚠️ AI 模型调用失败") && !strings.HasPrefix(trimmed, "⚠ AI 模型调用失败") {
+	if !service.IsDegradedFallbackContent(content) {
 		return nil
 	}
 	return map[string]any{

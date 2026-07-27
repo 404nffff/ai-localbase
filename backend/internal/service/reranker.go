@@ -178,6 +178,10 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, chunks []Retriev
 				errChan <- err
 				return
 			}
+			if err := ChatResponseDegradationError(resp); err != nil {
+				errChan <- err
+				return
+			}
 			if len(resp.Choices) == 0 {
 				errChan <- fmt.Errorf("empty llm response")
 				return

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ai-localbase/internal/model"
 )
@@ -333,6 +334,198 @@ func TestFilterRelevantChunksRemovesUnrelatedHits(t *testing.T) {
 	}
 	if filtered[0].DocumentID != "doc-related" {
 		t.Fatalf("expected related document to remain, got %s", filtered[0].DocumentID)
+	}
+}
+
+func TestFilterRelevantChunksKeepsEvidenceForMultipleIntents(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID: "doc-outline",
+				Text:       "《墟心》是一部修仙、末世题材的网络小说。",
+			},
+			Score:    0.82,
+			RawScore: 0.72,
+		},
+		{
+			DocumentChunk: DocumentChunk{
+				DocumentID: "doc-characters",
+				Text:       "主要人物设定：林译（主角）、陆沉、苏晚、周野、秦岳。",
+			},
+			Score:    0.76,
+			RawScore: 0.66,
+		},
+	}
+
+	filtered := filterRelevantChunks("作品小说是谁，有多少个角色有提到吗", chunks)
+	if len(filtered) != 2 {
+		t.Fatalf("expected evidence for both intents, got %#v", filtered)
+	}
+}
+
+func TestTrimRetrievedChunksToContextLimitUsesRunes(t *testing.T) {
+	chunks := []RetrievedChunk{{
+		DocumentChunk: DocumentChunk{DocumentID: "doc-1", Text: "作者备注：作品人物设定"},
+	}}
+
+	trimmed := trimRetrievedChunksToContextLimit(chunks, 5, "")
+	if len(trimmed) != 1 {
+		t.Fatalf("expected one trimmed chunk, got %#v", trimmed)
+	}
+	if trimmed[0].Text != "作者备注：" {
+		t.Fatalf("expected five complete runes, got %q", trimmed[0].Text)
+	}
+	if !utf8.ValidString(trimmed[0].Text) {
+		t.Fatalf("expected valid UTF-8, got %q", trimmed[0].Text)
+	}
+}
+
+func TestTrimRetrievedChunksDistributesContextAcrossEvidence(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{DocumentChunk: DocumentChunk{DocumentID: "doc-1", Text: strings.Repeat("背景设定", 300) + "主要人物设定：林译是主角。"}},
+		{DocumentChunk: DocumentChunk{DocumentID: "doc-1", Text: "陆沉、苏晚、周野、秦岳是主要人物。" + strings.Repeat("后续剧情", 300)}},
+	}
+
+	trimmed := trimRetrievedChunksToContextLimit(chunks, 400, "主角是谁，主要人物有哪些")
+	if len(trimmed) != 2 {
+		t.Fatalf("expected two evidence excerpts, got %#v", trimmed)
+	}
+	joined := strings.Join(chunkTextsFromRetrieved(trimmed), "\n")
+	if !strings.Contains(joined, "林译") || !strings.Contains(joined, "陆沉") {
+		t.Fatalf("expected both evidence areas in context, got %q", joined)
+	}
+	if chunksTotalChars(trimmed) > 400 {
+		t.Fatalf("expected context within rune budget, got %d", chunksTotalChars(trimmed))
+	}
+}
+
+func TestFilterRelevantChunksKeepsSectionContinuation(t *testing.T) {
+	chunks := []RetrievedChunk{
+		{
+			DocumentChunk: DocumentChunk{ID: "chunk-1", DocumentID: "doc-outline", Index: 1, Text: "四、主要人物设定 林译（主角）"},
+			Score:         0.62, RawScore: 0.4,
+		},
+		{
+			DocumentChunk: DocumentChunk{ID: "chunk-2", DocumentID: "doc-outline", Index: 2, Text: "陆沉、苏晚、周野、秦岳共同组成破晓小队。"},
+			Score:         0.6, RawScore: 0.4,
+		},
+	}
+
+	filtered := filterRelevantChunks("作品小说是谁，有多少个角色有提到吗", chunks)
+	if len(filtered) != 2 {
+		t.Fatalf("expected adjacent character section to remain, got %#v", filtered)
+	}
+}
+
+func TestExpandEvidenceSectionContinuationsLoadsAdjacentSourceChunk(t *testing.T) {
+	documentPath := filepath.Join(t.TempDir(), "outline.txt")
+	documentText := "主要角色列表\n" + strings.Repeat("角色资料与关系说明。", 220)
+	if err := os.WriteFile(documentPath, []byte(documentText), 0o600); err != nil {
+		t.Fatalf("write source document: %v", err)
+	}
+
+	document := model.Document{
+		ID:              "doc-outline",
+		KnowledgeBaseID: "kb-outline",
+		Name:            "outline.txt",
+		Path:            documentPath,
+	}
+	rag := NewRagService()
+	sourceChunks := rag.BuildDocumentChunks(document, documentText)
+	if len(sourceChunks) < 2 {
+		t.Fatalf("expected source text to span multiple chunks, got %d", len(sourceChunks))
+	}
+
+	service := &AppService{
+		rag: rag,
+		state: &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{
+			"kb-outline": {
+				ID:        "kb-outline",
+				Documents: []model.Document{document},
+			},
+		}},
+	}
+	anchor := RetrievedChunk{DocumentChunk: sourceChunks[0], Score: 0.8, RawScore: 0.7}
+	expanded := service.expandEvidenceSectionContinuations(
+		model.ChatCompletionRequest{KnowledgeBaseID: "kb-outline"},
+		"项目背景是什么？主要角色有哪些？",
+		[]RetrievedChunk{anchor},
+	)
+	if len(expanded) != 3 {
+		t.Fatalf("expected two adjacent continuation chunks for a list query, got %#v", expanded)
+	}
+	if expanded[1].Index != anchor.Index+1 {
+		t.Fatalf("expected adjacent source index %d, got %d", anchor.Index+1, expanded[1].Index)
+	}
+	if expanded[2].Index != anchor.Index+2 {
+		t.Fatalf("expected second adjacent source index %d, got %d", anchor.Index+2, expanded[2].Index)
+	}
+	for _, continuation := range expanded[1:] {
+		if !containsString(continuation.RetrievalChannels, "section-continuation") {
+			t.Fatalf("expected continuation retrieval channel, got %#v", continuation.RetrievalChannels)
+		}
+	}
+}
+
+func TestSplitQueryIntentsSeparatesQuestionClauses(t *testing.T) {
+	intents := splitQueryIntents("项目名称是什么？主要角色有哪些？作者是谁？")
+	if len(intents) != 3 {
+		t.Fatalf("expected three question intents, got %#v", intents)
+	}
+	if !isMultiIntentQuery("项目名称是什么？主要角色有哪些？作者是谁？") {
+		t.Fatal("expected multiple question clauses to be recognized as multi-intent")
+	}
+}
+
+func TestContainsEvidenceSectionHeadingIgnoresInlineMention(t *testing.T) {
+	if containsEvidenceSectionHeading("作者备注：本文包含背景设定、人物设定及故事概要，供编辑参考。") {
+		t.Fatal("expected an inline summary mention not to be treated as a section heading")
+	}
+	if !containsEvidenceSectionHeading("## 四、主要人物设定\n后续为人物资料") {
+		t.Fatal("expected a short Markdown heading to be recognized")
+	}
+}
+
+func TestLimitRetrievalQueries(t *testing.T) {
+	queries := []string{"原问题", "改写一", "改写二", "改写三", "规则一", "规则二", "规则三", "规则四", "规则五"}
+	limited := limitRetrievalQueries(queries, 8)
+	if len(limited) != 8 || limited[0] != "原问题" || limited[7] != "规则四" {
+		t.Fatalf("unexpected limited queries: %#v", limited)
+	}
+}
+
+func TestBuildChatContextIncludesDocumentPreviews(t *testing.T) {
+	service := &AppService{state: &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{
+		"kb-outline": {
+			ID:   "kb-outline",
+			Name: "小说资料",
+			Documents: []model.Document{{
+				ID:             "doc-outline",
+				Name:           "作品大纲.md",
+				ContentPreview: "《墟心》作品大纲，主要人物包括林译、陆沉、苏晚、周野和秦岳。",
+			}},
+		},
+	}}}
+
+	context, _, err := service.BuildChatContext(model.ChatCompletionRequest{KnowledgeBaseID: "kb-outline"}, []string{"doc-outline"})
+	if err != nil {
+		t.Fatalf("build chat context: %v", err)
+	}
+	if !strings.Contains(context, "《墟心》") || !strings.Contains(context, "作品大纲.md") {
+		t.Fatalf("expected document preview in knowledge-base context, got %q", context)
+	}
+}
+
+func TestRecentConversationHistorySkipsCurrentQueryAndDegradedReplies(t *testing.T) {
+	messages := []model.ChatMessage{
+		{Role: "user", Content: "小说大纲写得怎么样"},
+		{Role: "assistant", Content: "⚠️ AI 模型调用已降级\n\n模型超时"},
+		{Role: "user", Content: "主角是谁"},
+	}
+
+	history := recentConversationHistory(messages, 3)
+	if len(history) != 1 || history[0] != "小说大纲写得怎么样" {
+		t.Fatalf("unexpected filtered history: %#v", history)
 	}
 }
 
