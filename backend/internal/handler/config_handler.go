@@ -97,6 +97,9 @@ func (h *ConfigHandler) TestChatModel(c *gin.Context) {
 			Temperature: req.Temperature,
 		},
 	})
+	if err == nil {
+		err = service.ChatResponseDegradationError(response)
+	}
 
 	latency := time.Since(start).Milliseconds()
 
@@ -284,6 +287,9 @@ func (h *ConfigHandler) checkChatModelHealth(ctx context.Context) ComponentHealt
 			Temperature: config.Chat.Temperature,
 		},
 	})
+	if err == nil {
+		err = service.ChatResponseDegradationError(response)
+	}
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {

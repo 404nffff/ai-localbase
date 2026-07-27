@@ -74,6 +74,7 @@ type ollamaChatRequest struct {
 	Model    string              `json:"model"`
 	Messages []model.ChatMessage `json:"messages"`
 	Stream   bool                `json:"stream"`
+	Think    *bool               `json:"think,omitempty"`
 	Options  *ollamaOptions      `json:"options,omitempty"`
 }
 
@@ -92,7 +93,7 @@ type ollamaChatResponse struct {
 // ── Constructor ──────────────────────────────────────────────────────────────
 
 func NewLLMService() *LLMService {
-	transport := &http.Transport{
+	nonStreamTransport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
@@ -101,17 +102,18 @@ func NewLLMService() *LLMService {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: defaultStreamHeaderTimeout,
+		ResponseHeaderTimeout: defaultStreamRequestTimeout,
 		DisableCompression:    false,
 	}
+	streamTransport := nonStreamTransport.Clone()
+	streamTransport.ResponseHeaderTimeout = defaultStreamHeaderTimeout
 
 	return &LLMService{
 		client: &http.Client{
-			Timeout:   defaultChatRequestTimeout,
-			Transport: transport,
+			Transport: nonStreamTransport,
 		},
 		streamClient: &http.Client{
-			Transport: transport.Clone(),
+			Transport: streamTransport,
 		},
 	}
 }
@@ -124,7 +126,11 @@ func (s *LLMService) Chat(req model.ChatCompletionRequest) (model.ChatCompletion
 		return model.ChatCompletionResponse{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultChatRequestTimeout)
+	requestTimeout := defaultChatRequestTimeout
+	if req.Think != nil && *req.Think {
+		requestTimeout = defaultStreamRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
 	if cfg.Provider == "ollama" {
@@ -328,15 +334,25 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 // ── Ollama native implementation ──────────────────────────────────────────────
 
-func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
+func buildOllamaChatRequest(cfg model.ChatModelConfig, req model.ChatCompletionRequest, stream bool) ollamaChatRequest {
+	think := false
+	if req.Think != nil {
+		think = *req.Think
+	}
 	payload := ollamaChatRequest{
 		Model:    cfg.Model,
 		Messages: req.Messages,
-		Stream:   false,
+		Stream:   stream,
+		Think:    &think,
 	}
 	if cfg.Temperature > 0 {
 		payload.Options = &ollamaOptions{Temperature: cfg.Temperature}
 	}
+	return payload
+}
+
+func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
+	payload := buildOllamaChatRequest(cfg, req, false)
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -396,14 +412,7 @@ func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, 
 }
 
 func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest, onChunk func(string) error) error {
-	payload := ollamaChatRequest{
-		Model:    cfg.Model,
-		Messages: req.Messages,
-		Stream:   true,
-	}
-	if cfg.Temperature > 0 {
-		payload.Options = &ollamaOptions{Temperature: cfg.Temperature}
-	}
+	payload := buildOllamaChatRequest(cfg, req, true)
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -459,7 +468,7 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 				break
 			}
 
-			if content := strings.TrimSpace(chunk.Message.Content); content != "" {
+			if content := chunk.Message.Content; content != "" {
 				if err := onChunk(content); err != nil {
 					return err
 				}
@@ -496,6 +505,42 @@ func degradedChatResponse(cfg model.ChatModelConfig, req model.ChatCompletionReq
 			"upstreamError":    describeModelError(err),
 		},
 	}
+}
+
+func ChatResponseDegradationError(resp model.ChatCompletionResponse) error {
+	if len(resp.Metadata) == 0 {
+		return nil
+	}
+	degraded, _ := resp.Metadata["degraded"].(bool)
+	if !degraded {
+		return nil
+	}
+	message, _ := resp.Metadata["upstreamError"].(string)
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "model response degraded"
+	}
+	return errors.New(message)
+}
+
+func IsDegradedFallbackContent(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"⚠️ AI 模型调用失败",
+		"⚠ AI 模型调用失败",
+		"⚠️ AI 模型调用已降级",
+		"⚠ AI 模型调用已降级",
+	} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+
+	compact := strings.ReplaceAll(trimmed, " ", "")
+	return strings.Contains(compact, "AI模型调用已降级至安全阈值")
 }
 
 func retryModelCall(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {

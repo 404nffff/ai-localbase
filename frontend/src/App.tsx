@@ -186,7 +186,7 @@ export interface ChatModeSettings {
 }
 
 const THINK_MODEL_STORAGE_KEY = 'ai-localbase-think-model'
-const FALLBACK_REQUEST_TIMEOUT_MS = 90_000
+const FALLBACK_REQUEST_TIMEOUT_MS = 180_000
 const STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000
 const STREAM_REQUEST_TIMEOUT_MS = 180_000
 
@@ -228,6 +228,7 @@ interface ChatCompletionResponse {
 interface ChatRequestBody {
   conversationId: string
   model: string
+  think: boolean
   knowledgeBaseId: string
   documentId: string
   retrievalMode: RetrievalConfig['defaultSearchMode']
@@ -1718,6 +1719,7 @@ function AppContent() {
     const requestBody: ChatRequestBody = {
       conversationId,
       model: selectedChatModel,
+      think: chatMode === 'think',
       knowledgeBaseId: selectedKnowledgeBaseId ?? '',
       documentId: selectedDocumentId ?? '',
       retrievalMode: config.retrieval.defaultSearchMode,
@@ -1935,6 +1937,7 @@ function AppContent() {
         const payload = JSON.parse(rawData) as StreamEventPayload
 
         if (eventName === 'meta') {
+          markChunkReceived()
           return
         }
 
