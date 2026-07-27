@@ -8,9 +8,17 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-}
+      - AI_LOCALBASE_QDRANT_API_KEY=${QDRANT_API_KEY:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -n "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
+          export QDRANT__SERVICE__API_KEY="$$AI_LOCALBASE_QDRANT_API_KEY"
+        fi
+        exec ./entrypoint.sh
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$${QDRANT__SERVICE__API_KEY}\" ]; then curl -f -H \"api-key: $${QDRANT__SERVICE__API_KEY}\" http://localhost:6333/health; else curl -f http://localhost:6333/health; fi"]
+      test: ["CMD-SHELL", "if [ -n \"$${AI_LOCALBASE_QDRANT_API_KEY}\" ]; then curl -f -H \"api-key: $${AI_LOCALBASE_QDRANT_API_KEY}\" http://localhost:6333/collections; else curl -f http://localhost:6333/collections; fi"]
       interval: 5s
       timeout: 3s
       retries: 5
