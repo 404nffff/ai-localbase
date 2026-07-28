@@ -362,7 +362,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "answer_with_sources",
-			Description: "基于知识库或文档生成带来源的答案草稿。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			Description: "从知识库或文档整理可引用证据；结构化文档可返回确定性计算结果，但不会调用聊天模型生成最终答案。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":           map[string]any{"type": "string", "description": "用户问题"},
@@ -394,23 +394,23 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					}},
 					Embedding: embeddingModelConfigFromAppConfig(appService.GetConfig()),
 				}
-				answer, sources, structuredUsed, err := appService.TryBuildStructuredDataAnswer(chatReq)
+				evidence, sources, structuredUsed, err := appService.TryBuildStructuredDataAnswer(chatReq)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				answer = strings.TrimSpace(answer)
-				mode := "structured"
+				evidence = strings.TrimSpace(evidence)
+				mode := "structured_result"
 				if !structuredUsed {
 					mode = "retrieval_context"
-					answer, sources, err = appService.BuildRetrievalContext(chatReq)
+					evidence, sources, err = appService.BuildRetrievalContext(chatReq)
 					if err != nil {
 						return ToolCallResult{}, err
 					}
-					answer = strings.TrimSpace(answer)
+					evidence = strings.TrimSpace(evidence)
 				}
 				warnings := []string{}
-				if answer == "" {
-					answer = "未检索到可用于回答的内容。"
+				if evidence == "" {
+					evidence = "未检索到可用于回答的内容。"
 					warnings = append(warnings, "未找到相关证据，建议换用更具体的问题或扩大检索范围。")
 				}
 				if len(sources) == 0 {
@@ -418,10 +418,11 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 
 				return ToolCallResult{
-					Summary: fmt.Sprintf("已生成带来源答案草稿，模式为 %s，来源 %d 条。", mode, len(sources)),
-					Content: []ToolContent{{Type: "text", Text: answer}},
+					Summary: fmt.Sprintf("已整理可引用证据包，模式为 %s，来源 %d 条。", mode, len(sources)),
+					Content: []ToolContent{{Type: "text", Text: evidence}},
 					Data: map[string]any{
-						"answer":          answer,
+						"evidence":        evidence,
+						"answer":          evidence,
 						"sources":         sources,
 						"mode":            mode,
 						"query":           query,

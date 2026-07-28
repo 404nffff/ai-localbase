@@ -1147,8 +1147,11 @@ func TestMCPAgentOrientedTools(t *testing.T) {
 	if answerResp.Code != http.StatusOK {
 		t.Fatalf("expected answer status 200, got %d, body=%s", answerResp.Code, answerResp.Body.String())
 	}
-	if !strings.Contains(answerResp.Body.String(), `"answer"`) || !strings.Contains(answerResp.Body.String(), `"sources"`) {
-		t.Fatalf("expected answer with sources result, got %s", answerResp.Body.String())
+	if !strings.Contains(answerResp.Body.String(), `"evidence"`) || !strings.Contains(answerResp.Body.String(), `"sources"`) {
+		t.Fatalf("expected evidence package with sources, got %s", answerResp.Body.String())
+	}
+	if strings.Contains(answerResp.Body.String(), "已生成带来源答案草稿") {
+		t.Fatalf("expected tool not to claim model-generated answer, got %s", answerResp.Body.String())
 	}
 
 	summaryResp := performMCPToolCall(t, engine, adminHeaders, 703, "summarize_document", map[string]any{

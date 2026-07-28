@@ -143,7 +143,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `search_document` | `read-only` | 按单个文档执行检索 |
 | `query_structured_data` | `read-only` | 对 CSV / XLSX 执行确定性结构化查询 |
 | `debug_retrieval` | `read-only` | 调试检索命中、低置信和确定性补全 |
-| `answer_with_sources` | `read-only` | 基于知识库或文档生成带来源的答案草稿 |
+| `answer_with_sources` | `read-only` | 从知识库或文档整理可引用证据包 |
 | `inspect_knowledge_base_quality` | `read-only` | 聚合索引健康、最近评估和质量建议 |
 | `compare_retrieval_modes` | `read-only` | 对比 dense 与 hybrid 检索结果 |
 | `summarize_document` | `read-only` | 返回文档摘要、索引诊断和 chunk 预览 |
@@ -363,7 +363,8 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 说明：
 
 - `knowledgeBaseId` 或 `documentId` 至少提供一个
-- 优先尝试结构化确定性查询，未命中时返回检索上下文答案草稿
+- 优先尝试结构化确定性查询，未命中时返回检索上下文证据包
+- 工具不会调用聊天模型生成最终答案；调用方应基于 `evidence` 与 `sources` 自行组织回答
 - 适合 Agent 在回答用户前先获取可引用证据包
 
 返回内容：
