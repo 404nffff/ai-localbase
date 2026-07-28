@@ -3321,8 +3321,7 @@ body,
 }
 
 .knowledge-workspace-page .kb-retrieval-hit-tags span,
-.knowledge-workspace-page .kb-retrieval-contribution-list span,
-.knowledge-workspace-page .kb-retrieval-gate-metrics span {
+.knowledge-workspace-page .kb-retrieval-contribution-list span {
   padding: 3px 6px;
   border-radius: 5px;
   background: var(--surface-muted);
@@ -3418,7 +3417,6 @@ body,
 }
 
 .knowledge-workspace-page .kb-retrieval-contribution-list,
-.knowledge-workspace-page .kb-retrieval-gate-metrics,
 .knowledge-workspace-page .kb-retrieval-trace-list {
   display: flex;
   flex-wrap: wrap;

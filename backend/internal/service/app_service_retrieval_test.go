@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,60 +308,48 @@ func TestIsLowConfidenceSelection(t *testing.T) {
 	})
 }
 
-func TestFilterRelevantChunksRemovesUnrelatedHits(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-unrelated",
-				DocumentName: "unrelated.txt",
-				Text:         "这是一段关于部署参数、缓存策略和服务端口的文档。",
-			},
-			Score:    0.94,
-			RawScore: 0.61,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-related",
-				DocumentName: "school.txt",
-				Text:         "武汉大学校长信息与学校治理结构说明。",
-			},
-			Score:    0.82,
-			RawScore: 0.58,
-		},
-	}
-
-	filtered := filterRelevantChunks("武汉大学校长是谁", chunks)
-	if len(filtered) != 1 {
-		t.Fatalf("expected one relevant chunk, got %#v", filtered)
-	}
-	if filtered[0].DocumentID != "doc-related" {
-		t.Fatalf("expected related document to remain, got %s", filtered[0].DocumentID)
+func TestQueryEvidenceTermsDoNotInjectFactAliases(t *testing.T) {
+	terms := strings.Join(queryEvidenceTerms("张三的手机号是多少？"), "\n")
+	for _, alias := range []string{"联系电话", "联系方式", "办公电话"} {
+		if strings.Contains(terms, alias) {
+			t.Fatalf("expected query terms to come only from the user query, found injected alias %q in %q", alias, terms)
+		}
 	}
 }
 
-func TestFilterRelevantChunksKeepsEvidenceForMultipleIntents(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID: "doc-overview",
-				Text:       "当前项目用于管理本地知识库与检索任务。",
-			},
-			Score:    0.82,
-			RawScore: 0.72,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID: "doc-components",
-				Text:       "核心组件清单：API 服务、任务队列、向量存储和管理界面。",
-			},
-			Score:    0.76,
-			RawScore: 0.66,
-		},
-	}
+func TestCollectCandidatesPreservesQdrantScoreAndChannels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/kb-1/points/query" {
+			t.Fatalf("unexpected qdrant request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"chunk-1","score":0.437,"payload":{"chunk_id":"chunk-1","knowledge_base_id":"kb-1","document_id":"doc-1","document_name":"source.txt","text":"Qdrant 返回的原始文档片段","chunk_index":2,"chunk_kind":"text","_retrieval_channels":["dense"]}}]}}`))
+	}))
+	t.Cleanup(server.Close)
 
-	filtered := filterRelevantChunks("项目用途是什么，核心组件有哪些", chunks)
-	if len(filtered) != 2 {
-		t.Fatalf("expected evidence for both intents, got %#v", filtered)
+	service := &AppService{
+		qdrant: NewQdrantService(model.ServerConfig{QdrantURL: server.URL, QdrantVectorSize: 2}),
+		state:  &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{}},
+	}
+	candidates, err := service.collectCandidates(
+		[]string{"kb-1"},
+		model.ChatCompletionRequest{},
+		[]float64{0.1, 0.2},
+		5,
+		false,
+		"原始问题",
+	)
+	if err != nil {
+		t.Fatalf("collect candidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one Qdrant candidate, got %#v", candidates)
+	}
+	if candidates[0].Score != 0.437 || candidates[0].RawScore != 0.437 {
+		t.Fatalf("expected Qdrant score to remain unchanged, got score=%v rawScore=%v", candidates[0].Score, candidates[0].RawScore)
+	}
+	if len(candidates[0].RetrievalChannels) != 1 || candidates[0].RetrievalChannels[0] != "dense" {
+		t.Fatalf("expected only the Qdrant retrieval channel, got %#v", candidates[0].RetrievalChannels)
 	}
 }
 
@@ -396,93 +386,6 @@ func TestTrimRetrievedChunksDistributesContextAcrossEvidence(t *testing.T) {
 	}
 	if chunksTotalChars(trimmed) > 400 {
 		t.Fatalf("expected context within rune budget, got %d", chunksTotalChars(trimmed))
-	}
-}
-
-func TestFilterRelevantChunksKeepsSectionContinuation(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{ID: "chunk-1", DocumentID: "doc-guide", Index: 1, Text: "四、核心组件清单 API 服务"},
-			Score:         0.62, RawScore: 0.4,
-		},
-		{
-			DocumentChunk: DocumentChunk{ID: "chunk-2", DocumentID: "doc-guide", Index: 2, Text: "任务队列、向量存储和管理界面。"},
-			Score:         0.6, RawScore: 0.4,
-		},
-	}
-
-	filtered := filterRelevantChunks("项目用途是什么，核心组件有哪些", chunks)
-	if len(filtered) != 2 {
-		t.Fatalf("expected adjacent character section to remain, got %#v", filtered)
-	}
-}
-
-func TestExpandEvidenceSectionContinuationsLoadsAdjacentSourceChunk(t *testing.T) {
-	documentPath := filepath.Join(t.TempDir(), "guide.txt")
-	documentText := "核心组件清单\n" + strings.Repeat("组件职责与依赖关系说明。", 220)
-	if err := os.WriteFile(documentPath, []byte(documentText), 0o600); err != nil {
-		t.Fatalf("write source document: %v", err)
-	}
-
-	document := model.Document{
-		ID:              "doc-guide",
-		KnowledgeBaseID: "kb-guide",
-		Name:            "guide.txt",
-		Path:            documentPath,
-	}
-	rag := NewRagService()
-	sourceChunks := rag.BuildDocumentChunks(document, documentText)
-	if len(sourceChunks) < 2 {
-		t.Fatalf("expected source text to span multiple chunks, got %d", len(sourceChunks))
-	}
-
-	service := &AppService{
-		rag: rag,
-		state: &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{
-			"kb-guide": {
-				ID:        "kb-guide",
-				Documents: []model.Document{document},
-			},
-		}},
-	}
-	anchor := RetrievedChunk{DocumentChunk: sourceChunks[0], Score: 0.8, RawScore: 0.7}
-	expanded := service.expandEvidenceSectionContinuations(
-		model.ChatCompletionRequest{KnowledgeBaseID: "kb-guide"},
-		"项目背景是什么？核心组件有哪些？",
-		[]RetrievedChunk{anchor},
-	)
-	if len(expanded) != 3 {
-		t.Fatalf("expected two adjacent continuation chunks for a list query, got %#v", expanded)
-	}
-	if expanded[1].Index != anchor.Index+1 {
-		t.Fatalf("expected adjacent source index %d, got %d", anchor.Index+1, expanded[1].Index)
-	}
-	if expanded[2].Index != anchor.Index+2 {
-		t.Fatalf("expected second adjacent source index %d, got %d", anchor.Index+2, expanded[2].Index)
-	}
-	for _, continuation := range expanded[1:] {
-		if !containsString(continuation.RetrievalChannels, "section-continuation") {
-			t.Fatalf("expected continuation retrieval channel, got %#v", continuation.RetrievalChannels)
-		}
-	}
-}
-
-func TestSplitQueryIntentsSeparatesQuestionClauses(t *testing.T) {
-	intents := splitQueryIntents("项目名称是什么？核心组件有哪些？维护者是谁？")
-	if len(intents) != 3 {
-		t.Fatalf("expected three question intents, got %#v", intents)
-	}
-	if !isMultiIntentQuery("项目名称是什么？核心组件有哪些？维护者是谁？") {
-		t.Fatal("expected multiple question clauses to be recognized as multi-intent")
-	}
-}
-
-func TestContainsEvidenceSectionHeadingIgnoresInlineMention(t *testing.T) {
-	if containsEvidenceSectionHeading("维护备注：本文包含背景、组件及部署概要，供维护者参考。") {
-		t.Fatal("expected an inline summary mention not to be treated as a section heading")
-	}
-	if !containsEvidenceSectionHeading("## 四、核心组件清单\n后续为组件资料") {
-		t.Fatal("expected a short Markdown heading to be recognized")
 	}
 }
 
@@ -526,222 +429,6 @@ func TestRecentConversationHistorySkipsCurrentQueryAndDegradedReplies(t *testing
 	history := recentConversationHistory(messages, 3)
 	if len(history) != 1 || history[0] != "小说大纲写得怎么样" {
 		t.Fatalf("unexpected filtered history: %#v", history)
-	}
-}
-
-func TestRuleBasedRetrievalQueriesForFoundingTimeQuestion(t *testing.T) {
-	queries := buildRuleBasedRetrievalQueries("请问青山实验学校的建校时间是什么？")
-	joined := strings.Join(queries, "\n")
-	for _, expected := range []string{
-		"青山实验学校 建校时间",
-		"青山实验学校 成立时间",
-		"青山实验学校 创办时间",
-		"青山实验学校 始建于",
-	} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("expected query variant %q in %#v", expected, queries)
-		}
-	}
-}
-
-func TestRuleBasedRetrievalQueriesForGenericFactQuestions(t *testing.T) {
-	phoneQueries := strings.Join(buildRuleBasedRetrievalQueries("张三的手机号是多少？"), "\n")
-	for _, expected := range []string{
-		"张三 手机号",
-		"张三 联系电话",
-		"张三 联系方式",
-	} {
-		if !strings.Contains(phoneQueries, expected) {
-			t.Fatalf("expected phone query variant %q in %s", expected, phoneQueries)
-		}
-	}
-
-	addressQueries := strings.Join(buildRuleBasedRetrievalQueries("星河科技公司的注册地址是什么？"), "\n")
-	for _, expected := range []string{
-		"星河科技公司 注册地址",
-		"星河科技公司 办公地址",
-		"星河科技公司 联系地址",
-	} {
-		if !strings.Contains(addressQueries, expected) {
-			t.Fatalf("expected address query variant %q in %s", expected, addressQueries)
-		}
-	}
-}
-
-func TestRuleBasedRetrievalQueriesForUnknownFactFields(t *testing.T) {
-	spacedQueries := strings.Join(buildRuleBasedRetrievalQueries("星河科技公司 统一社会信用代码是什么？"), "\n")
-	if !strings.Contains(spacedQueries, "星河科技公司 统一社会信用代码") {
-		t.Fatalf("expected delimited unknown field query variant, got %s", spacedQueries)
-	}
-
-	boundaryQueries := strings.Join(buildRuleBasedRetrievalQueries("青山实验学校办学许可证编号是什么？"), "\n")
-	if !strings.Contains(boundaryQueries, "青山实验学校 办学许可证编号") {
-		t.Fatalf("expected boundary unknown field query variant, got %s", boundaryQueries)
-	}
-}
-
-func TestFactQuestionKeepsFoundingTimeEvidence(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-unrelated",
-				DocumentName: "notice.txt",
-				Text:         "青山实验学校近期发布了校园活动安排和后勤服务说明。",
-			},
-			Score:    0.93,
-			RawScore: 0.66,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-school",
-				DocumentName: "school-profile.txt",
-				Text:         "青山实验学校创办于1998年，是一所九年一贯制学校。",
-			},
-			Score:    0.82,
-			RawScore: 0.58,
-		},
-	}
-
-	filtered := filterRelevantChunks("青山实验学校的建校时间是什么", chunks)
-	if len(filtered) == 0 {
-		t.Fatal("expected founding time evidence to remain")
-	}
-	if filtered[0].DocumentID != "doc-school" {
-		t.Fatalf("expected founding time document first, got %s", filtered[0].DocumentID)
-	}
-	if isLowConfidenceSelection("青山实验学校的建校时间是什么", filtered) {
-		t.Fatal("expected founding time evidence to avoid low confidence")
-	}
-}
-
-func TestFactQuestionDropsUnrelatedHighScoreWhenDirectEvidenceExists(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-high-score",
-				DocumentName: "campus-news.txt",
-				Text:         "青山实验学校近期发布了校园活动安排、社团报名和后勤服务说明。",
-			},
-			Score:    0.96,
-			RawScore: 0.96,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-evidence",
-				DocumentName: "school-profile.txt",
-				Text:         "学校概况：青山实验学校始建于1998年，现有小学部和初中部。",
-			},
-			Score:    0.73,
-			RawScore: 0.73,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-other",
-				DocumentName: "other-school.txt",
-				Text:         "蓝海中学的建校时间为2005年。",
-			},
-			Score:    0.88,
-			RawScore: 0.88,
-		},
-	}
-
-	filtered := filterRelevantChunks("青山实验学校的建校时间是什么", chunks)
-	if len(filtered) != 1 {
-		t.Fatalf("expected only direct fact evidence, got %d chunks: %#v", len(filtered), filtered)
-	}
-	if filtered[0].DocumentID != "doc-evidence" {
-		t.Fatalf("expected direct evidence document, got %s", filtered[0].DocumentID)
-	}
-}
-
-func TestFactQuestionKeepsUnknownFieldEvidence(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-related",
-				DocumentName: "company.txt",
-				Text:         "星河科技公司的统一社会信用代码为 91310000123456789X。",
-			},
-			Score:    0.74,
-			RawScore: 0.74,
-		},
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-noise",
-				DocumentName: "company-news.txt",
-				Text:         "星河科技公司近期发布了产品升级公告。",
-			},
-			Score:    0.95,
-			RawScore: 0.95,
-		},
-	}
-
-	filtered := filterRelevantChunks("星河科技公司 统一社会信用代码是什么", chunks)
-	if len(filtered) != 1 {
-		t.Fatalf("expected only unknown field evidence, got %#v", filtered)
-	}
-	if filtered[0].DocumentID != "doc-related" {
-		t.Fatalf("expected related unknown field evidence, got %s", filtered[0].DocumentID)
-	}
-}
-
-func TestLexicalFactCandidatesFindExactEvidence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "people.txt")
-	if err := os.WriteFile(path, []byte("人员档案\n张三的联系电话为 13800001111，办公地址为上海。"), 0o644); err != nil {
-		t.Fatalf("write document: %v", err)
-	}
-	document := model.Document{
-		ID:              "doc-people",
-		KnowledgeBaseID: "kb-people",
-		Name:            "people.txt",
-		Path:            path,
-	}
-	service := &AppService{
-		rag: NewRagService(),
-		state: &model.AppState{
-			KnowledgeBases: map[string]model.KnowledgeBase{
-				"kb-people": {
-					ID:        "kb-people",
-					Documents: []model.Document{document},
-				},
-			},
-		},
-	}
-
-	candidates := service.collectLexicalFactCandidates(
-		model.ChatCompletionRequest{KnowledgeBaseID: "kb-people"},
-		[]string{"kb-people"},
-		"张三的手机号是多少？",
-		5,
-	)
-	if len(candidates) == 0 {
-		t.Fatal("expected lexical fact fallback candidate")
-	}
-	if !strings.Contains(candidates[0].Text, "13800001111") {
-		t.Fatalf("expected phone evidence, got %q", candidates[0].Text)
-	}
-}
-
-func TestFilterRelevantChunksReturnsEmptyWhenNoEvidence(t *testing.T) {
-	chunks := []RetrievedChunk{
-		{
-			DocumentChunk: DocumentChunk{
-				DocumentID:   "doc-unrelated",
-				DocumentName: "unrelated.txt",
-				Text:         "系统部署参数、缓存策略和服务端口。",
-			},
-			Score:    0.98,
-			RawScore: 0.78,
-		},
-	}
-
-	filtered := filterRelevantChunks("武汉大学校长是谁", chunks)
-	if len(filtered) != 0 {
-		t.Fatalf("expected no chunks without query evidence, got %#v", filtered)
-	}
-	if !isLowConfidenceSelection("武汉大学校长是谁", filtered) {
-		t.Fatal("expected empty filtered result to be low confidence")
 	}
 }
 
@@ -871,85 +558,6 @@ func TestGetKnowledgeBaseHealthReportsStructuredMetrics(t *testing.T) {
 	}
 	if len(health.Documents) != 1 || health.Documents[0].NeedsReindex {
 		t.Fatalf("unexpected document health: %#v", health.Documents)
-	}
-}
-
-func TestExpandStructuredSourceRowsAddsIndexedFileRows(t *testing.T) {
-	dir := t.TempDir()
-	csvPath := filepath.Join(dir, "users.csv")
-	content := strings.Join([]string{
-		"姓名,城市,状态",
-		"张三,上海,启用",
-		"李四,北京,停用",
-		"王五,南京,启用",
-	}, "\n")
-	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write csv fixture: %v", err)
-	}
-
-	document := model.Document{
-		ID:              "doc-users",
-		KnowledgeBaseID: "kb-1",
-		Name:            "users.csv",
-		Path:            csvPath,
-	}
-	service := &AppService{
-		state: &model.AppState{
-			KnowledgeBases: map[string]model.KnowledgeBase{
-				"kb-1": {
-					ID:        "kb-1",
-					Name:      "测试知识库",
-					Documents: []model.Document{document},
-				},
-			},
-		},
-		rag: NewRagService(),
-	}
-	chunks := []RetrievedChunk{{
-		DocumentChunk: DocumentChunk{
-			ID:              "doc-users-summary-0",
-			KnowledgeBaseID: "kb-1",
-			DocumentID:      "doc-users",
-			DocumentName:    "users.csv",
-			Text:            "统计摘要：文件《users.csv》共有3条数据记录。",
-			Kind:            "structured_summary",
-		},
-		Score: 0.99,
-	}}
-
-	expanded := service.expandStructuredSourceRows(
-		model.ChatCompletionRequest{DocumentID: "doc-users"},
-		"展示当前文档的数据表格",
-		chunks,
-	)
-	text := buildChunkText(expanded)
-	if !strings.Contains(text, "源文件完整行数据") {
-		t.Fatalf("expected source row context label, got %q", text)
-	}
-	if !strings.Contains(text, "第2行：姓名：张三。城市：上海。状态：启用。") {
-		t.Fatalf("expected first source row to be included, got %q", text)
-	}
-	if !strings.Contains(text, "第4行：姓名：王五。城市：南京。状态：启用。") {
-		t.Fatalf("expected later source row to be included, got %q", text)
-	}
-}
-
-func TestShouldExpandStructuredSourceRowsRequiresDetailIntent(t *testing.T) {
-	chunks := []RetrievedChunk{{
-		DocumentChunk: DocumentChunk{
-			DocumentID:   "doc-users",
-			DocumentName: "users.csv",
-			Text:         "统计摘要：文件《users.csv》共有20000条数据记录。",
-			Kind:         "structured_summary",
-		},
-		Score: 0.99,
-	}}
-
-	if shouldExpandStructuredSourceRows(model.ChatCompletionRequest{}, "当前有多少记录", chunks) {
-		t.Fatal("expected pure count question to use summary without source row expansion")
-	}
-	if !shouldExpandStructuredSourceRows(model.ChatCompletionRequest{}, "展示这些数据", chunks) {
-		t.Fatal("expected data display question to expand source rows")
 	}
 }
 

@@ -38,7 +38,6 @@ const rerankStrategyLabel = (strategy?: string) => (
 const retrievalChannelLabel = (channel: string) => {
   if (channel === 'dense') return '向量'
   if (channel === 'sparse') return '关键词'
-  if (channel === 'lexical') return '词法'
   return channel
 }
 
@@ -48,22 +47,19 @@ const retrievalContributionSummary = (result: RetrievalDebugResponse) => {
       const channels = item.retrievalChannels ?? []
       const hasDense = channels.includes('dense')
       const hasSparse = channels.includes('sparse')
-      const hasLexical = channels.includes('lexical')
       if (hasDense && hasSparse) acc.both += 1
       else if (hasSparse) acc.sparseOnly += 1
       else if (hasDense) acc.denseOnly += 1
-      else if (hasLexical) acc.lexicalOnly += 1
       else acc.unknown += 1
       return acc
     },
-    { both: 0, denseOnly: 0, sparseOnly: 0, lexicalOnly: 0, unknown: 0 },
+    { both: 0, denseOnly: 0, sparseOnly: 0, unknown: 0 },
   )
 
   return [
     `双路命中 ${counts.both}`,
     `向量独有 ${counts.denseOnly}`,
     `关键词独有 ${counts.sparseOnly}`,
-    counts.lexicalOnly > 0 ? `词法兜底 ${counts.lexicalOnly}` : '',
     counts.unknown > 0 ? `未标记 ${counts.unknown}` : '',
   ].filter(Boolean)
 }
@@ -264,21 +260,6 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
                 {retrievalContributionSummary(result).map((item) => <span key={item}>{item}</span>)}
               </div>
             </section>
-
-            {result.evidenceGate && (
-              <section>
-                <h4>证据门控</h4>
-                <p>{result.evidenceGate.reason || (result.evidenceGate.enabled ? '已启用' : '未启用')}</p>
-                {result.evidenceGate.enabled && (
-                  <div className="kb-retrieval-gate-metrics">
-                    <span>候选 {result.evidenceGate.candidateCount}</span>
-                    <span>保留 {result.evidenceGate.selectedCount}</span>
-                    <span>直接证据 {result.evidenceGate.directEvidenceCount}</span>
-                    <span>过滤 {result.evidenceGate.removedCount}</span>
-                  </div>
-                )}
-              </section>
-            )}
 
             {result.contextPreview && (
               <section>

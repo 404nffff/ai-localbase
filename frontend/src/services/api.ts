@@ -281,18 +281,6 @@ export interface RetrievalDebugConfidence {
   evidenceCoverage: number
 }
 
-export interface RetrievalEvidenceGateDiagnostic {
-  enabled: boolean
-  reason?: string
-  candidateCount: number
-  selectedCount: number
-  directEvidenceCount: number
-  weakEvidenceCount: number
-  removedCount: number
-  topBefore?: RetrievalDebugChunk[]
-  topAfter?: RetrievalDebugChunk[]
-}
-
 export interface EvalGroundTruthCase {
   id: string
   question: string
@@ -321,7 +309,6 @@ export interface RetrievalDebugResponse {
   count: number
   lowConfidence: boolean
   confidence: RetrievalDebugConfidence
-  evidenceGate?: RetrievalEvidenceGateDiagnostic
   contextPreview: string
   sources: Array<Record<string, string>>
   evalCandidate?: EvalGroundTruthCase

@@ -1199,7 +1199,7 @@ func TestMCPAgentOrientedTools(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsIncludesToolUseMetadata(t *testing.T) {
+func TestChatCompletionsAvoidsRedundantRetrievalToolUse(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouter(t)
 	defer cleanup()
 
@@ -1255,15 +1255,8 @@ func TestChatCompletionsIncludesToolUseMetadata(t *testing.T) {
 	var chatResult model.ChatCompletionResponse
 	decodeJSONResponse(t, resp.Body.Bytes(), &chatResult)
 	toolUseRaw, ok := chatResult.Metadata["toolUse"].([]any)
-	if !ok || len(toolUseRaw) == 0 {
-		t.Fatalf("expected toolUse metadata, got %#v", chatResult.Metadata["toolUse"])
-	}
-	firstToolUse, ok := toolUseRaw[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected toolUse item object, got %#v", toolUseRaw[0])
-	}
-	if firstToolUse["toolName"] != "search_knowledge_base" {
-		t.Fatalf("expected search_knowledge_base tool use, got %#v", firstToolUse)
+	if !ok || len(toolUseRaw) != 0 {
+		t.Fatalf("expected direct retrieval to avoid a duplicate MCP search, got %#v", chatResult.Metadata["toolUse"])
 	}
 }
 

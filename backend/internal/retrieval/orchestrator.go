@@ -7,28 +7,27 @@ import (
 
 // Orchestrator 负责协调整个检索流程
 type Orchestrator struct {
-	vectorStore  VectorStore
-	reranker     Reranker
-	evidenceGate EvidenceGate
-	config       Config
+	vectorStore VectorStore
+	reranker    Reranker
+	config      Config
 }
 
 // Config 检索配置
 type Config struct {
 	// 候选召回配置
-	CandidateTopK         int
-	CandidateTopKAllDocs  int
+	CandidateTopK        int
+	CandidateTopKAllDocs int
 
 	// 最终输出配置
-	FinalTopK             int
-	MaxChunksPerDocument  int
-	MaxContextChars       int
+	FinalTopK            int
+	MaxChunksPerDocument int
+	MaxContextChars      int
 
 	// 功能开关
-	EnableHybridSearch    bool
-	EnableSemanticRerank  bool
-	EnableQueryRewrite    bool
-	EnableAutoExpand      bool
+	EnableHybridSearch   bool
+	EnableSemanticRerank bool
+	EnableQueryRewrite   bool
+	EnableAutoExpand     bool
 }
 
 // VectorStore 向量存储接口
@@ -42,11 +41,6 @@ type Reranker interface {
 	Rerank(ctx context.Context, query string, chunks []Chunk) ([]Chunk, error)
 }
 
-// EvidenceGate 证据门控接口
-type EvidenceGate interface {
-	Filter(ctx context.Context, query string, chunks []Chunk) ([]Chunk, error)
-}
-
 // Chunk 检索到的文档块
 type Chunk struct {
 	ID              string
@@ -58,12 +52,11 @@ type Chunk struct {
 }
 
 // NewOrchestrator 创建检索编排器
-func NewOrchestrator(vectorStore VectorStore, reranker Reranker, evidenceGate EvidenceGate, config Config) *Orchestrator {
+func NewOrchestrator(vectorStore VectorStore, reranker Reranker, config Config) *Orchestrator {
 	return &Orchestrator{
-		vectorStore:  vectorStore,
-		reranker:     reranker,
-		evidenceGate: evidenceGate,
-		config:       config,
+		vectorStore: vectorStore,
+		reranker:    reranker,
+		config:      config,
 	}
 }
 
@@ -90,14 +83,6 @@ func (o *Orchestrator) Retrieve(ctx context.Context, query string, queryVector [
 
 	// Stage 3: MMR 选择（多样性）
 	selected := o.selectWithMMR(reranked, o.config.FinalTopK, o.config.MaxChunksPerDocument)
-
-	// Stage 4: 证据门控（相关性过滤）
-	if o.evidenceGate != nil {
-		selected, err = o.evidenceGate.Filter(ctx, query, selected)
-		if err != nil {
-			return nil, fmt.Errorf("evidence gate: %w", err)
-		}
-	}
 
 	return selected, nil
 }

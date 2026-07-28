@@ -646,18 +646,6 @@ type RetrievalDebugConfidence struct {
 	EvidenceCoverage float64  `json:"evidenceCoverage"`
 }
 
-type RetrievalEvidenceGateDiagnostic struct {
-	Enabled             bool                  `json:"enabled"`
-	Reason              string                `json:"reason,omitempty"`
-	CandidateCount      int                   `json:"candidateCount"`
-	SelectedCount       int                   `json:"selectedCount"`
-	DirectEvidenceCount int                   `json:"directEvidenceCount"`
-	WeakEvidenceCount   int                   `json:"weakEvidenceCount"`
-	RemovedCount        int                   `json:"removedCount"`
-	TopBefore           []RetrievalDebugChunk `json:"topBefore,omitempty"`
-	TopAfter            []RetrievalDebugChunk `json:"topAfter,omitempty"`
-}
-
 type RetrievalDebugResponse struct {
 	Query            string                          `json:"query"`
 	KnowledgeBaseID  string                          `json:"knowledgeBaseId,omitempty"`
@@ -670,7 +658,6 @@ type RetrievalDebugResponse struct {
 	Count            int                             `json:"count"`
 	LowConfidence    bool                            `json:"lowConfidence"`
 	Confidence       RetrievalDebugConfidence        `json:"confidence"`
-	EvidenceGate     RetrievalEvidenceGateDiagnostic `json:"evidenceGate,omitempty"`
 	ContextPreview   string                          `json:"contextPreview"`
 	Sources          []map[string]string             `json:"sources"`
 	EvalCandidate    *EvalGroundTruthCase            `json:"evalCandidate,omitempty"`

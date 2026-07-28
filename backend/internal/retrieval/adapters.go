@@ -8,8 +8,8 @@ import (
 
 // QdrantVectorStoreAdapter 将 QdrantService 适配为 VectorStore 接口
 type QdrantVectorStoreAdapter struct {
-	svc              *service.QdrantService
-	knowledgeBaseID  string
+	svc             *service.QdrantService
+	knowledgeBaseID string
 }
 
 func NewQdrantVectorStoreAdapter(svc *service.QdrantService, knowledgeBaseID string) *QdrantVectorStoreAdapter {
@@ -67,19 +67,6 @@ func (a *RerankerAdapter) Rerank(ctx context.Context, query string, chunks []Chu
 	return convertRetrievedToChunks(reranked), nil
 }
 
-// EvidenceGateAdapter 实现 EvidenceGate 接口
-type EvidenceGateAdapter struct{}
-
-func NewEvidenceGateAdapter() *EvidenceGateAdapter {
-	return &EvidenceGateAdapter{}
-}
-
-func (a *EvidenceGateAdapter) Filter(ctx context.Context, query string, chunks []Chunk) ([]Chunk, error) {
-	retrieved := convertChunksToRetrieved(chunks)
-	filtered := FilterRelevantChunks(query, retrieved)
-	return convertRetrievedToChunks(filtered), nil
-}
-
 // 辅助转换函数
 
 func convertQdrantResultsToChunks(results []service.QdrantSearchResult) []Chunk {
@@ -106,19 +93,19 @@ func convertQdrantResultsToChunks(results []service.QdrantSearchResult) []Chunk 
 
 func convertChunksToRetrieved(chunks []Chunk) []service.RetrievedChunk {
 	retrieved := make([]service.RetrievedChunk, len(chunks))
-	for i, c := range chunks {
+	for i, chunk := range chunks {
 		retrieved[i] = service.RetrievedChunk{
 			DocumentChunk: service.DocumentChunk{
-				ID:              c.ID,
-				KnowledgeBaseID: c.KnowledgeBaseID,
-				DocumentID:      c.DocumentID,
-				Text:            c.Content,
+				ID:              chunk.ID,
+				KnowledgeBaseID: chunk.KnowledgeBaseID,
+				DocumentID:      chunk.DocumentID,
+				Text:            chunk.Content,
 			},
-			Score:    c.Score,
-			RawScore: c.Score,
+			Score:    chunk.Score,
+			RawScore: chunk.Score,
 		}
-		if docName, ok := c.Metadata["document_name"].(string); ok {
-			retrieved[i].DocumentName = docName
+		if documentName, ok := chunk.Metadata["document_name"].(string); ok {
+			retrieved[i].DocumentName = documentName
 		}
 	}
 	return retrieved
