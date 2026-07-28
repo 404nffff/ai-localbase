@@ -12,8 +12,8 @@ func TestSemanticCacheHit(t *testing.T) {
 	vecB := normalizeFloat32Vector([]float32{0.99, 0.01, 0})
 	chunks := []RetrievedChunk{{DocumentChunk: DocumentChunk{ID: "c1", DocumentName: "doc", Text: "hello"}}}
 
-	cache.Set(vecA, "query-a", chunks)
-	entry, ok := cache.Get(vecB)
+	cache.Set("kb=kb-1", vecA, "query-a", chunks)
+	entry, ok := cache.Get("kb=kb-1", vecB)
 	if !ok || entry == nil {
 		t.Fatalf("expected cache hit")
 	}
@@ -30,8 +30,8 @@ func TestSemanticCacheMiss(t *testing.T) {
 	cache := NewSemanticCache(0.92, 10, time.Minute)
 	vecA := normalizeFloat32Vector([]float32{1, 0, 0})
 	vecB := normalizeFloat32Vector([]float32{0, 1, 0})
-	cache.Set(vecA, "query-a", nil)
-	if _, ok := cache.Get(vecB); ok {
+	cache.Set("kb=kb-1", vecA, "query-a", nil)
+	if _, ok := cache.Get("kb=kb-1", vecB); ok {
 		t.Fatalf("expected cache miss")
 	}
 }
@@ -40,12 +40,12 @@ func TestSemanticCacheTTL(t *testing.T) {
 	ttl := 20 * time.Millisecond
 	cache := NewSemanticCache(0.92, 10, ttl)
 	vec := normalizeFloat32Vector([]float32{1, 0, 0})
-	cache.Set(vec, "query-a", nil)
+	cache.Set("kb=kb-1", vec, "query-a", nil)
 	if len(cache.entries) != 1 {
 		t.Fatalf("expected 1 entry")
 	}
 	cache.entries[0].CreatedAt = time.Now().Add(-2 * ttl)
-	if _, ok := cache.Get(vec); ok {
+	if _, ok := cache.Get("kb=kb-1", vec); ok {
 		t.Fatalf("expected cache miss after ttl")
 	}
 	if len(cache.entries) != 0 {
@@ -55,14 +55,29 @@ func TestSemanticCacheTTL(t *testing.T) {
 
 func TestSemanticCacheMaxEntries(t *testing.T) {
 	cache := NewSemanticCache(0.92, 2, time.Minute)
-	cache.Set(normalizeFloat32Vector([]float32{1, 0, 0}), "q1", nil)
-	cache.Set(normalizeFloat32Vector([]float32{0, 1, 0}), "q2", nil)
-	cache.Set(normalizeFloat32Vector([]float32{0, 0, 1}), "q3", nil)
+	cache.Set("kb=kb-1", normalizeFloat32Vector([]float32{1, 0, 0}), "q1", nil)
+	cache.Set("kb=kb-1", normalizeFloat32Vector([]float32{0, 1, 0}), "q2", nil)
+	cache.Set("kb=kb-1", normalizeFloat32Vector([]float32{0, 0, 1}), "q3", nil)
 	if len(cache.entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(cache.entries))
 	}
 	if cache.entries[0].Query != "q2" || cache.entries[1].Query != "q3" {
 		t.Fatalf("expected FIFO eviction, got %s, %s", cache.entries[0].Query, cache.entries[1].Query)
+	}
+}
+
+func TestSemanticCacheDoesNotCrossScopes(t *testing.T) {
+	cache := NewSemanticCache(0.92, 10, time.Minute)
+	vector := normalizeFloat32Vector([]float32{1, 0, 0})
+	cache.Set("kb=kb-novel", vector, "详细介绍", []RetrievedChunk{{
+		DocumentChunk: DocumentChunk{KnowledgeBaseID: "kb-novel", DocumentID: "doc-novel"},
+	}})
+
+	if _, ok := cache.Get("kb=kb-school", vector); ok {
+		t.Fatal("semantic cache must not reuse chunks across knowledge base scopes")
+	}
+	if _, ok := cache.Get("kb=kb-novel|doc=doc-other", vector); ok {
+		t.Fatal("semantic cache must not reuse chunks across document scopes")
 	}
 }
 

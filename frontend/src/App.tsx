@@ -98,6 +98,9 @@ export interface ChatMessage {
 export interface Conversation {
   id: string
   title: string
+  knowledgeBaseId: string
+  documentId: string
+  scopeVersion: number
   messages: ChatMessage[]
   createdAt: string
   updatedAt: string
@@ -456,12 +459,15 @@ const normalizeChatMetadata = (metadata?: ChatCompletionResponse['metadata'] | C
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
-const createEmptyConversation = (): Conversation => {
+const createEmptyConversation = (knowledgeBaseId = '', documentId = ''): Conversation => {
   const now = new Date().toISOString()
 
   return {
     id: createId(),
     title: '新的对话',
+    knowledgeBaseId,
+    documentId,
+    scopeVersion: 1,
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -492,6 +498,15 @@ const buildDirectoryUploadSummary = (task: DirectoryUploadTask) => {
 
   return parts.join(' · ')
 }
+
+const conversationMatchesScope = (
+  conversation: Conversation,
+  knowledgeBaseId: string,
+  documentId: string,
+) => (
+  conversation.knowledgeBaseId === knowledgeBaseId &&
+  conversation.documentId === documentId
+)
 
 const sleep = (delayMs: number) =>
   new Promise((resolve) => {
@@ -636,13 +651,10 @@ function AppContent() {
   )
 
   const selectedKnowledgeBase = useMemo(() => {
-    const fallbackKnowledgeBase = knowledgeBases[0] ?? null
-
-    return (
-      knowledgeBases.find(
-        (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId,
-      ) ?? fallbackKnowledgeBase
-    )
+    if (!selectedKnowledgeBaseId) return null
+    return knowledgeBases.find(
+      (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId,
+    ) ?? null
   }, [knowledgeBases, selectedKnowledgeBaseId])
 
   const selectedDocument = useMemo(() => {
@@ -681,9 +693,6 @@ function AppContent() {
           const nextKnowledgeBases = initialData.knowledgeBases
           setKnowledgeBases(nextKnowledgeBases)
           setConfig((prev) => normalizeAppConfig(initialData.config, prev))
-          setSelectedKnowledgeBaseId((current) => current ?? nextKnowledgeBases[0]?.id ?? null)
-          setSelectedDocumentId(null)
-
           const conversationItems = initialData.conversations
           if (conversationItems.length > 0) {
             const firstConversationId = conversationItems[0].id
@@ -691,6 +700,9 @@ function AppContent() {
             const restConversations = conversationItems.slice(1).map((conversation) => ({
               id: conversation.id,
               title: conversation.title,
+              knowledgeBaseId: conversation.knowledgeBaseId,
+              documentId: conversation.documentId,
+              scopeVersion: conversation.scopeVersion ?? 0,
               createdAt: conversation.createdAt,
               updatedAt: conversation.updatedAt,
               messages: [],
@@ -700,8 +712,25 @@ function AppContent() {
               return
             }
 
-            setConversations([firstConversation, ...restConversations])
-            setActiveConversationId(firstConversation.id)
+            if (firstConversation.scopeVersion < 1) {
+              const safeConversation = createEmptyConversation(firstConversation.knowledgeBaseId)
+              setConversations([safeConversation, firstConversation, ...restConversations])
+              setActiveConversationId(safeConversation.id)
+              setSelectedKnowledgeBaseId(safeConversation.knowledgeBaseId || null)
+              setSelectedDocumentId(null)
+            } else {
+              setConversations([firstConversation, ...restConversations])
+              setActiveConversationId(firstConversation.id)
+              setSelectedKnowledgeBaseId(firstConversation.knowledgeBaseId || null)
+              setSelectedDocumentId(firstConversation.documentId || null)
+            }
+          } else {
+            const initialKnowledgeBaseId = nextKnowledgeBases[0]?.id ?? ''
+            const initialConversation = createEmptyConversation(initialKnowledgeBaseId)
+            setConversations([initialConversation])
+            setActiveConversationId(initialConversation.id)
+            setSelectedKnowledgeBaseId(initialKnowledgeBaseId || null)
+            setSelectedDocumentId(null)
           }
 
           setBackendReady(true)
@@ -763,8 +792,37 @@ function AppContent() {
     return false
   }
 
+  const activateConversationScope = (knowledgeBaseId: string, documentId: string) => {
+    if (!ensureNoActiveGeneration('切换知识库范围')) {
+      return
+    }
+
+    setSelectedKnowledgeBaseId(knowledgeBaseId || null)
+    setSelectedDocumentId(documentId || null)
+
+    if (activeConversation && conversationMatchesScope(activeConversation, knowledgeBaseId, documentId)) {
+      return
+    }
+
+    if (activeConversation?.localOnly && activeConversation.messages.length === 0) {
+      setConversations((prev) => prev.map((conversation) => (
+        conversation.id === activeConversation.id
+          ? { ...conversation, knowledgeBaseId, documentId }
+          : conversation
+      )))
+      return
+    }
+
+    const conversation = createEmptyConversation(knowledgeBaseId, documentId)
+    setConversations((prev) => [conversation, ...prev])
+    setActiveConversationId(conversation.id)
+  }
+
   const handleCreateConversation = () => {
-    const conversation = createEmptyConversation()
+    const conversation = createEmptyConversation(
+      selectedKnowledgeBaseId ?? '',
+      selectedDocumentId ?? '',
+    )
 
     setConversations((prev) => [conversation, ...prev])
     setActiveConversationId(conversation.id)
@@ -777,6 +835,8 @@ function AppContent() {
       (existingConversation && existingConversation.messages.length > 0)
     ) {
       setActiveConversationId(conversationId)
+      setSelectedKnowledgeBaseId(existingConversation.knowledgeBaseId || null)
+      setSelectedDocumentId(existingConversation.documentId || null)
       return
     }
 
@@ -788,6 +848,8 @@ function AppContent() {
         ),
       )
       setActiveConversationId(conversationId)
+      setSelectedKnowledgeBaseId(loadedConversation.knowledgeBaseId || null)
+      setSelectedDocumentId(loadedConversation.documentId || null)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '加载会话失败，请稍后重试。'
@@ -865,7 +927,10 @@ function AppContent() {
       const fallbackConversation =
         remainingConversations[0] ??
         (() => {
-          const conversation = createEmptyConversation()
+          const conversation = createEmptyConversation(
+            selectedKnowledgeBaseId ?? '',
+            selectedDocumentId ?? '',
+          )
           return conversation
         })()
 
@@ -875,6 +940,8 @@ function AppContent() {
 
       if (activeConversationId === conversationId) {
         setActiveConversationId(fallbackConversation.id)
+        setSelectedKnowledgeBaseId(fallbackConversation.knowledgeBaseId || null)
+        setSelectedDocumentId(fallbackConversation.documentId || null)
       }
     } catch (error) {
       const message =
@@ -897,7 +964,10 @@ function AppContent() {
       if (!activeConversation.localOnly) {
         await deleteConversation(activeConversation.id)
       }
-      const emptyConversation = createEmptyConversation()
+      const emptyConversation = createEmptyConversation(
+        selectedKnowledgeBaseId ?? '',
+        selectedDocumentId ?? '',
+      )
       setConversations((prev) =>
         prev.map((conversation) =>
           conversation.id === activeConversation.id ? emptyConversation : conversation,
@@ -986,8 +1056,7 @@ function AppContent() {
       const createdKnowledgeBase = await createKnowledgeBase(name, description)
 
       setKnowledgeBases((prev) => [createdKnowledgeBase, ...prev])
-      setSelectedKnowledgeBaseId(createdKnowledgeBase.id)
-      setSelectedDocumentId(null)
+      activateConversationScope(createdKnowledgeBase.id, '')
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '创建知识库失败，请稍后重试。'
@@ -999,18 +1068,13 @@ function AppContent() {
     try {
       await deleteKnowledgeBase(knowledgeBaseId)
 
-      setKnowledgeBases((prev) => {
-        const nextKnowledgeBases = prev.filter(
-          (knowledgeBase) => knowledgeBase.id !== knowledgeBaseId,
-        )
-
-        if (selectedKnowledgeBaseId === knowledgeBaseId) {
-          setSelectedKnowledgeBaseId(nextKnowledgeBases[0]?.id ?? null)
-          setSelectedDocumentId(null)
-        }
-
-        return nextKnowledgeBases
-      })
+      const nextKnowledgeBases = knowledgeBases.filter(
+        (knowledgeBase) => knowledgeBase.id !== knowledgeBaseId,
+      )
+      setKnowledgeBases(nextKnowledgeBases)
+      if (selectedKnowledgeBaseId === knowledgeBaseId) {
+        activateConversationScope(nextKnowledgeBases[0]?.id ?? '', '')
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '删除知识库失败，请稍后重试。'
@@ -1019,16 +1083,14 @@ function AppContent() {
   }
 
   const handleSelectKnowledgeBase = (knowledgeBaseId: string) => {
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
-    setSelectedDocumentId(null)
+    activateConversationScope(knowledgeBaseId, '')
   }
 
   const handleSelectDocument = (
     knowledgeBaseId: string,
     documentId: string | null,
   ) => {
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
-    setSelectedDocumentId(documentId)
+    activateConversationScope(knowledgeBaseId, documentId ?? '')
   }
 
   const handleGenerateEvalDataset = async (
@@ -1170,7 +1232,6 @@ function AppContent() {
     }
 
     directoryUploadCancelRef.current = false
-    setSelectedKnowledgeBaseId(knowledgeBaseId)
 
     setDirectoryUploadTask((prev) => ({
       ...prev,
@@ -1313,10 +1374,6 @@ function AppContent() {
             : kb,
         ),
       )
-
-      if (newDocuments.length > 0) {
-        setSelectedDocumentId((current) => current ?? newDocuments[0].id)
-      }
 
       setDirectoryUploadTask((prev) => ({
         ...prev,
@@ -1570,7 +1627,9 @@ function AppContent() {
         ),
       )
 
-      setSelectedDocumentId((current) => (current === documentId ? null : current))
+      if (selectedDocumentId === documentId) {
+        activateConversationScope(knowledgeBaseId, '')
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '删除文档失败，请稍后重试。'
@@ -1630,6 +1689,31 @@ function AppContent() {
       return
     }
 
+    if (activeConversation.scopeVersion < 1) {
+      const safeConversation = createEmptyConversation(
+        selectedKnowledgeBaseId ?? activeConversation.knowledgeBaseId,
+        selectedDocumentId ?? activeConversation.documentId,
+      )
+      setConversations((prev) => [safeConversation, ...prev])
+      setActiveConversationId(safeConversation.id)
+      showToast('warning', '该历史会话创建于知识库隔离修复前，请在新会话中重新发送问题。')
+      return
+    }
+
+    const selectedScope = {
+      knowledgeBaseId: selectedKnowledgeBaseId ?? '',
+      documentId: selectedDocumentId ?? '',
+    }
+    if (!conversationMatchesScope(
+      activeConversation,
+      selectedScope.knowledgeBaseId,
+      selectedScope.documentId,
+    )) {
+      activateConversationScope(selectedScope.knowledgeBaseId, selectedScope.documentId)
+      showToast('warning', '知识库范围已切换，请在新会话中重新发送问题。')
+      return
+    }
+
     if (isOllamaSingleFlightMode && streamingConversationId) {
       showToast(
         'warning',
@@ -1678,8 +1762,8 @@ function AppContent() {
       conversationId,
       model: selectedChatModel,
       think: chatMode === 'think',
-      knowledgeBaseId: selectedKnowledgeBaseId ?? '',
-      documentId: selectedDocumentId ?? '',
+      knowledgeBaseId: activeConversation.knowledgeBaseId,
+      documentId: activeConversation.documentId,
       retrievalMode: config.retrieval.defaultSearchMode,
       config: {
         ...config.chat,
@@ -2056,8 +2140,7 @@ function AppContent() {
     if (!source.knowledgeBaseId || !source.documentId) {
       return
     }
-    setSelectedKnowledgeBaseId(source.knowledgeBaseId)
-    setSelectedDocumentId(source.documentId)
+    activateConversationScope(source.knowledgeBaseId, source.documentId)
     setCitationNavigationTarget({
       knowledgeBaseId: source.knowledgeBaseId,
       documentId: source.documentId,

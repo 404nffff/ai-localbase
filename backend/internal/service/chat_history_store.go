@@ -61,6 +61,7 @@ func (s *SQLiteChatHistoryStore) init() error {
 			title TEXT NOT NULL,
 			knowledge_base_id TEXT NOT NULL,
 			document_id TEXT NOT NULL,
+			scope_version INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
@@ -83,7 +84,46 @@ func (s *SQLiteChatHistoryStore) init() error {
 			return fmt.Errorf("initialize sqlite chat history schema: %w", err)
 		}
 	}
+	if err := s.ensureConversationScopeVersionColumn(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (s *SQLiteChatHistoryStore) ensureConversationScopeVersionColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(conversations)`)
+	if err != nil {
+		return fmt.Errorf("inspect sqlite chat history schema: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan sqlite chat history schema: %w", err)
+		}
+		if name == "scope_version" {
+			found = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate sqlite chat history schema: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close sqlite chat history schema rows: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE conversations ADD COLUMN scope_version INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add conversation scope version: %w", err)
+	}
 	return nil
 }
 
@@ -116,18 +156,20 @@ func (s *SQLiteChatHistoryStore) SaveConversation(conversation model.Conversatio
 	}()
 
 	if _, err = tx.Exec(
-		`INSERT INTO conversations (id, title, knowledge_base_id, document_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO conversations (id, title, knowledge_base_id, document_id, scope_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title = excluded.title,
 		   knowledge_base_id = excluded.knowledge_base_id,
 		   document_id = excluded.document_id,
+		   scope_version = excluded.scope_version,
 		   created_at = excluded.created_at,
 		   updated_at = excluded.updated_at`,
 		conversation.ID,
 		strings.TrimSpace(conversation.Title),
 		strings.TrimSpace(conversation.KnowledgeBaseID),
 		strings.TrimSpace(conversation.DocumentID),
+		conversation.ScopeVersion,
 		normalizeTimestamp(conversation.CreatedAt),
 		normalizeTimestamp(conversation.UpdatedAt),
 	); err != nil {
@@ -175,10 +217,10 @@ func (s *SQLiteChatHistoryStore) ListConversations() ([]model.ConversationListIt
 	}
 
 	rows, err := s.db.Query(`
-		SELECT c.id, c.title, c.knowledge_base_id, c.document_id, c.created_at, c.updated_at, COUNT(m.id)
+		SELECT c.id, c.title, c.knowledge_base_id, c.document_id, c.scope_version, c.created_at, c.updated_at, COUNT(m.id)
 		FROM conversations c
 		LEFT JOIN messages m ON m.conversation_id = c.id
-		GROUP BY c.id, c.title, c.knowledge_base_id, c.document_id, c.created_at, c.updated_at
+		GROUP BY c.id, c.title, c.knowledge_base_id, c.document_id, c.scope_version, c.created_at, c.updated_at
 		ORDER BY c.updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -193,6 +235,7 @@ func (s *SQLiteChatHistoryStore) ListConversations() ([]model.ConversationListIt
 			&item.Title,
 			&item.KnowledgeBaseID,
 			&item.DocumentID,
+			&item.ScopeVersion,
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.MessageCount,
@@ -221,7 +264,7 @@ func (s *SQLiteChatHistoryStore) GetConversation(id string) (*model.Conversation
 
 	var conversation model.Conversation
 	if err := s.db.QueryRow(
-		`SELECT id, title, knowledge_base_id, document_id, created_at, updated_at
+		`SELECT id, title, knowledge_base_id, document_id, scope_version, created_at, updated_at
 		 FROM conversations
 		 WHERE id = ?`,
 		conversationID,
@@ -230,6 +273,7 @@ func (s *SQLiteChatHistoryStore) GetConversation(id string) (*model.Conversation
 		&conversation.Title,
 		&conversation.KnowledgeBaseID,
 		&conversation.DocumentID,
+		&conversation.ScopeVersion,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	); err != nil {

@@ -390,6 +390,7 @@ type Conversation struct {
 	Title           string              `json:"title"`
 	KnowledgeBaseID string              `json:"knowledgeBaseId"`
 	DocumentID      string              `json:"documentId"`
+	ScopeVersion    int                 `json:"scopeVersion"`
 	CreatedAt       string              `json:"createdAt"`
 	UpdatedAt       string              `json:"updatedAt"`
 	Messages        []StoredChatMessage `json:"messages"`
@@ -408,6 +409,7 @@ type ConversationListItem struct {
 	Title           string `json:"title"`
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
 	DocumentID      string `json:"documentId"`
+	ScopeVersion    int    `json:"scopeVersion"`
 	CreatedAt       string `json:"createdAt"`
 	UpdatedAt       string `json:"updatedAt"`
 	MessageCount    int    `json:"messageCount"`

@@ -419,6 +419,56 @@ func TestBuildChatContextIncludesDocumentPreviews(t *testing.T) {
 	}
 }
 
+func TestFilterRetrievedChunksToScopeDropsForeignAndOrphanDocuments(t *testing.T) {
+	service := &AppService{state: &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{
+		"kb-school": {
+			ID: "kb-school",
+			Documents: []model.Document{{
+				ID:              "doc-school",
+				KnowledgeBaseID: "kb-school",
+				Name:            "武汉大学简介.pdf",
+			}},
+		},
+		"kb-novel": {
+			ID: "kb-novel",
+			Documents: []model.Document{{
+				ID:              "doc-novel",
+				KnowledgeBaseID: "kb-novel",
+				Name:            "作品大纲.md",
+			}},
+		},
+	}}}
+
+	chunks := []RetrievedChunk{
+		{DocumentChunk: DocumentChunk{ID: "school", KnowledgeBaseID: "kb-school", DocumentID: "doc-school"}},
+		{DocumentChunk: DocumentChunk{ID: "foreign", KnowledgeBaseID: "kb-novel", DocumentID: "doc-novel"}},
+		{DocumentChunk: DocumentChunk{ID: "orphan", KnowledgeBaseID: "kb-school", DocumentID: "doc-novel"}},
+	}
+	filtered := service.filterRetrievedChunksToScope(
+		model.ChatCompletionRequest{KnowledgeBaseID: "kb-school"},
+		[]string{"kb-school"},
+		chunks,
+	)
+	if len(filtered) != 1 || filtered[0].ID != "school" {
+		t.Fatalf("expected only the authoritative in-scope document, got %#v", filtered)
+	}
+}
+
+func TestBuildChatContextRejectsDocumentFromAnotherKnowledgeBase(t *testing.T) {
+	service := &AppService{state: &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{
+		"kb-school": {ID: "kb-school", Documents: []model.Document{{ID: "doc-school"}}},
+		"kb-novel":  {ID: "kb-novel", Documents: []model.Document{{ID: "doc-novel"}}},
+	}}}
+
+	_, _, err := service.BuildChatContext(model.ChatCompletionRequest{
+		KnowledgeBaseID: "kb-school",
+		DocumentID:      "doc-novel",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("expected cross-knowledge-base document scope to be rejected, got %v", err)
+	}
+}
+
 func TestRecentConversationHistorySkipsCurrentQueryAndDegradedReplies(t *testing.T) {
 	messages := []model.ChatMessage{
 		{Role: "user", Content: "小说大纲写得怎么样"},

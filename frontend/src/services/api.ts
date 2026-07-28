@@ -144,6 +144,7 @@ export interface BackendConversationListItem {
   title: string
   knowledgeBaseId: string
   documentId: string
+  scopeVersion?: number
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -158,6 +159,7 @@ export interface BackendConversation {
   title: string
   knowledgeBaseId: string
   documentId: string
+  scopeVersion?: number
   createdAt: string
   updatedAt: string
   messages: Array<{
@@ -492,6 +494,9 @@ const isLegacyOperationalAssistantMessage = (
 export const normalizeConversation = (conversation: BackendConversation): Conversation => ({
   id: conversation.id,
   title: conversation.title,
+  knowledgeBaseId: conversation.knowledgeBaseId ?? '',
+  documentId: conversation.documentId ?? '',
+  scopeVersion: conversation.scopeVersion ?? 0,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
   messages: (conversation.messages ?? [])
@@ -611,11 +616,11 @@ const jsonRequest = (body: unknown, init: RequestInit = {}): RequestInit => ({
   body: JSON.stringify(body),
 })
 
-const serializeConversation = (conversation: Conversation, title = conversation.title) => ({
+export const serializeConversation = (conversation: Conversation, title = conversation.title) => ({
   id: conversation.id,
   title,
-  knowledgeBaseId: '',
-  documentId: '',
+  knowledgeBaseId: conversation.knowledgeBaseId,
+  documentId: conversation.documentId,
   messages: conversation.messages.map((message) => ({
     id: message.id,
     role: message.role,

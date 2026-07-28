@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -46,6 +47,12 @@ const (
 	mcpImportJobContentLimit      = 256 * 1024
 	maxMultiQuerySearchQueries    = 8
 	mcpJobCancelWarning           = "任务取消是 best-effort；如果底层导入已进入注册或索引阶段，文档可能已经完成导入。"
+	conversationScopeVersion      = 1
+)
+
+var (
+	ErrConversationScopeMismatch      = errors.New("conversation scope mismatch")
+	ErrConversationScopeUpgradeNeeded = errors.New("legacy conversation scope is not trusted")
 )
 
 type AppService struct {
@@ -1802,6 +1809,11 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	if err != nil {
 		return "", nil, err
 	}
+	knowledgeBaseIDs, err := s.resolveRetrievalKnowledgeBaseIDs(req)
+	if err != nil {
+		return "", nil, err
+	}
+	chunks = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, chunks)
 
 	query := latestUserMessage(req.Messages)
 
@@ -2112,6 +2124,7 @@ func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query
 		}
 		verboseDetails.VectorSearchMs = time.Since(searchStart).Milliseconds()
 	}
+	candidates = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, candidates)
 
 	verboseDetails.CandidatesCount = len(candidates)
 	verboseDetails.TopCandidates = convertToDebugChunks(candidates, query, 5)
@@ -2269,7 +2282,11 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest, relevantD
 	defer s.state.Mu.RUnlock()
 
 	if req.DocumentID != "" {
-		for _, kb := range s.state.KnowledgeBases {
+		if req.KnowledgeBaseID != "" {
+			kb, ok := s.state.KnowledgeBases[req.KnowledgeBaseID]
+			if !ok {
+				return "", nil, fmt.Errorf("knowledge base not found")
+			}
 			for _, document := range kb.Documents {
 				if document.ID == req.DocumentID {
 					return fmt.Sprintf("当前问答范围为文档《%s》，所属知识库为“%s”。文档摘要：%s", document.Name, kb.Name, document.ContentPreview), []map[string]string{{
@@ -2279,9 +2296,32 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest, relevantD
 					}}, nil
 				}
 			}
+			return "", nil, fmt.Errorf("document does not belong to knowledge base")
 		}
 
-		return "", nil, fmt.Errorf("document not found")
+		var matchedKnowledgeBase *model.KnowledgeBase
+		var matchedDocument *model.Document
+		for _, kb := range s.state.KnowledgeBases {
+			for _, document := range kb.Documents {
+				if document.ID == req.DocumentID {
+					if matchedDocument != nil {
+						return "", nil, fmt.Errorf("document id is ambiguous; knowledgeBaseId is required")
+					}
+					kbCopy := kb
+					documentCopy := document
+					matchedKnowledgeBase = &kbCopy
+					matchedDocument = &documentCopy
+				}
+			}
+		}
+		if matchedDocument == nil || matchedKnowledgeBase == nil {
+			return "", nil, fmt.Errorf("document not found")
+		}
+		return fmt.Sprintf("当前问答范围为文档《%s》，所属知识库为“%s”。文档摘要：%s", matchedDocument.Name, matchedKnowledgeBase.Name, matchedDocument.ContentPreview), []map[string]string{{
+			"knowledgeBaseId": matchedKnowledgeBase.ID,
+			"documentId":      matchedDocument.ID,
+			"documentName":    matchedDocument.Name,
+		}}, nil
 	}
 
 	if req.KnowledgeBaseID != "" {
@@ -2445,6 +2485,26 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 	if conversationID == "" {
 		return nil, fmt.Errorf("conversation id is required")
 	}
+	if err := s.validateKnowledgeScope(req.KnowledgeBaseID, req.DocumentID); err != nil {
+		return nil, err
+	}
+	existing, err := s.chatHistory.GetConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && !conversationScopesEqual(existing.KnowledgeBaseID, existing.DocumentID, req.KnowledgeBaseID, req.DocumentID) {
+		return nil, fmt.Errorf(
+			"%w: existing knowledgeBaseId=%q documentId=%q, requested knowledgeBaseId=%q documentId=%q",
+			ErrConversationScopeMismatch,
+			existing.KnowledgeBaseID,
+			existing.DocumentID,
+			strings.TrimSpace(req.KnowledgeBaseID),
+			strings.TrimSpace(req.DocumentID),
+		)
+	}
+	if existing != nil && existing.ScopeVersion < conversationScopeVersion {
+		return nil, fmt.Errorf("%w: create a new conversation before continuing", ErrConversationScopeUpgradeNeeded)
+	}
 	messages := cloneStoredMessages(req.Messages)
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("conversation messages cannot be empty")
@@ -2456,6 +2516,7 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 		Title:           strings.TrimSpace(req.Title),
 		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
 		DocumentID:      strings.TrimSpace(req.DocumentID),
+		ScopeVersion:    conversationScopeVersion,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
 		Messages:        messages,
@@ -2467,6 +2528,86 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 		return nil, err
 	}
 	return &conversation, nil
+}
+
+func (s *AppService) ValidateChatRequestScope(req model.ChatCompletionRequest) error {
+	if s == nil {
+		return fmt.Errorf("app service is nil")
+	}
+	if err := s.validateKnowledgeScope(req.KnowledgeBaseID, req.DocumentID); err != nil {
+		return err
+	}
+	conversationID := strings.TrimSpace(req.ConversationID)
+	if conversationID == "" || s.chatHistory == nil {
+		return nil
+	}
+	existing, err := s.chatHistory.GetConversation(conversationID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return nil
+	}
+	if existing.ScopeVersion < conversationScopeVersion {
+		return fmt.Errorf("%w: create a new conversation before continuing", ErrConversationScopeUpgradeNeeded)
+	}
+	if !conversationScopesEqual(existing.KnowledgeBaseID, existing.DocumentID, req.KnowledgeBaseID, req.DocumentID) {
+		return fmt.Errorf(
+			"%w: create a new conversation before changing knowledgeBaseId or documentId",
+			ErrConversationScopeMismatch,
+		)
+	}
+	return nil
+}
+
+func (s *AppService) validateKnowledgeScope(knowledgeBaseID, documentID string) error {
+	if s == nil || s.state == nil {
+		return fmt.Errorf("app service is nil")
+	}
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	documentID = strings.TrimSpace(documentID)
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+
+	if knowledgeBaseID != "" {
+		kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+		if !ok {
+			return fmt.Errorf("knowledge base not found")
+		}
+		if documentID == "" {
+			return nil
+		}
+		for _, document := range kb.Documents {
+			if document.ID == documentID {
+				return nil
+			}
+		}
+		return fmt.Errorf("document does not belong to knowledge base")
+	}
+
+	if documentID == "" {
+		return nil
+	}
+	matches := 0
+	for _, kb := range s.state.KnowledgeBases {
+		for _, document := range kb.Documents {
+			if document.ID == documentID {
+				matches++
+			}
+		}
+	}
+	if matches == 0 {
+		return fmt.Errorf("document not found")
+	}
+	if matches > 1 {
+		return fmt.Errorf("document id is ambiguous; knowledgeBaseId is required")
+	}
+	return nil
+}
+
+func conversationScopesEqual(leftKnowledgeBaseID, leftDocumentID, rightKnowledgeBaseID, rightDocumentID string) bool {
+	return strings.TrimSpace(leftKnowledgeBaseID) == strings.TrimSpace(rightKnowledgeBaseID) &&
+		strings.TrimSpace(leftDocumentID) == strings.TrimSpace(rightDocumentID)
 }
 
 func (s *AppService) ListConversations() ([]model.ConversationListItem, error) {
@@ -2773,6 +2914,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	if err != nil {
 		return nil, err
 	}
+	cacheScope := s.retrievalCacheScope(req, knowledgeBaseIDs)
 
 	query := latestUserMessage(req.Messages)
 	params := s.resolveRetrievalParams(req)
@@ -2794,8 +2936,11 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			queryVector = vectors[0]
 		}
 		queryEmbedding = float64ToFloat32(queryVector)
-		if entry, ok := s.semanticCache.Get(queryEmbedding); ok {
-			return entry.Chunks, nil
+		if entry, ok := s.semanticCache.Get(cacheScope, queryEmbedding); ok {
+			cached := s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, entry.Chunks)
+			if len(cached) > 0 || len(entry.Chunks) == 0 {
+				return cached, nil
+			}
 		}
 	}
 
@@ -2849,6 +2994,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 					candidates = append(candidates, item)
 				}
 			}
+			candidates = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, candidates)
 			selected := s.applySelectionStrategy(req, query, ctx, candidates, params)
 
 			if autoExpand && strings.TrimSpace(req.DocumentID) == "" && isLowConfidenceSelection(query, selected) {
@@ -2871,6 +3017,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 						expandedCandidates = append(expandedCandidates, item)
 					}
 				}
+				expandedCandidates = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, expandedCandidates)
 				if len(expandedCandidates) > 0 {
 					expandedParams := params
 					expandedParams.perDocumentLimit++
@@ -2882,7 +3029,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			}
 
 			if s.semanticCache != nil && len(queryEmbedding) > 0 {
-				s.semanticCache.Set(queryEmbedding, query, selected)
+				s.semanticCache.Set(cacheScope, queryEmbedding, query, selected)
 			}
 			logRetrievalMetrics(req, query, params, candidates, selected)
 			return selected, nil
@@ -2911,6 +3058,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	if err != nil {
 		return nil, err
 	}
+	candidates = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, candidates)
 	selected := s.applySelectionStrategy(req, query, ctx, candidates, params)
 
 	if autoExpand && strings.TrimSpace(req.DocumentID) == "" && isLowConfidenceSelection(query, selected) {
@@ -2924,6 +3072,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		})
 		expandedCandidates, err := s.collectCandidatesForQueries(ctx, knowledgeBaseIDs, req, queryVector, searchQueries, expandedCandidateTopK, expandUseHybrid, query)
 		if err == nil {
+			expandedCandidates = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, expandedCandidates)
 			expandedParams := params
 			expandedParams.perDocumentLimit++
 			expandedSelected := s.applySelectionStrategy(req, query, ctx, expandedCandidates, expandedParams)
@@ -2934,10 +3083,78 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	}
 
 	if s.semanticCache != nil && len(queryEmbedding) > 0 {
-		s.semanticCache.Set(queryEmbedding, query, selected)
+		s.semanticCache.Set(cacheScope, queryEmbedding, query, selected)
 	}
 	logRetrievalMetrics(req, query, params, candidates, selected)
 	return selected, nil
+}
+
+func (s *AppService) retrievalCacheScope(req model.ChatCompletionRequest, knowledgeBaseIDs []string) string {
+	ids := append([]string(nil), knowledgeBaseIDs...)
+	sort.Strings(ids)
+	cfg := s.retrievalConfigForRequest(req)
+	return fmt.Sprintf(
+		"kb=%s|doc=%s|mode=%s|rerank=%s|rewrite=%t|variants=%d",
+		strings.Join(ids, ","),
+		strings.TrimSpace(req.DocumentID),
+		s.resolvedRetrievalSearchMode(req),
+		cfg.RerankStrategy,
+		cfg.EnableQueryRewrite,
+		cfg.QueryRewriteMaxVariants,
+	)
+}
+
+func (s *AppService) filterRetrievedChunksToScope(req model.ChatCompletionRequest, knowledgeBaseIDs []string, chunks []RetrievedChunk) []RetrievedChunk {
+	if s == nil || s.state == nil || len(chunks) == 0 {
+		return nil
+	}
+
+	allowedKnowledgeBases := make(map[string]map[string]struct{}, len(knowledgeBaseIDs))
+	s.state.Mu.RLock()
+	for _, knowledgeBaseID := range knowledgeBaseIDs {
+		knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+		kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+		if !ok {
+			continue
+		}
+		documents := make(map[string]struct{}, len(kb.Documents))
+		for _, document := range kb.Documents {
+			documentID := strings.TrimSpace(document.ID)
+			if documentID != "" {
+				documents[documentID] = struct{}{}
+			}
+		}
+		allowedKnowledgeBases[knowledgeBaseID] = documents
+	}
+	s.state.Mu.RUnlock()
+
+	expectedDocumentID := strings.TrimSpace(req.DocumentID)
+	filtered := make([]RetrievedChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		knowledgeBaseID := strings.TrimSpace(chunk.KnowledgeBaseID)
+		documentID := strings.TrimSpace(chunk.DocumentID)
+		documents, allowed := allowedKnowledgeBases[knowledgeBaseID]
+		if !allowed || documentID == "" {
+			continue
+		}
+		if _, allowed = documents[documentID]; !allowed {
+			continue
+		}
+		if expectedDocumentID != "" && documentID != expectedDocumentID {
+			continue
+		}
+		filtered = append(filtered, chunk)
+	}
+	if len(filtered) != len(chunks) {
+		log.Printf(
+			"retrieval scope filter dropped %d/%d chunks for knowledgeBaseId=%q documentId=%q",
+			len(chunks)-len(filtered),
+			len(chunks),
+			strings.TrimSpace(req.KnowledgeBaseID),
+			expectedDocumentID,
+		)
+	}
+	return filtered
 }
 
 func (s *AppService) resolveRetrievalKnowledgeBaseIDs(req model.ChatCompletionRequest) ([]string, error) {
@@ -2945,19 +3162,39 @@ func (s *AppService) resolveRetrievalKnowledgeBaseIDs(req model.ChatCompletionRe
 	defer s.state.Mu.RUnlock()
 
 	if strings.TrimSpace(req.KnowledgeBaseID) != "" {
-		if _, ok := s.state.KnowledgeBases[req.KnowledgeBaseID]; !ok {
+		kb, ok := s.state.KnowledgeBases[req.KnowledgeBaseID]
+		if !ok {
 			return nil, fmt.Errorf("knowledge base not found")
+		}
+		if strings.TrimSpace(req.DocumentID) != "" {
+			found := false
+			for _, document := range kb.Documents {
+				if document.ID == req.DocumentID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("document does not belong to knowledge base")
+			}
 		}
 		return []string{req.KnowledgeBaseID}, nil
 	}
 
 	if strings.TrimSpace(req.DocumentID) != "" {
+		matchedKnowledgeBaseID := ""
 		for _, kb := range s.state.KnowledgeBases {
 			for _, document := range kb.Documents {
 				if document.ID == req.DocumentID {
-					return []string{kb.ID}, nil
+					if matchedKnowledgeBaseID != "" {
+						return nil, fmt.Errorf("document id is ambiguous; knowledgeBaseId is required")
+					}
+					matchedKnowledgeBaseID = kb.ID
 				}
 			}
+		}
+		if matchedKnowledgeBaseID != "" {
+			return []string{matchedKnowledgeBaseID}, nil
 		}
 		return nil, fmt.Errorf("document not found")
 	}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeConversation } from './api'
+import { normalizeConversation, serializeConversation } from './api'
 import type { BackendConversation } from './api'
 
 describe('normalizeConversation', () => {
@@ -40,7 +40,9 @@ describe('normalizeConversation', () => {
       ],
     }
 
-    expect(normalizeConversation(conversation).messages.map((message) => message.id)).toEqual([
+    const normalized = normalizeConversation(conversation)
+    expect(normalized.scopeVersion).toBe(0)
+    expect(normalized.messages.map((message) => message.id)).toEqual([
       'real-answer',
       'user-message',
     ])
@@ -66,5 +68,32 @@ describe('normalizeConversation', () => {
     }
 
     expect(normalizeConversation(conversation).messages[0].metadata).toBeUndefined()
+  })
+
+  it('preserves the conversation knowledge scope when normalizing and saving', () => {
+    const backendConversation: BackendConversation = {
+      id: 'conversation-scoped',
+      title: '知识库会话',
+      knowledgeBaseId: 'kb-school',
+      documentId: 'doc-school',
+      scopeVersion: 1,
+      createdAt: '2026-07-27T00:00:00Z',
+      updatedAt: '2026-07-27T00:00:01Z',
+      messages: [{
+        id: 'message-1',
+        role: 'user',
+        content: '详细介绍',
+        createdAt: '2026-07-27T00:00:01Z',
+      }],
+    }
+
+    const conversation = normalizeConversation(backendConversation)
+    expect(conversation.knowledgeBaseId).toBe('kb-school')
+    expect(conversation.documentId).toBe('doc-school')
+    expect(conversation.scopeVersion).toBe(1)
+    expect(serializeConversation(conversation)).toMatchObject({
+      knowledgeBaseId: 'kb-school',
+      documentId: 'doc-school',
+    })
   })
 })

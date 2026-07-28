@@ -14,6 +14,7 @@ const (
 
 // SemanticCacheEntry 语义缓存条目
 type SemanticCacheEntry struct {
+	Scope          string
 	QueryEmbedding []float32
 	Query          string
 	Chunks         []RetrievedChunk
@@ -53,8 +54,8 @@ func NewSemanticCache(threshold float32, maxEntries int, ttl time.Duration) *Sem
 // Get 查找语义相似的缓存条目
 // 遍历所有 entries，计算 cosine similarity，返回第一个超过阈值的
 // 同时清理过期条目
-func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool) {
-	if c == nil || len(queryEmbedding) == 0 {
+func (c *SemanticCache) Get(scope string, queryEmbedding []float32) (*SemanticCacheEntry, bool) {
+	if c == nil || scope == "" || len(queryEmbedding) == 0 {
 		return nil, false
 	}
 	c.mu.Lock()
@@ -74,7 +75,7 @@ func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool
 	c.entries = filtered
 
 	for _, entry := range c.entries {
-		if len(entry.QueryEmbedding) == 0 {
+		if entry.Scope != scope || len(entry.QueryEmbedding) == 0 {
 			continue
 		}
 		similarity := cosineSimilarityLocal(queryEmbedding, entry.QueryEmbedding)
@@ -89,8 +90,8 @@ func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool
 
 // Set 存入缓存条目
 // 若超过 maxEntries，移除最旧的条目（FIFO）
-func (c *SemanticCache) Set(queryEmbedding []float32, query string, chunks []RetrievedChunk) {
-	if c == nil || len(queryEmbedding) == 0 {
+func (c *SemanticCache) Set(scope string, queryEmbedding []float32, query string, chunks []RetrievedChunk) {
+	if c == nil || scope == "" || len(queryEmbedding) == 0 {
 		return
 	}
 	c.mu.Lock()
@@ -110,6 +111,7 @@ func (c *SemanticCache) Set(queryEmbedding []float32, query string, chunks []Ret
 	c.entries = filtered
 
 	entry := &SemanticCacheEntry{
+		Scope:          scope,
 		QueryEmbedding: cloneFloat32Slice(queryEmbedding),
 		Query:          query,
 		Chunks:         cloneRetrievedChunks(chunks),
@@ -176,6 +178,7 @@ func cloneSemanticCacheEntry(entry *SemanticCacheEntry) *SemanticCacheEntry {
 		return nil
 	}
 	cloned := &SemanticCacheEntry{
+		Scope:          entry.Scope,
 		QueryEmbedding: cloneFloat32Slice(entry.QueryEmbedding),
 		Query:          entry.Query,
 		Chunks:         cloneRetrievedChunks(entry.Chunks),

@@ -1326,6 +1326,56 @@ func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRejectsConversationKnowledgeBaseChange(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	listResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list knowledge bases: status=%d body=%s", listResp.Code, listResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, listResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	createResp := performJSONRequest(t, engine, http.MethodPost, "/api/knowledge-bases", map[string]string{
+		"name": "另一个知识库",
+	})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create knowledge base: status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	var secondKnowledgeBase model.KnowledgeBase
+	decodeJSONResponse(t, createResp.Body.Bytes(), &secondKnowledgeBase)
+
+	chatPayload := map[string]any{
+		"conversationId":  "conversation-scope-e2e",
+		"knowledgeBaseId": kbList.Items[0].ID,
+		"messages": []map[string]string{{
+			"role":    "user",
+			"content": "你好",
+		}},
+	}
+	firstResp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions", chatPayload)
+	if firstResp.Code != http.StatusOK {
+		t.Fatalf("first chat: status=%d body=%s", firstResp.Code, firstResp.Body.String())
+	}
+
+	chatPayload["knowledgeBaseId"] = secondKnowledgeBase.ID
+	secondResp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions", chatPayload)
+	if secondResp.Code != http.StatusConflict {
+		t.Fatalf("expected scope conflict 409, got %d, body=%s", secondResp.Code, secondResp.Body.String())
+	}
+	var apiErr model.APIError
+	decodeJSONResponse(t, secondResp.Body.Bytes(), &apiErr)
+	if apiErr.Error.Code != "conflict" || !strings.Contains(apiErr.Error.Message, "conversation scope mismatch") {
+		t.Fatalf("expected explicit conversation scope mismatch, got %#v", apiErr)
+	}
+}
+
 func TestChatCompletionsReturnsModelErrorWithoutFabricatedAnswer(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouterWithModelHandler(t, nil, unavailableModelHandler)
 	defer cleanup()

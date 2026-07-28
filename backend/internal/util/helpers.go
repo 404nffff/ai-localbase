@@ -1,6 +1,8 @@
 package util
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,8 +13,12 @@ import (
 var idCounter atomic.Uint64
 
 func NextID(prefix string) string {
+	var randomBytes [12]byte
+	if _, err := rand.Read(randomBytes[:]); err == nil {
+		return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(randomBytes[:]))
+	}
 	id := idCounter.Add(1)
-	return fmt.Sprintf("%s-%d", prefix, id)
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), id)
 }
 
 func NextRequestID() string {
