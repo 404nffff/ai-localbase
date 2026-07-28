@@ -32,7 +32,7 @@ const (
 type openAIChatRequest struct {
 	Model       string              `json:"model"`
 	Messages    []model.ChatMessage `json:"messages"`
-	Temperature float64             `json:"temperature,omitempty"`
+	Temperature float64             `json:"temperature"`
 }
 
 type openAIChatResponse struct {
@@ -53,7 +53,7 @@ type openAICompatibleErrorPayload struct {
 type openAIChatStreamRequest struct {
 	Model       string              `json:"model"`
 	Messages    []model.ChatMessage `json:"messages"`
-	Temperature float64             `json:"temperature,omitempty"`
+	Temperature float64             `json:"temperature"`
 	Stream      bool                `json:"stream"`
 }
 
@@ -79,7 +79,7 @@ type ollamaChatRequest struct {
 }
 
 type ollamaOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
+	Temperature float64 `json:"temperature"`
 }
 
 type ollamaChatResponse struct {
@@ -368,9 +368,7 @@ func buildOllamaChatRequest(cfg model.ChatModelConfig, req model.ChatCompletionR
 		Messages: req.Messages,
 		Stream:   stream,
 		Think:    &think,
-	}
-	if cfg.Temperature > 0 {
-		payload.Options = &ollamaOptions{Temperature: cfg.Temperature}
+		Options:  &ollamaOptions{Temperature: cfg.Temperature},
 	}
 	return payload
 }

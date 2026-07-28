@@ -80,6 +80,24 @@ func TestBuildOllamaChatRequestThinkingMode(t *testing.T) {
 	}
 }
 
+func TestChatRequestPayloadsPreserveZeroTemperature(t *testing.T) {
+	payloads := []any{
+		openAIChatRequest{},
+		openAIChatStreamRequest{},
+		buildOllamaChatRequest(model.ChatModelConfig{}, model.ChatCompletionRequest{}, false),
+	}
+
+	for _, payload := range payloads {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		if !strings.Contains(string(body), `"temperature":0`) {
+			t.Fatalf("expected explicit zero temperature, got %s", body)
+		}
+	}
+}
+
 func TestChatReturnsModelErrorWithoutFallbackResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"message":"model unavailable"}}`, http.StatusServiceUnavailable)
