@@ -61,8 +61,7 @@ func main() {
 	}
 	llmService := service.NewLLMService()
 	mcpRegistry := mcp.DefaultRegistry(appService)
-	toolPlanner := mcp.NewToolUsePlanner(mcpRegistry)
-	appHandler := handler.NewAppHandler(serverConfig, appService, llmService, toolPlanner)
+	appHandler := handler.NewAppHandler(serverConfig, appService, llmService)
 	configHandler := handler.NewConfigHandler(appService, qdrantService)
 	authHandler := handler.NewAuthHandler(authService, serverConfig.EnableAuth)
 	mcpServer := mcp.NewServer(mcpRegistry, appService, authService, serverConfig)

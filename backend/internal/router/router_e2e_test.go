@@ -1216,8 +1216,8 @@ func TestMCPAgentOrientedTools(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsAvoidsRedundantRetrievalToolUse(t *testing.T) {
-	engine, modelBaseURL, cleanup := newTestRouter(t)
+func TestChatCompletionsDoesNotInvokeMCPToolsAutomatically(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
 	defer cleanup()
 
 	listResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
@@ -1253,8 +1253,8 @@ func TestChatCompletionsAvoidsRedundantRetrievalToolUse(t *testing.T) {
 		"documentId":      "",
 		"config": map[string]any{
 			"provider":    "ollama",
-			"baseUrl":     modelBaseURL,
-			"model":       "chat-test-model",
+			"baseUrl":     "http://127.0.0.1:1",
+			"model":       "request-override-model",
 			"apiKey":      "",
 			"temperature": 0.2,
 		},
@@ -1273,12 +1273,12 @@ func TestChatCompletionsAvoidsRedundantRetrievalToolUse(t *testing.T) {
 	decodeJSONResponse(t, resp.Body.Bytes(), &chatResult)
 	toolUseRaw, ok := chatResult.Metadata["toolUse"].([]any)
 	if !ok || len(toolUseRaw) != 0 {
-		t.Fatalf("expected direct retrieval to avoid a duplicate MCP search, got %#v", chatResult.Metadata["toolUse"])
+		t.Fatalf("expected ordinary chat not to invoke MCP tools automatically, got %#v", chatResult.Metadata["toolUse"])
 	}
 }
 
 func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
-	engine, modelBaseURL, cleanup := newTestRouter(t)
+	engine, _, cleanup := newTestRouter(t)
 	defer cleanup()
 
 	chatPayload := map[string]any{
@@ -1286,8 +1286,8 @@ func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
 		"model":          "chat-test-model",
 		"config": map[string]any{
 			"provider":    "ollama",
-			"baseUrl":     modelBaseURL,
-			"model":       "chat-test-model",
+			"baseUrl":     "http://127.0.0.1:1",
+			"model":       "request-override-model",
 			"apiKey":      "",
 			"temperature": 0.2,
 		},
@@ -1307,6 +1307,9 @@ func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
 	if len(chatResult.Choices) != 1 {
 		t.Fatalf("expected one model choice, got %#v", chatResult.Choices)
 	}
+	if chatResult.Model != "chat-test-model" {
+		t.Fatalf("expected server-configured model, got %q", chatResult.Model)
+	}
 	if content := chatResult.Choices[0].Message.Content; content != "已收到请求，但未检测到上下文。" {
 		t.Fatalf("expected configured model response, got %q", content)
 	}
@@ -1320,6 +1323,74 @@ func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
 	}
 	if _, exists := chatResult.Metadata["fallbackStrategy"]; exists {
 		t.Fatalf("direct conversation must not claim a fallback strategy: %#v", chatResult.Metadata)
+	}
+}
+
+func TestChatCompletionsReturnsModelErrorWithoutFabricatedAnswer(t *testing.T) {
+	engine, modelBaseURL, cleanup := newTestRouterWithModelHandler(t, nil, unavailableModelHandler)
+	defer cleanup()
+
+	chatPayload := map[string]any{
+		"conversationId": "conv-model-error-1",
+		"model":          "chat-test-model",
+		"config": map[string]any{
+			"provider": "ollama",
+			"baseUrl":  modelBaseURL,
+			"model":    "chat-test-model",
+		},
+		"messages": []map[string]string{{
+			"role":    "user",
+			"content": "你好",
+		}},
+	}
+
+	resp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions", chatPayload)
+	if resp.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var apiErr model.APIError
+	decodeJSONResponse(t, resp.Body.Bytes(), &apiErr)
+	if apiErr.Error.Code != "upstream_error" || !strings.Contains(apiErr.Error.Message, "configured model unavailable") {
+		t.Fatalf("expected explicit upstream model error, got %#v", apiErr)
+	}
+	for _, forbidden := range []string{"\"choices\"", "fallbackStrategy", "AI 模型调用已降级", "已收到请求"} {
+		if strings.Contains(resp.Body.String(), forbidden) {
+			t.Fatalf("model failure must not return fabricated assistant content %q: %s", forbidden, resp.Body.String())
+		}
+	}
+}
+
+func TestChatCompletionsStreamReturnsModelErrorWithoutFabricatedChunk(t *testing.T) {
+	engine, modelBaseURL, cleanup := newTestRouterWithModelHandler(t, nil, unavailableModelHandler)
+	defer cleanup()
+
+	chatPayload := map[string]any{
+		"conversationId": "conv-model-stream-error-1",
+		"model":          "chat-test-model",
+		"config": map[string]any{
+			"provider": "ollama",
+			"baseUrl":  modelBaseURL,
+			"model":    "chat-test-model",
+		},
+		"messages": []map[string]string{{
+			"role":    "user",
+			"content": "你好",
+		}},
+	}
+
+	resp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions/stream", chatPayload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected SSE status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, "event:error") || !strings.Contains(body, "configured model unavailable") {
+		t.Fatalf("expected explicit SSE model error, got %s", body)
+	}
+	for _, forbidden := range []string{"event:chunk", "event:done", "AI 模型调用已降级", "已收到请求"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("model stream failure must not return fabricated assistant content %q: %s", forbidden, body)
+		}
 	}
 }
 
@@ -1908,6 +1979,10 @@ func newAuthenticatedTestRouter(t *testing.T) (*http.ServeMux, string, map[strin
 }
 
 func newTestRouterWithServerConfig(t *testing.T, configure func(*model.ServerConfig)) (*http.ServeMux, string, func()) {
+	return newTestRouterWithModelHandler(t, configure, handleModelAPI)
+}
+
+func newTestRouterWithModelHandler(t *testing.T, configure func(*model.ServerConfig), modelHandler http.HandlerFunc) (*http.ServeMux, string, func()) {
 	t.Helper()
 
 	uploadDir := t.TempDir()
@@ -1919,7 +1994,7 @@ func newTestRouterWithServerConfig(t *testing.T, configure func(*model.ServerCon
 	}
 	qdrantState := &qdrantTestServer{collections: map[string]*qdrantCollectionState{}}
 	qdrantHTTP := httptest.NewServer(http.HandlerFunc(qdrantState.handle))
-	modelHTTP := httptest.NewServer(http.HandlerFunc(handleModelAPI))
+	modelHTTP := httptest.NewServer(modelHandler)
 
 	serverConfig := model.ServerConfig{
 		Port:                   "0",
@@ -1965,8 +2040,7 @@ func newTestRouterWithServerConfig(t *testing.T, configure func(*model.ServerCon
 	}
 
 	mcpRegistry := mcp.DefaultRegistry(appService)
-	toolPlanner := mcp.NewToolUsePlanner(mcpRegistry)
-	appHandler := handler.NewAppHandler(serverConfig, appService, service.NewLLMService(), toolPlanner)
+	appHandler := handler.NewAppHandler(serverConfig, appService, service.NewLLMService())
 	configHandler := handler.NewConfigHandler(appService, qdrantService)
 	authService, err := service.NewAuthService(appService, serverConfig)
 	if err != nil {
@@ -1988,6 +2062,12 @@ func newTestRouterWithServerConfig(t *testing.T, configure func(*model.ServerCon
 		_ = os.RemoveAll(uploadDir)
 	}
 	return mux, modelHTTP.URL, cleanup
+}
+
+func unavailableModelHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "configured model unavailable"})
 }
 
 func loginTestSessionHeaders(t *testing.T, handler http.Handler) map[string]string {

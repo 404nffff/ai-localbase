@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,10 @@ import (
 
 type staticTokenProvider struct {
 	config model.AppConfig
+}
+
+func noopToolHandler(_ context.Context, _ map[string]any) (ToolCallResult, error) {
+	return ToolCallResult{}, nil
 }
 
 func (p staticTokenProvider) GetConfig() model.AppConfig {
