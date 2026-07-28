@@ -78,7 +78,7 @@ func TestRagServiceBuildDocumentChunksStructuredSummaryFirst(t *testing.T) {
 	}
 }
 
-func TestRagServiceEmbedTextsFallback(t *testing.T) {
+func TestRagServiceEmbedTextsReturnsUpstreamError(t *testing.T) {
 	rag := NewRagService()
 	cfg := model.EmbeddingModelConfig{
 		Provider: "ollama",
@@ -87,16 +87,34 @@ func TestRagServiceEmbedTextsFallback(t *testing.T) {
 	}
 
 	embeddings, err := rag.EmbedTexts(t.Context(), cfg, []string{"示例缓存", "示例检索"}, 8)
-	if err != nil {
-		t.Fatalf("expected fallback embeddings without error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "embedding request failed") {
+		t.Fatalf("expected upstream embedding error, got %v", err)
 	}
-	if len(embeddings) != 2 {
-		t.Fatalf("expected 2 embeddings, got %d", len(embeddings))
+	if embeddings != nil {
+		t.Fatalf("expected no fabricated embeddings, got %#v", embeddings)
 	}
-	for index, vector := range embeddings {
-		if len(vector) != 8 {
-			t.Fatalf("embedding %d expected dimension 8, got %d", index, len(vector))
-		}
+}
+
+func TestRagServiceEmbedTextsRejectsDimensionMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": [][]float64{{0.1, 0.2, 0.3}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	rag := NewRagService()
+	embeddings, err := rag.EmbedTexts(t.Context(), model.EmbeddingModelConfig{
+		Provider: "ollama",
+		BaseURL:  server.URL,
+		Model:    "test-embedding",
+	}, []string{"示例"}, 4)
+	if err == nil || !strings.Contains(err.Error(), "embedding dimension mismatch") {
+		t.Fatalf("expected dimension mismatch error, got %v", err)
+	}
+	if embeddings != nil {
+		t.Fatalf("expected no resized embeddings, got %#v", embeddings)
 	}
 }
 
@@ -163,6 +181,25 @@ func TestExtractContentPreviewFromMarkdown(t *testing.T) {
 }
 
 func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
+	embeddingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/embed" {
+			http.NotFound(w, r)
+			return
+		}
+		var request ollamaEmbedRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		vectors := make([][]float64, len(request.Input))
+		for index := range vectors {
+			vectors[index] = make([]float64, 768)
+			vectors[index][index%768] = 1
+		}
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embeddings: vectors})
+	}))
+	t.Cleanup(embeddingServer.Close)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "indexed.md")
 	content := strings.Repeat("示例文本抽取后进入索引链路。", 80)
@@ -171,6 +208,11 @@ func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
 	}
 
 	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	service.state.Config.Embedding = model.EmbeddingConfig{
+		Provider: "ollama",
+		BaseURL:  embeddingServer.URL,
+		Model:    "test-embedding",
+	}
 	knowledgeBases := service.ListKnowledgeBases()
 	if len(knowledgeBases) == 0 {
 		t.Fatal("expected default knowledge base")
@@ -464,6 +506,22 @@ func TestSearchDenseParsesNamedVectorQueryResponse(t *testing.T) {
 func TestMultiQueryDeduplication(t *testing.T) {
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/embeddings" {
+			var request openAIEmbeddingRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			data := make([]map[string]any, len(request.Input))
+			for index := range request.Input {
+				data[index] = map[string]any{
+					"embedding": []float64{1, 0, 0, 0},
+					"index":     index,
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			return
+		}
 		if strings.Contains(r.URL.Path, "/points/search") {
 			call := atomic.AddInt32(&calls, 1)
 			var resp qdrantSearchResponse
@@ -545,7 +603,7 @@ func TestMultiQueryDeduplication(t *testing.T) {
 		"kb-1",
 		3,
 		0,
-		model.EmbeddingModelConfig{Provider: "openai"},
+		model.EmbeddingModelConfig{Provider: "openai", BaseURL: server.URL, Model: "test-embedding"},
 	)
 	if err != nil {
 		t.Fatalf("multi query search: %v", err)

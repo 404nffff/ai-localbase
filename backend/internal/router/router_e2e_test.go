@@ -1267,6 +1267,52 @@ func TestChatCompletionsIncludesToolUseMetadata(t *testing.T) {
 	}
 }
 
+func TestDirectConversationStillCallsConfiguredModel(t *testing.T) {
+	engine, modelBaseURL, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	chatPayload := map[string]any{
+		"conversationId": "conv-direct-model-1",
+		"model":          "chat-test-model",
+		"config": map[string]any{
+			"provider":    "ollama",
+			"baseUrl":     modelBaseURL,
+			"model":       "chat-test-model",
+			"apiKey":      "",
+			"temperature": 0.2,
+		},
+		"messages": []map[string]string{{
+			"role":    "user",
+			"content": "你好",
+		}},
+	}
+
+	resp := performJSONRequest(t, engine, http.MethodPost, "/v1/chat/completions", chatPayload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var chatResult model.ChatCompletionResponse
+	decodeJSONResponse(t, resp.Body.Bytes(), &chatResult)
+	if len(chatResult.Choices) != 1 {
+		t.Fatalf("expected one model choice, got %#v", chatResult.Choices)
+	}
+	if content := chatResult.Choices[0].Message.Content; content != "已收到请求，但未检测到上下文。" {
+		t.Fatalf("expected configured model response, got %q", content)
+	}
+	if sources, ok := chatResult.Metadata["sources"].([]any); ok && len(sources) != 0 {
+		t.Fatalf("expected direct conversation to skip retrieval, got %#v", sources)
+	} else if !ok && chatResult.Metadata["sources"] != nil {
+		t.Fatalf("expected direct conversation sources to be empty, got %#v", chatResult.Metadata["sources"])
+	}
+	if _, exists := chatResult.Metadata["localTemplate"]; exists {
+		t.Fatalf("direct conversation must not claim a local template: %#v", chatResult.Metadata)
+	}
+	if _, exists := chatResult.Metadata["fallbackStrategy"]; exists {
+		t.Fatalf("direct conversation must not claim a fallback strategy: %#v", chatResult.Metadata)
+	}
+}
+
 func TestOpenAICompatibleAPIAuthRejectsMissingTokenAndAllowsAPIKey(t *testing.T) {
 	engine, modelBaseURL, cleanup := newTestRouterWithServerConfig(t, func(serverConfig *model.ServerConfig) {
 		serverConfig.EnableAuth = true

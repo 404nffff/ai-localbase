@@ -29,6 +29,10 @@ func retryWithBackoff(ctx context.Context, attempts int, baseDelay time.Duration
 			return nil
 		} else {
 			lastErr = err
+			var stopper interface{ StopRetry() bool }
+			if errors.As(err, &stopper) && stopper.StopRetry() {
+				return errors.Unwrap(err)
+			}
 		}
 
 		if i == attempts-1 {

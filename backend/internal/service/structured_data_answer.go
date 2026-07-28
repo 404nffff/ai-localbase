@@ -113,8 +113,8 @@ func looksLikeStructuredDataQuery(query string) bool {
 		return false
 	}
 	markers := []string{
-		"表格", "数据", "记录", "行", "条", "字段", "列", "名单", "展示", "列出", "筛选",
-		"查找", "查询", "统计", "分布", "平均", "最大", "最小", "最高", "最低", "最多", "最少",
+		"表格", "工作表", ".csv", ".xlsx", ".xls", "数据", "记录", "字段", "列名", "数据行", "行数",
+		"筛选", "统计", "分布", "平均", "均值", "最大", "最小", "最高", "最低", "最多", "最少",
 	}
 	return containsAnyText(trimmed, markers)
 }
@@ -201,7 +201,7 @@ func buildStructuredQueryPlan(query string, documents []structuredTableDocument)
 	if isStructuredCountQuestion(normalized) {
 		return structuredQueryPlan{Intent: structuredIntentCount}
 	}
-	if containsAnyText(normalized, []string{"展示", "列出", "查看", "读取", "表格", "数据", "名单", "明细", "详情"}) {
+	if containsAnyText(normalized, []string{"展示", "列出", "查看", "读取", "表格", "工作表", "数据", "记录", "明细", "详情"}) {
 		return structuredQueryPlan{Intent: structuredIntentPreview}
 	}
 	return structuredQueryPlan{}

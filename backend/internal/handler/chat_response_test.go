@@ -8,30 +8,22 @@ import (
 	"ai-localbase/internal/model"
 )
 
-func TestStreamResponseMetadataRecognizesDegradedReply(t *testing.T) {
-	metadata := streamResponseMetadata("⚠️ AI 模型调用已降级\n\n本地模型响应超时")
-	if metadata == nil {
-		t.Fatal("expected degraded stream metadata")
+func TestIsDirectConversationMessage(t *testing.T) {
+	for _, message := range []string{"你好！", "你是谁", "who are you?"} {
+		if !isDirectConversationMessage(message) {
+			t.Fatalf("expected direct conversation message: %q", message)
+		}
 	}
-	if degraded, _ := metadata["degraded"].(bool); !degraded {
-		t.Fatalf("expected degraded=true, got %v", metadata["degraded"])
-	}
-}
-
-func TestBuildLocalAssistantAnswerHandlesGreeting(t *testing.T) {
-	content, strategy, ok := buildLocalAssistantAnswer(model.ChatCompletionRequest{
-		Messages: []model.ChatMessage{{Role: "user", Content: "你好！"}},
-	})
-	if !ok || strategy != "greeting-template" {
-		t.Fatalf("expected local greeting response, got ok=%v strategy=%q", ok, strategy)
-	}
-	if content != "你好！请问有什么可以帮你？" {
-		t.Fatalf("unexpected greeting response: %q", content)
+	for _, message := range []string{"列出主要角色", "你好，请总结当前知识库", "AI LocalBase 如何部署？"} {
+		if isDirectConversationMessage(message) {
+			t.Fatalf("expected knowledge question to use retrieval: %q", message)
+		}
 	}
 }
 
 func TestFilterOperationalChatMessages(t *testing.T) {
 	messages := filterOperationalChatMessages([]model.ChatMessage{
+		{Role: "assistant", Content: "你好，我是 AI LocalBase 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。"},
 		{Role: "user", Content: "小说大纲写得怎么样"},
 		{Role: "assistant", Content: "⚠️ AI 模型调用已降级\n\n模型超时"},
 		{Role: "assistant", Content: "大纲包含六卷结构。"},
@@ -43,6 +35,9 @@ func TestFilterOperationalChatMessages(t *testing.T) {
 	for _, message := range messages {
 		if strings.Contains(message.Content, "模型调用已降级") {
 			t.Fatalf("degraded content leaked into model history: %#v", messages)
+		}
+		if strings.Contains(message.Content, "你可以先选择知识库") {
+			t.Fatalf("legacy welcome content leaked into model history: %#v", messages)
 		}
 	}
 }

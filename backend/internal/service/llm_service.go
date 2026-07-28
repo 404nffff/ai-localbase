@@ -141,14 +141,14 @@ func (s *LLMService) Chat(req model.ChatCompletionRequest) (model.ChatCompletion
 			return callErr
 		})
 		if err != nil {
-			return degradedChatResponse(cfg, req, err), nil
+			return model.ChatCompletionResponse{}, err
 		}
 		return result, nil
 	}
 
 	result, err := s.openAIChat(ctx, cfg, req)
 	if err != nil {
-		return degradedChatResponse(cfg, req, err), nil
+		return model.ChatCompletionResponse{}, err
 	}
 
 	return result, nil
@@ -172,8 +172,7 @@ func (s *LLMService) StreamChat(req model.ChatCompletionRequest, onChunk func(st
 	}
 
 	if err != nil {
-		fallbackContent := buildModelFallbackMessage(req)
-		return onChunk(fallbackContent)
+		return err
 	}
 
 	return nil
@@ -232,6 +231,9 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 		if len(llmResp.Choices) == 0 {
 			return fmt.Errorf("model api returned empty choices")
 		}
+		if strings.TrimSpace(llmResp.Choices[0].Message.Content) == "" {
+			return fmt.Errorf("model api returned empty response")
+		}
 
 		result = model.ChatCompletionResponse{
 			ID:      llmResp.ID,
@@ -261,6 +263,8 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	return retryModelCall(ctx, 2, 200*time.Millisecond, func() error {
+		attemptDeliveredContent := false
+		streamCompleted := false
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create model request")
@@ -302,12 +306,17 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if payload == "[DONE]" {
+				streamCompleted = true
 				break
 			}
 
 			var chunk openAIChatStreamChunk
 			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-				continue
+				streamErr := fmt.Errorf("invalid model stream chunk: %w", err)
+				if attemptDeliveredContent {
+					return stopRetryError{err: streamErr}
+				}
+				return streamErr
 			}
 
 			if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
@@ -315,17 +324,32 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 			}
 
 			for _, choice := range chunk.Choices {
-				if strings.TrimSpace(choice.Delta.Content) == "" {
+				if strings.TrimSpace(choice.FinishReason) != "" {
+					streamCompleted = true
+				}
+				if choice.Delta.Content == "" {
 					continue
 				}
 				if err := onChunk(choice.Delta.Content); err != nil {
-					return err
+					return stopRetryError{err: err}
+				}
+				if strings.TrimSpace(choice.Delta.Content) != "" {
+					attemptDeliveredContent = true
 				}
 			}
 		}
 
 		if err := scanner.Err(); err != nil {
+			if attemptDeliveredContent {
+				return stopRetryError{err: fmt.Errorf("model stream interrupted after output: %w", err)}
+			}
 			return fmt.Errorf("failed to read model stream")
+		}
+		if !attemptDeliveredContent {
+			return fmt.Errorf("model api returned empty stream")
+		}
+		if !streamCompleted {
+			return stopRetryError{err: fmt.Errorf("model stream ended before completion")}
 		}
 
 		return nil
@@ -421,6 +445,8 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/api/chat"
 	return retryModelCall(ctx, 2, 200*time.Millisecond, func() error {
+		attemptDeliveredContent := false
+		streamCompleted := false
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create model request")
@@ -457,7 +483,11 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 			var chunk ollamaChatResponse
 			if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-				continue
+				streamErr := fmt.Errorf("invalid model stream chunk: %w", err)
+				if attemptDeliveredContent {
+					return stopRetryError{err: streamErr}
+				}
+				return streamErr
 			}
 
 			if strings.TrimSpace(chunk.Error) != "" {
@@ -465,18 +495,31 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 			}
 
 			if chunk.Done {
+				streamCompleted = true
 				break
 			}
 
 			if content := chunk.Message.Content; content != "" {
 				if err := onChunk(content); err != nil {
-					return err
+					return stopRetryError{err: err}
+				}
+				if strings.TrimSpace(content) != "" {
+					attemptDeliveredContent = true
 				}
 			}
 		}
 
 		if err := scanner.Err(); err != nil {
+			if attemptDeliveredContent {
+				return stopRetryError{err: fmt.Errorf("model stream interrupted after output: %w", err)}
+			}
 			return fmt.Errorf("failed to read model stream")
+		}
+		if !attemptDeliveredContent {
+			return fmt.Errorf("model api returned empty stream")
+		}
+		if !streamCompleted {
+			return stopRetryError{err: fmt.Errorf("model stream ended before completion")}
 		}
 
 		return nil
@@ -485,48 +528,22 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func degradedChatResponse(cfg model.ChatModelConfig, req model.ChatCompletionRequest, err error) model.ChatCompletionResponse {
-	fallbackContent := buildModelFallbackMessage(req)
-	return model.ChatCompletionResponse{
-		ID:      "chatcmpl-fallback",
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   cfg.Model,
-		Choices: []model.ChatCompletionChoice{{
-			Index: 0,
-			Message: model.ChatMessage{
-				Role:    "assistant",
-				Content: fallbackContent,
-			},
-		}},
-		Metadata: map[string]any{
-			"degraded":         true,
-			"fallbackStrategy": "local-message",
-			"upstreamError":    describeModelError(err),
-		},
-	}
-}
-
-func ChatResponseDegradationError(resp model.ChatCompletionResponse) error {
-	if len(resp.Metadata) == 0 {
-		return nil
-	}
-	degraded, _ := resp.Metadata["degraded"].(bool)
-	if !degraded {
-		return nil
-	}
-	message, _ := resp.Metadata["upstreamError"].(string)
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "model response degraded"
-	}
-	return errors.New(message)
-}
-
-func IsDegradedFallbackContent(content string) bool {
+func IsLegacyOperationalAssistantContent(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return false
+	}
+	for _, exact := range []string{
+		"你好，我是 AI LocalBase 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。",
+		"你好，我是 AI Local Base 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。",
+		"当前会话已清空。你可以继续发起新的提问。",
+	} {
+		if trimmed == exact {
+			return true
+		}
+	}
+	if strings.HasPrefix(trimmed, "当前模型正在后台处理会话「") && strings.HasSuffix(trimmed, "请等待其完成后再发起新问题。") {
+		return true
 	}
 	for _, prefix := range []string{
 		"⚠️ AI 模型调用失败",
@@ -571,6 +588,10 @@ func (e stopRetryError) Unwrap() error {
 	return e.err
 }
 
+func (e stopRetryError) StopRetry() bool {
+	return true
+}
+
 func isRetryableModelError(err error) bool {
 	if err == nil {
 		return false
@@ -601,26 +622,6 @@ func isRetryableModelError(err error) bool {
 	return false
 }
 
-func describeModelError(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, errModelRuntimeBusy) {
-		return "本地模型当前繁忙，系统已启用降级回复"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "本地模型响应超时，请稍后重试或切换更轻量模型"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "请求已取消"
-	}
-	message := err.Error()
-	if strings.TrimSpace(message) == "" {
-		return "模型调用失败"
-	}
-	return message
-}
-
 func normalizeChatConfig(req model.ChatCompletionRequest) (model.ChatModelConfig, error) {
 	cfg := req.Config
 	if strings.TrimSpace(cfg.Model) == "" {
@@ -640,18 +641,4 @@ func normalizeChatConfig(req model.ChatCompletionRequest) (model.ChatModelConfig
 		cfg.Provider = "ollama"
 	}
 	return cfg, nil
-}
-
-func buildModelFallbackMessage(req model.ChatCompletionRequest) string {
-	modelName := strings.TrimSpace(req.Config.Model)
-	if modelName == "" {
-		modelName = strings.TrimSpace(req.Model)
-	}
-
-	hint := "当前请求已触发本地降级回复，常见原因包括：流式首包过慢、检索链路耗时较长、模型当前繁忙，或本地 Ollama 响应超时。"
-	if modelName != "" {
-		hint = fmt.Sprintf("模型 **%s** 本次未在超时时间内稳定返回结果。常见原因包括：流式首包过慢、检索链路耗时较长、模型当前繁忙，或本地 Ollama 响应超时。", modelName)
-	}
-
-	return fmt.Sprintf("⚠️ AI 模型调用已降级\n\n%s\n\n若 Ollama 一直在运行，建议优先检查当前问题是否触发了较重的检索/总结链路，或先切换更轻量模型后重试。", hint)
 }

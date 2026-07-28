@@ -32,6 +32,15 @@ func TestTryBuildStructuredDataAnswerPreview(t *testing.T) {
 	}
 }
 
+func TestLooksLikeStructuredDataQueryRequiresTableSignal(t *testing.T) {
+	if looksLikeStructuredDataQuery("列出主要角色") {
+		t.Fatal("expected ordinary document list question not to trigger structured data handling")
+	}
+	if !looksLikeStructuredDataQuery("列出表格中的所有记录") {
+		t.Fatal("expected explicit table record question to trigger structured data handling")
+	}
+}
+
 func TestTryBuildStructuredDataAnswerFilter(t *testing.T) {
 	service := newStructuredAnswerTestService(t)
 	content, _, ok, err := service.TryBuildStructuredDataAnswer(model.ChatCompletionRequest{

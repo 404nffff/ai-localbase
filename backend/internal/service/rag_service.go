@@ -3,12 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"sort"
@@ -113,9 +111,6 @@ func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversati
 
 	resp, err := r.llmSvc.Chat(request)
 	if err != nil {
-		return result, fmt.Errorf("llm rewrite query: %w", err)
-	}
-	if err := ChatResponseDegradationError(resp); err != nil {
 		return result, fmt.Errorf("llm rewrite query: %w", err)
 	}
 	if len(resp.Choices) == 0 {
@@ -330,51 +325,55 @@ func (s *RagService) EmbedTexts(ctx context.Context, cfg model.EmbeddingModelCon
 	if len(trimmed) == 0 {
 		return nil, nil
 	}
+	if vectorSize <= 0 {
+		return nil, fmt.Errorf("embedding vector size must be greater than zero")
+	}
 
 	all := make([][]float64, 0, len(trimmed))
-	useFallback := false
 	for i := 0; i < len(trimmed); i += embeddingBatchSize {
 		end := i + embeddingBatchSize
 		if end > len(trimmed) {
 			end = len(trimmed)
 		}
 		batch := trimmed[i:end]
-		if !useFallback {
-			// Check cache first; only call API for uncached texts.
-			batchVectors := make([][]float64, len(batch))
-			uncachedIdx := make([]int, 0, len(batch))
-			uncachedTexts := make([]string, 0, len(batch))
-			for j, text := range batch {
-				key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
-				if cached := s.cache.Get(key); cached != nil {
-					batchVectors[j] = cached
-				} else {
-					uncachedIdx = append(uncachedIdx, j)
-					uncachedTexts = append(uncachedTexts, text)
+
+		// Check cache first; only call the configured embedding service for misses.
+		batchVectors := make([][]float64, len(batch))
+		uncachedIdx := make([]int, 0, len(batch))
+		uncachedTexts := make([]string, 0, len(batch))
+		for j, text := range batch {
+			key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
+			if cached := s.cache.Get(key); cached != nil {
+				if len(cached) != vectorSize {
+					return nil, fmt.Errorf("cached embedding dimension mismatch: expected %d, got %d", vectorSize, len(cached))
 				}
-			}
-			if len(uncachedTexts) > 0 {
-				embeddings, err := s.requestEmbeddings(ctx, cfg, uncachedTexts)
-				if err == nil && len(embeddings) == len(uncachedTexts) {
-					normed := normalizeEmbeddings(embeddings, vectorSize)
-					for k, idx := range uncachedIdx {
-						batchVectors[idx] = normed[k]
-						key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, batch[idx])
-						s.cache.Set(key, normed[k])
-					}
-				} else {
-					// first failure: fall back to deterministic for remaining batches
-					useFallback = true
-				}
-			}
-			if !useFallback {
-				all = append(all, batchVectors...)
+				batchVectors[j] = cached
 				continue
 			}
+			uncachedIdx = append(uncachedIdx, j)
+			uncachedTexts = append(uncachedTexts, text)
 		}
-		for _, text := range batch {
-			all = append(all, deterministicEmbedding(text, vectorSize))
+
+		if len(uncachedTexts) > 0 {
+			embeddings, err := s.requestEmbeddings(ctx, cfg, uncachedTexts)
+			if err != nil {
+				return nil, fmt.Errorf("embedding request failed: %w", err)
+			}
+			if len(embeddings) != len(uncachedTexts) {
+				return nil, fmt.Errorf("embedding response count mismatch: expected %d, got %d", len(uncachedTexts), len(embeddings))
+			}
+			for k, vector := range embeddings {
+				if len(vector) != vectorSize {
+					return nil, fmt.Errorf("embedding dimension mismatch at batch item %d: expected %d, got %d", i+uncachedIdx[k], vectorSize, len(vector))
+				}
+				idx := uncachedIdx[k]
+				batchVectors[idx] = vector
+				key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, batch[idx])
+				s.cache.Set(key, vector)
+			}
 		}
+
+		all = append(all, batchVectors...)
 	}
 	return all, nil
 }
@@ -508,7 +507,7 @@ func (r *RagService) MultiQuerySearch(
 				return
 			}
 			if len(vectors) == 0 {
-				resultChan <- nil
+				errChan <- fmt.Errorf("embed query: embedding api returned no vectors")
 				return
 			}
 
@@ -752,43 +751,6 @@ func normalizeChunkText(text string) string {
 	return strings.TrimSpace(strings.Join(cleanedLines, "\n"))
 }
 
-func normalizeEmbeddings(vectors [][]float64, vectorSize int) [][]float64 {
-	normalized := make([][]float64, 0, len(vectors))
-	for _, vector := range vectors {
-		if len(vector) == vectorSize {
-			normalized = append(normalized, vector)
-			continue
-		}
-
-		current := make([]float64, vectorSize)
-		copy(current, vector)
-		normalized = append(normalized, current)
-	}
-	return normalized
-}
-
-func deterministicEmbedding(text string, vectorSize int) []float64 {
-	if vectorSize <= 0 {
-		vectorSize = 768
-	}
-
-	vector := make([]float64, vectorSize)
-	if strings.TrimSpace(text) == "" {
-		return vector
-	}
-
-	for _, token := range tokenize(text) {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(token))
-		sum := h.Sum64()
-		index := int(sum % uint64(vectorSize))
-		vector[index] += hashedWeight(sum)
-	}
-
-	normalizeVector(vector)
-	return vector
-}
-
 func float64ToFloat32(input []float64) []float32 {
 	if len(input) == 0 {
 		return nil
@@ -815,30 +777,6 @@ func tokenize(text string) []string {
 		result = append(result, text)
 	}
 	return result
-}
-
-func hashedWeight(sum uint64) float64 {
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, sum)
-	value := 0.0
-	for _, item := range buf {
-		value += float64(item)
-	}
-	return 0.5 + math.Mod(value, 100)/100
-}
-
-func normalizeVector(vector []float64) {
-	norm := 0.0
-	for _, value := range vector {
-		norm += value * value
-	}
-	if norm == 0 {
-		return
-	}
-	norm = math.Sqrt(norm)
-	for index := range vector {
-		vector[index] /= norm
-	}
 }
 
 // BuildSparseVector 从文本构建 BM25 风格的稀疏向量

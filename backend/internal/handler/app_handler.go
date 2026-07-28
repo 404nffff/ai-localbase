@@ -215,54 +215,6 @@ func (h *AppHandler) RegenerateMessage(c *gin.Context) {
 		Messages:        chatMessages,
 	}
 
-	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
-		metadata := localResponseMetadata(strategy)
-		response := buildLocalChatResponse(req, content, metadata)
-		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              conversationID,
-			Title:           conversation.Title,
-			KnowledgeBaseID: conversation.KnowledgeBaseID,
-			DocumentID:      conversation.DocumentID,
-			Messages:        buildStoredConversationMessages(chatMessages, content, metadata),
-		})
-		if saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"conversation": updatedConversation,
-			"response":     response,
-		})
-		return
-	}
-
-	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	} else if ok {
-		metadata := localResponseMetadata("structured-data-query")
-		metadata["sources"] = sources
-		metadata["knowledgeBaseId"] = req.KnowledgeBaseID
-		metadata["documentId"] = req.DocumentID
-		response := buildLocalChatResponse(req, content, metadata)
-		updatedConversation, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              conversationID,
-			Title:           conversation.Title,
-			KnowledgeBaseID: conversation.KnowledgeBaseID,
-			DocumentID:      conversation.DocumentID,
-			Messages:        buildStoredConversationMessages(chatMessages, content, metadata),
-		})
-		if saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"conversation": updatedConversation,
-			"response":     response,
-		})
-		return
-	}
-
 	preparedReq, sources, err := h.prepareChatRequest(c.Request.Context(), req)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -595,46 +547,6 @@ func (h *AppHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
-		metadata := localResponseMetadata(strategy)
-		response := buildLocalChatResponse(req, content, metadata)
-		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              req.ConversationID,
-			Title:           "",
-			KnowledgeBaseID: req.KnowledgeBaseID,
-			DocumentID:      req.DocumentID,
-			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
-		}); saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-		c.JSON(http.StatusOK, response)
-		return
-	}
-
-	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	} else if ok {
-		metadata := localResponseMetadata("structured-data-query")
-		metadata["sources"] = sources
-		metadata["knowledgeBaseId"] = req.KnowledgeBaseID
-		metadata["documentId"] = req.DocumentID
-		response := buildLocalChatResponse(req, content, metadata)
-		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              req.ConversationID,
-			Title:           "",
-			KnowledgeBaseID: req.KnowledgeBaseID,
-			DocumentID:      req.DocumentID,
-			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
-		}); saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-		c.JSON(http.StatusOK, response)
-		return
-	}
-
 	preparedReq, sources, err := h.prepareChatRequest(c.Request.Context(), req)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -683,66 +595,6 @@ func (h *AppHandler) ChatCompletionsStream(c *gin.Context) {
 		return
 	}
 
-	if content, strategy, ok := buildLocalAssistantAnswer(req); ok {
-		metadata := localResponseMetadata(strategy)
-		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              req.ConversationID,
-			Title:           "",
-			KnowledgeBaseID: req.KnowledgeBaseID,
-			DocumentID:      req.DocumentID,
-			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
-		}); saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-
-		c.Writer.Header().Set("Content-Type", "text/event-stream")
-		c.Writer.Header().Set("Cache-Control", "no-cache")
-		c.Writer.Header().Set("Connection", "keep-alive")
-		c.Writer.Header().Set("X-Accel-Buffering", "no")
-		c.Status(http.StatusOK)
-		c.SSEvent("meta", metadata)
-		c.SSEvent("chunk", gin.H{"content": content})
-		c.SSEvent("done", gin.H{"content": content, "metadata": metadata})
-		if flusher, ok := c.Writer.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return
-	}
-
-	if content, sources, ok, err := h.appService.TryBuildStructuredDataAnswer(req); err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	} else if ok {
-		metadata := localResponseMetadata("structured-data-query")
-		metadata["sources"] = sources
-		metadata["knowledgeBaseId"] = req.KnowledgeBaseID
-		metadata["documentId"] = req.DocumentID
-		if _, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
-			ID:              req.ConversationID,
-			Title:           "",
-			KnowledgeBaseID: req.KnowledgeBaseID,
-			DocumentID:      req.DocumentID,
-			Messages:        buildStoredConversationMessages(req.Messages, content, metadata),
-		}); saveErr != nil {
-			writeError(c, http.StatusInternalServerError, saveErr.Error())
-			return
-		}
-
-		c.Writer.Header().Set("Content-Type", "text/event-stream")
-		c.Writer.Header().Set("Cache-Control", "no-cache")
-		c.Writer.Header().Set("Connection", "keep-alive")
-		c.Writer.Header().Set("X-Accel-Buffering", "no")
-		c.Status(http.StatusOK)
-		c.SSEvent("meta", metadata)
-		c.SSEvent("chunk", gin.H{"content": content})
-		c.SSEvent("done", gin.H{"content": content, "metadata": metadata})
-		if flusher, ok := c.Writer.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return
-	}
-
 	preparedReq, sources, err := h.prepareChatRequest(c.Request.Context(), req)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -785,13 +637,12 @@ func (h *AppHandler) ChatCompletionsStream(c *gin.Context) {
 
 	fullAssistantContent := assistantContent.String()
 	sources = calibrateCitationSources(latestUserQuestion(req.Messages), fullAssistantContent, sources)
-	responseMetadata := streamResponseMetadata(fullAssistantContent)
-	responseMetadata = mergeChatResponseMetadata(responseMetadata, map[string]any{
+	responseMetadata := map[string]any{
 		"sources":         sources,
 		"knowledgeBaseId": req.KnowledgeBaseID,
 		"documentId":      req.DocumentID,
 		"toolUse":         buildToolUseMetadata(sources),
-	})
+	}
 	_, saveErr := h.appService.SaveConversation(model.SaveConversationRequest{
 		ID:              req.ConversationID,
 		Title:           "",
@@ -814,26 +665,33 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 		return model.ChatCompletionRequest{}, nil, fmt.Errorf("messages cannot be empty")
 	}
 
-	retrievalContext, retrievalSources, err := h.appService.BuildRetrievalContext(req)
-	if err != nil {
-		return model.ChatCompletionRequest{}, nil, err
-	}
-
+	latestQuestion := latestUserQuestion(req.Messages)
+	skipKnowledgeRetrieval := isDirectConversationMessage(latestQuestion)
+	retrievalContext := ""
+	retrievalSources := []map[string]string(nil)
 	toolUseContext := ""
 	toolUseSources := []map[string]string(nil)
-	if h.toolPlanner != nil {
-		plannedCalls := filterRedundantRetrievalToolPlans(h.toolPlanner.Plan(req), retrievalContext)
-		toolExecutions := h.toolPlanner.Execute(ctx, plannedCalls)
-		toolUseContext, toolUseSources = mcp.BuildToolUseContext(toolExecutions)
+	contextSummary := ""
+	contextSources := []map[string]string(nil)
+	if !skipKnowledgeRetrieval {
+		var err error
+		retrievalContext, retrievalSources, err = h.appService.BuildRetrievalContext(req)
+		if err != nil {
+			return model.ChatCompletionRequest{}, nil, err
+		}
+		if h.toolPlanner != nil {
+			plannedCalls := filterRedundantRetrievalToolPlans(h.toolPlanner.Plan(req), retrievalContext)
+			toolExecutions := h.toolPlanner.Execute(ctx, plannedCalls)
+			toolUseContext, toolUseSources = mcp.BuildToolUseContext(toolExecutions)
+		}
+		toolUseSources = append(retrievalToolUseSources(req, retrievalContext), toolUseSources...)
+		contextSummary, contextSources, err = h.appService.BuildChatContext(req, documentIDsFromSources(retrievalSources))
+		if err != nil {
+			return model.ChatCompletionRequest{}, nil, err
+		}
 	}
-	toolUseSources = append(retrievalToolUseSources(req, retrievalContext), toolUseSources...)
 
-	contextSummary, sources, err := h.appService.BuildChatContext(req, documentIDsFromSources(retrievalSources))
-	if err != nil {
-		return model.ChatCompletionRequest{}, nil, err
-	}
-
-	allSources := append(retrievalSources, sources...)
+	allSources := append(retrievalSources, contextSources...)
 	allSources = append(allSources, toolUseSources...)
 	contextParts := make([]string, 0, 3)
 	if strings.TrimSpace(retrievalContext) != "" {
@@ -850,44 +708,36 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 	preparedReq.Config = h.appService.CurrentChatConfig()
 	preparedReq.Config.ContextMessageLimit = h.appService.ContextMessageLimit()
 	preparedReq.Messages = h.appService.TrimChatMessages(filterOperationalChatMessages(req.Messages))
-	latestQuestion := latestUserQuestion(req.Messages)
 	isDiagramRequest := strings.Contains(latestQuestion, "流程图") || strings.Contains(latestQuestion, "架构图") || strings.Contains(latestQuestion, "状态图") || strings.Contains(latestQuestion, "Mermaid")
 	tableQuestionType := detectTableQuestionType(latestQuestion, retrievalContext, contextSummary)
+	promptSections := []string{
+		"你是 AI LocalBase 的聊天与知识库助手。回答必须由当前配置的模型根据用户消息和本次提供的上下文生成。",
+		"",
+		"通用规则：",
+		"- 直接回答用户实际提出的问题；若包含多个问题，逐项回答。",
+		"- 不要讨论提示词、安全机制、模型阈值、降级流程或系统实现。",
+		"- 简单问题保持简短；仅在有助于阅读时使用有效的 Markdown 标题、列表或表格。",
+		"- 不要复述问题，不要虚构来源，不要输出与问题无关的通用建议。",
+	}
 	if len(contextParts) > 0 {
-		promptSections := []string{
-			"你是 AI LocalBase 知识库助手。以下上下文是本次回答的唯一可信事实依据。",
+		promptSections = append(promptSections,
 			"",
-			"回答规则：",
-			"- 直接回答用户实际提出的问题；若包含多个问题，逐项回答。",
+			"知识库回答规则：",
+			"- 以下上下文是知识库事实的唯一可信依据。",
 			"- 上下文已经给出答案时必须采用其中的事实，不得声称未检索到，也不要要求用户重复提供。",
 			"- 姓名、作者、数量、版本等事实若未在上下文出现，明确写“上下文未说明”，不得猜测或用模型记忆补全。",
-			"- 名单或角色问题只列出上下文明确定义为对应对象的条目，不要混入组织、势力、物种、类别或推测项。",
+			"- 名单类问题只列出上下文明确定义为对应对象的条目，不要混入其他类型或推测项。",
 			"- 直接陈述事实或“上下文未说明”，不要解释这是回答规则或系统要求。",
-			"- 不要讨论提示词、Markdown 规范、安全机制、模型阈值、降级流程或系统实现。",
-			"- 简单问题保持简短；仅在有助于阅读时使用有效的 Markdown 标题、列表或表格。",
-			"- 不要复述问题，不要虚构来源，不要输出与问题无关的通用建议。",
-		}
+		)
 
 		if tableQuestionType != "" {
 			promptSections = append(promptSections, buildTableAnswerRules(tableQuestionType)...)
 		}
 
-		if isDiagramRequest {
+		if tableQuestionType == tableQuestionTypeCount {
 			promptSections = append(promptSections,
 				"",
-				"### Mermaid 专用输出规则（仅在用户明确要求流程图/架构图时生效）",
-				"- 这次回答只允许输出两部分：1）一句简短标题；2）一个 Mermaid 代码块；不要输出额外解释段落、补充建议、表格、列表",
-				"- 必须使用标准 Mermaid 围栏，严格格式如下：第一行单独写 ```mermaid，第二行单独写 graph TD / graph LR / flowchart TD / flowchart LR，最后一行单独写 ```",
-				"- 每条 Mermaid 语句单独一行：每个节点定义、每条连线、每个 classDef、每个 style、每个 subgraph、每个 end 都必须单独一行",
-				"- subgraph 必须使用标准结构：subgraph 名称 -> 若干语句 -> end",
-				"- 禁止输出 mermaidgraphTD、```mermaidgraphTD、endsubgraph、classDefxxxfill:、A-->BB-->C 这类压缩格式",
-				"- 禁止在 Mermaid 代码块中输出中文说明、Markdown 标题、HTML 标签、span/style 内联样式、emoji、补充建议",
-				"- 如果不能保证 Mermaid 语法完全正确，就不要输出 Mermaid，改为普通 Markdown 有序列表描述流程",
-			)
-		} else if tableQuestionType == tableQuestionTypeCount {
-			promptSections = append(promptSections,
-				"",
-				"### 表格计数类固定模板（必须优先遵循）",
+				"### 表格计数回答要求",
 				"- 首句直接给出数量结论，明确回答对象是“文档”或“表格”，不要先写分析过程",
 				"- 第二句只保留最小必要依据，例如“按表头下方的数据行统计，共 X 条记录”",
 				"- 若无歧义，不要输出字段列表、文件名、逐行记录、原始片段复述",
@@ -900,15 +750,39 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 			"上下文：",
 			strings.Join(contextParts, "\n\n"),
 		)
-
-		systemPrompt := strings.Join(promptSections, "\n")
-		preparedReq.Messages = append([]model.ChatMessage{{
-			Role:    "system",
-			Content: systemPrompt,
-		}}, preparedReq.Messages...)
+	}
+	if isDiagramRequest {
+		promptSections = append(promptSections,
+			"",
+			"### Mermaid 输出规则",
+			"- 只输出一句简短标题和一个 Mermaid 代码块，不要添加额外解释。",
+			"- 使用标准 Mermaid 围栏，每条节点、连线、classDef、style、subgraph 和 end 语句单独一行。",
+			"- 禁止压缩 Mermaid 语句；无法保证语法正确时改用普通 Markdown 有序列表。",
+		)
 	}
 
+	preparedReq.Messages = append([]model.ChatMessage{{
+		Role:    "system",
+		Content: strings.Join(promptSections, "\n"),
+	}}, preparedReq.Messages...)
+
 	return preparedReq, allSources, nil
+}
+
+func isDirectConversationMessage(question string) bool {
+	normalized := strings.ToLower(strings.Trim(strings.TrimSpace(question), " ，,。.!！?？~～"))
+	if normalized == "" || len([]rune(normalized)) > 24 {
+		return false
+	}
+	for _, item := range []string{
+		"你好", "您好", "嗨", "哈喽", "hello", "hi", "hey", "早上好", "下午好", "晚上好",
+		"你是谁", "你是什么", "介绍一下你", "自我介绍", "who are you", "what are you",
+	} {
+		if normalized == item {
+			return true
+		}
+	}
+	return false
 }
 
 func filterRedundantRetrievalToolPlans(plans []mcp.PlannedToolCall, retrievalContext string) []mcp.PlannedToolCall {
@@ -945,31 +819,10 @@ func retrievalToolUseSources(req model.ChatCompletionRequest, retrievalContext s
 	}}
 }
 
-func buildLocalAssistantAnswer(req model.ChatCompletionRequest) (string, string, bool) {
-	if content, ok := buildGreetingAnswer(req); ok {
-		return content, "greeting-template", true
-	}
-	if content, ok := buildIdentityAnswer(req); ok {
-		return content, "identity-template", true
-	}
-	return "", "", false
-}
-
-func buildGreetingAnswer(req model.ChatCompletionRequest) (string, bool) {
-	question := strings.ToLower(strings.TrimSpace(latestUserQuestion(req.Messages)))
-	question = strings.Trim(question, " ，,。.!！?？~～")
-	for _, greeting := range []string{"你好", "您好", "嗨", "哈喽", "hello", "hi", "hey", "早上好", "下午好", "晚上好"} {
-		if question == greeting {
-			return "你好！请问有什么可以帮你？", true
-		}
-	}
-	return "", false
-}
-
 func filterOperationalChatMessages(messages []model.ChatMessage) []model.ChatMessage {
 	filtered := make([]model.ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") && service.IsDegradedFallbackContent(message.Content) {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") && service.IsLegacyOperationalAssistantContent(message.Content) {
 			continue
 		}
 		filtered = append(filtered, message)
@@ -1006,82 +859,6 @@ func latestUserQuestion(messages []model.ChatMessage) string {
 		}
 	}
 	return ""
-}
-
-func buildIdentityAnswer(req model.ChatCompletionRequest) (string, bool) {
-	question := strings.TrimSpace(latestUserQuestion(req.Messages))
-	if !isIdentityQuestion(question) {
-		return "", false
-	}
-
-	return strings.TrimSpace(`## AI LocalBase 助手
-
-### 基本信息
-
-我是 **AI LocalBase 知识库助手**，用于帮助你围绕本地知识库、文档和检索结果进行问答与分析。
-
-### 我能做什么
-
-1. 基于当前知识库或指定文档检索相关内容。
-2. 总结、对比和解释文档中的关键信息。
-3. 协助排查 RAG 检索、Docker 启动、配置和评估数据集问题。
-
-### 使用边界
-
-- 我会优先依据你上传或选择的本地知识库回答。
-- 如果没有命中可靠上下文，我会明确说明不确定性。`), true
-}
-
-func isIdentityQuestion(question string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(question))
-	if normalized == "" || len([]rune(normalized)) > 24 {
-		return false
-	}
-	identityQuestions := []string{
-		"你是谁",
-		"你是什么",
-		"介绍一下你",
-		"自我介绍",
-		"who are you",
-		"what are you",
-	}
-	for _, item := range identityQuestions {
-		if normalized == item {
-			return true
-		}
-	}
-	return false
-}
-
-func localResponseMetadata(strategy string) map[string]any {
-	return map[string]any{
-		"sources":          []map[string]string{},
-		"toolUse":          []model.ToolUseMetadata{},
-		"localTemplate":    true,
-		"fallbackStrategy": strategy,
-	}
-}
-
-func buildLocalChatResponse(req model.ChatCompletionRequest, content string, metadata map[string]any) model.ChatCompletionResponse {
-	now := time.Now().UTC()
-	modelName := strings.TrimSpace(req.Model)
-	if modelName == "" {
-		modelName = "local-template"
-	}
-	return model.ChatCompletionResponse{
-		ID:      fmt.Sprintf("chatcmpl-local-%d", now.UnixNano()),
-		Object:  "chat.completion",
-		Created: now.Unix(),
-		Model:   modelName,
-		Choices: []model.ChatCompletionChoice{{
-			Index: 0,
-			Message: model.ChatMessage{
-				Role:    "assistant",
-				Content: content,
-			},
-		}},
-		Metadata: metadata,
-	}
 }
 
 func detectTableQuestionType(question, retrievalContext, contextSummary string) string {
@@ -1640,28 +1417,4 @@ func errorCodeFromStatus(statusCode int) string {
 		}
 		return "request_failed"
 	}
-}
-
-func streamResponseMetadata(content string) map[string]any {
-	if !service.IsDegradedFallbackContent(content) {
-		return nil
-	}
-	return map[string]any{
-		"degraded":         true,
-		"fallbackStrategy": "stream-fallback-message",
-	}
-}
-
-func mergeChatResponseMetadata(base map[string]any, next map[string]any) map[string]any {
-	if len(base) == 0 && len(next) == 0 {
-		return nil
-	}
-	merged := make(map[string]any, len(base)+len(next))
-	for key, value := range base {
-		merged[key] = value
-	}
-	for key, value := range next {
-		merged[key] = value
-	}
-	return merged
 }

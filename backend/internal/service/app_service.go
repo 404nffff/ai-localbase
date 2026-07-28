@@ -134,9 +134,6 @@ func (c *LLMContextCompressor) Compress(ctx context.Context, query string, chunk
 	if err != nil {
 		return "", err
 	}
-	if err := ChatResponseDegradationError(resp); err != nil {
-		return "", err
-	}
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("empty llm response")
 	}
@@ -1906,7 +1903,10 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 		embedCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
-		if err != nil || len(vectors) == 0 {
+		if err == nil && len(vectors) == 0 {
+			err = fmt.Errorf("embedding api returned no vectors")
+		}
+		if err != nil {
 			logRetrievalStageMetrics(req, query, "query_embedding", embeddingStartedAt, map[string]any{
 				"status": "error",
 				"error":  fmt.Sprint(err),
@@ -2166,7 +2166,10 @@ func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query
 		embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
-		if err != nil || len(vectors) == 0 {
+		if err == nil && len(vectors) == 0 {
+			err = fmt.Errorf("embedding api returned no vectors")
+		}
+		if err != nil {
 			return nil, nil, nil, err
 		}
 		queryVector = vectors[0]
@@ -2945,7 +2948,10 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			defer cancel()
 			vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
-			if err != nil || len(vectors) == 0 {
+			if err == nil && len(vectors) == 0 {
+				err = fmt.Errorf("embedding api returned no vectors")
+			}
+			if err != nil {
 				return nil, err
 			}
 			queryVector = vectors[0]
@@ -3064,7 +3070,10 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
-		if err != nil || len(vectors) == 0 {
+		if err == nil && len(vectors) == 0 {
+			err = fmt.Errorf("embedding api returned no vectors")
+		}
+		if err != nil {
 			return nil, err
 		}
 		queryVector = vectors[0]
@@ -3168,7 +3177,7 @@ func recentConversationHistory(messages []model.ChatMessage, maxItems int) []str
 	collected := make([]string, 0, maxItems)
 	for i := latestUserIndex - 1; i >= 0 && len(collected) < maxItems; i-- {
 		content := strings.TrimSpace(messages[i].Content)
-		if content == "" || IsDegradedFallbackContent(content) {
+		if content == "" || IsLegacyOperationalAssistantContent(content) {
 			continue
 		}
 		collected = append(collected, content)
@@ -3621,7 +3630,7 @@ func (s *AppService) expandEvidenceSectionContinuations(req model.ChatCompletion
 	result := make([]RetrievedChunk, 0, len(chunks)+continuationLimit)
 	for _, chunk := range chunks {
 		result = append(result, chunk)
-		if !containsEvidenceSectionHeading(chunk.Text) {
+		if !isEvidenceSectionAnchor(query, chunk.Text) {
 			continue
 		}
 
@@ -4937,7 +4946,7 @@ func filterRelevantChunks(query string, chunks []RetrievedChunk) []RetrievedChun
 
 	if multiIntent {
 		combined := deduplicateRetrievedChunks(append(factFiltered, filtered...))
-		combined = appendEvidenceContinuationChunks(chunks, combined)
+		combined = appendEvidenceContinuationChunks(query, chunks, combined)
 		if len(combined) > 0 {
 			sortMultiIntentEvidenceChunks(query, combined)
 			return combined
@@ -5016,8 +5025,11 @@ func splitQueryIntents(query string) []string {
 	return intents
 }
 
-func appendEvidenceContinuationChunks(allChunks, selected []RetrievedChunk) []RetrievedChunk {
+func appendEvidenceContinuationChunks(query string, allChunks, selected []RetrievedChunk) []RetrievedChunk {
 	if len(allChunks) == 0 || len(selected) == 0 {
+		return selected
+	}
+	if !isListDetailQuery(query) {
 		return selected
 	}
 	result := append([]RetrievedChunk(nil), selected...)
@@ -5029,7 +5041,7 @@ func appendEvidenceContinuationChunks(allChunks, selected []RetrievedChunk) []Re
 			if candidate.DocumentID != anchor.DocumentID || absInt(candidate.Index-anchor.Index) != 1 {
 				continue
 			}
-			if containsEvidenceSectionMarker(anchor.Text) || containsEvidenceSectionMarker(candidate.Text) {
+			if isEvidenceSectionAnchor(query, anchor.Text) {
 				result = append(result, candidate)
 				break
 			}
@@ -5050,53 +5062,72 @@ func containsRetrievedChunk(chunks []RetrievedChunk, target RetrievedChunk) bool
 	return false
 }
 
-func containsEvidenceSectionMarker(text string) bool {
-	lowered := strings.ToLower(text)
-	for _, marker := range []string{"主要人物", "人物设定", "角色名单", "主要角色", "核心角色"} {
-		if strings.Contains(lowered, marker) {
+func containsEvidenceSectionHeading(text string) bool {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\n")
+	firstContentLine := ""
+	for index, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if firstContentLine == "" {
+			firstContentLine = line
+		}
+		if matched, _ := regexp.MatchString(`^#{1,6}\s+\S`, line); matched {
 			return true
 		}
-	}
-	return false
-}
-
-func containsEvidenceSectionHeading(text string) bool {
-	normalized := strings.Join(strings.Fields(text), " ")
-	for _, marker := range []string{"主要人物", "人物设定", "角色名单", "主要角色", "核心角色"} {
-		searchFrom := 0
-		for searchFrom < len(normalized) {
-			relativeIndex := strings.Index(normalized[searchFrom:], marker)
-			if relativeIndex < 0 {
-				break
-			}
-			index := searchFrom + relativeIndex
-			if index == 0 || evidenceHeadingPrefix(normalized[:index]) {
-				return true
-			}
-			searchFrom = index + len(marker)
+		if matched, _ := regexp.MatchString(`^(?:[一二三四五六七八九十百]+[、.．]|[0-9]+[、.．)]|（[一二三四五六七八九十百0-9]+）)\s*\S`, line); matched {
+			return true
+		}
+		if index >= 2 {
+			break
 		}
 	}
-	return false
+
+	firstRunes := []rune(firstContentLine)
+	return len(lines) > 1 && len(firstRunes) >= 2 && len(firstRunes) <= 40 &&
+		!strings.ContainsAny(firstContentLine, "。！？!?；;：:")
 }
 
-func evidenceHeadingPrefix(prefix string) bool {
-	runes := []rune(strings.TrimSpace(prefix))
-	if len(runes) > 16 {
-		runes = runes[len(runes)-16:]
-	}
-	window := strings.TrimSpace(string(runes))
-	if strings.Contains(window, "#") {
+func isEvidenceSectionAnchor(query, text string) bool {
+	if containsEvidenceSectionHeading(text) {
 		return true
 	}
-	for _, ordinal := range []string{
-		"一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、",
+	if !isListDetailQuery(query) {
+		return false
+	}
+
+	prefixRunes := []rune(strings.ToLower(strings.TrimSpace(text)))
+	if len(prefixRunes) > 80 {
+		prefixRunes = prefixRunes[:80]
+	}
+	prefix := string(prefixRunes)
+	for _, intent := range splitQueryIntents(query) {
+		if !isListDetailQuery(intent) {
+			continue
+		}
+		for _, term := range queryEvidenceTerms(intent) {
+			term = strings.ToLower(strings.TrimSpace(term))
+			if len([]rune(term)) < 3 || isGenericListEvidenceTerm(term) {
+				continue
+			}
+			if strings.Contains(prefix, term) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isGenericListEvidenceTerm(term string) bool {
+	for _, marker := range []string{
+		"全部", "所有", "完整", "哪些", "名单", "清单", "列出", "逐项", "分别", "多少", "几个", "有哪", "有什么",
 	} {
-		if strings.HasSuffix(window, ordinal) {
+		if term == marker {
 			return true
 		}
 	}
-	matched, _ := regexp.MatchString(`[0-9]+[.、]$`, window)
-	return matched
+	return false
 }
 
 func sortMultiIntentEvidenceChunks(query string, chunks []RetrievedChunk) {
@@ -5117,13 +5148,8 @@ func multiIntentEvidenceScore(query string, chunk RetrievedChunk) int {
 			score += 10
 		}
 	}
-	if containsEvidenceSectionMarker(chunk.Text) {
+	if isListDetailQuery(query) && isEvidenceSectionAnchor(query, chunk.Text) {
 		score += 4
-	}
-	if strings.Contains(query, "作品") || strings.Contains(query, "小说") {
-		if strings.Contains(chunk.Text, "作品大纲") || strings.Contains(chunk.Text, "作者备注") {
-			score += 4
-		}
 	}
 	return score
 }
@@ -5552,7 +5578,7 @@ func factAttributeAliasGroups() [][]string {
 		{"负责人", "联系人", "校长", "法人", "法定代表人", "负责人姓名"},
 		{"时间", "日期", "年份", "年度"},
 		{"数量", "人数", "规模", "总数", "个数"},
-		{"职称", "职位", "岗位", "职务", "角色", "人物", "主要人物", "人物设定", "角色名单"},
+		{"职称", "职位", "岗位", "职务", "角色", "人物"},
 		{"名称", "姓名", "名字"},
 	}
 }
