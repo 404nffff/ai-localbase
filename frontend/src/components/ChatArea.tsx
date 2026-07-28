@@ -26,7 +26,7 @@ interface ChatAreaProps {
   generatingConversationTitle: string
   enforceSingleFlight: boolean
   onChatModeChange: (mode: ChatMode) => void
-  onSendMessage: (content: string) => Promise<void>
+  onSendMessage: (content: string) => Promise<boolean>
   onClearConversation: () => void
   onEditMessage?: (messageId: string, newContent: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
@@ -150,7 +150,10 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     setInputValue('')
-    await onSendMessage(content)
+    const accepted = await onSendMessage(content)
+    if (!accepted) {
+      setInputValue((current) => current || content)
+    }
   }
 
   const handleKeyDown = async (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -336,7 +339,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({
               className="prompt-chip"
               disabled={enforceSingleFlight && isGlobalGenerating}
               onClick={() => {
-                void onSendMessage(prompt)
+                void onSendMessage(prompt).then((accepted) => {
+                  if (!accepted) {
+                    setInputValue((current) => current || prompt)
+                  }
+                })
               }}
             >
               {prompt}

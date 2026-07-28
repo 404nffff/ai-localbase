@@ -508,6 +508,13 @@ const conversationMatchesScope = (
   conversation.documentId === documentId
 )
 
+class ConversationScopeConflictError extends Error {}
+
+const isConversationScopeConflictMessage = (message: string) => (
+  message.includes('conversation scope mismatch') ||
+  message.includes('legacy conversation scope is not trusted')
+)
+
 const sleep = (delayMs: number) =>
   new Promise((resolve) => {
     window.setTimeout(resolve, delayMs)
@@ -788,8 +795,15 @@ function AppContent() {
       return true
     }
 
-    window.alert(`当前正在生成「${generatingConversationTitle}」，请等待完成后再${actionText}。`)
+    showToast('warning', `当前正在生成「${generatingConversationTitle}」，请等待完成后再${actionText}。`)
     return false
+  }
+
+  const startConversationForScope = (knowledgeBaseId: string, documentId: string) => {
+    const conversation = createEmptyConversation(knowledgeBaseId, documentId)
+    setConversations((prev) => [conversation, ...prev])
+    setActiveConversationId(conversation.id)
+    return conversation
   }
 
   const activateConversationScope = (knowledgeBaseId: string, documentId: string) => {
@@ -813,9 +827,8 @@ function AppContent() {
       return
     }
 
-    const conversation = createEmptyConversation(knowledgeBaseId, documentId)
-    setConversations((prev) => [conversation, ...prev])
-    setActiveConversationId(conversation.id)
+    startConversationForScope(knowledgeBaseId, documentId)
+    showToast('info', '已按新的知识库范围创建会话。')
   }
 
   const handleCreateConversation = () => {
@@ -1686,18 +1699,16 @@ function AppContent() {
 
   const handleSendMessage = async (content: string) => {
     if (!activeConversation) {
-      return
+      return false
     }
 
     if (activeConversation.scopeVersion < 1) {
-      const safeConversation = createEmptyConversation(
+      startConversationForScope(
         selectedKnowledgeBaseId ?? activeConversation.knowledgeBaseId,
         selectedDocumentId ?? activeConversation.documentId,
       )
-      setConversations((prev) => [safeConversation, ...prev])
-      setActiveConversationId(safeConversation.id)
-      showToast('warning', '该历史会话创建于知识库隔离修复前，请在新会话中重新发送问题。')
-      return
+      showToast('info', '该历史会话仅供查看，已按当前知识库创建新会话。')
+      return false
     }
 
     const selectedScope = {
@@ -1710,8 +1721,7 @@ function AppContent() {
       selectedScope.documentId,
     )) {
       activateConversationScope(selectedScope.knowledgeBaseId, selectedScope.documentId)
-      showToast('warning', '知识库范围已切换，请在新会话中重新发送问题。')
-      return
+      return false
     }
 
     if (isOllamaSingleFlightMode && streamingConversationId) {
@@ -1719,14 +1729,14 @@ function AppContent() {
         'warning',
         `当前模型正在处理会话「${generatingConversationTitle}」，请等待完成。`,
       )
-      return
+      return false
     }
 
     if (!backendReady) {
       const isReady = await waitForBackendReady(20, 1000)
       if (!isReady) {
         window.alert('后端服务正在启动或尚未就绪，请稍后再发送问题。')
-        return
+        return false
       }
     }
 
@@ -1886,7 +1896,11 @@ function AppContent() {
       )
 
       if (!fallbackResponse.ok) {
-        throw new Error(await extractErrorMessage(fallbackResponse))
+        const message = await extractErrorMessage(fallbackResponse)
+        if (fallbackResponse.status === 409) {
+          throw new ConversationScopeConflictError(message)
+        }
+        throw new Error(message)
       }
 
       if (!isCurrentRequestActive()) {
@@ -1936,6 +1950,9 @@ function AppContent() {
       }
 
       if (!streamResponse.ok) {
+        if (streamResponse.status === 409) {
+          throw new ConversationScopeConflictError(await extractErrorMessage(streamResponse))
+        }
         const fallbackAbortController = new AbortController()
         chatAbortControllerRef.current = fallbackAbortController
         await requestFallbackCompletion(fallbackAbortController)
@@ -2010,7 +2027,11 @@ function AppContent() {
         }
 
         if (eventName === 'error') {
-          throw new Error(payload.error || '流式响应失败')
+          const message = payload.error || '流式响应失败'
+          if (isConversationScopeConflictMessage(message)) {
+            throw new ConversationScopeConflictError(message)
+          }
+          throw new Error(message)
         }
       }
 
@@ -2074,6 +2095,7 @@ function AppContent() {
       }),
     )
 
+    let inputConsumed = true
     try {
       await requestWithFallback()
     } catch (error) {
@@ -2095,7 +2117,30 @@ function AppContent() {
           ),
         )
       }
-      showToast('error', buildFriendlyChatError(error), 6000)
+      if (error instanceof ConversationScopeConflictError) {
+        inputConsumed = false
+        const safeConversation = createEmptyConversation(
+          selectedScope.knowledgeBaseId,
+          selectedScope.documentId,
+        )
+        setConversations((prev) => [
+          safeConversation,
+          ...prev.map((conversation) => (
+            conversation.id === conversationId
+              ? {
+                  ...conversation,
+                  messages: conversation.messages.filter(
+                    (message) => message.id !== userMessage.id && message.id !== assistantMessageId,
+                  ),
+                }
+              : conversation
+          )),
+        ])
+        setActiveConversationId(safeConversation.id)
+        showToast('info', '知识库范围已更新，已切换到新会话。')
+      } else {
+        showToast('error', buildFriendlyChatError(error), 6000)
+      }
     } finally {
       const activeRequest = activeChatRequestRef.current
       if (activeRequest?.requestId === requestId && activeRequest.conversationId === conversationId) {
@@ -2106,6 +2151,7 @@ function AppContent() {
         )
       }
     }
+    return inputConsumed
   }
 
   const handleSaveSettings = async (nextConfig: AppConfig, nextThinkModel: string) => {
