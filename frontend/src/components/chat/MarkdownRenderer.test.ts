@@ -41,22 +41,43 @@ describe('fixMarkdown', () => {
     expect(output).toContain('## 答案')
   })
 
-  it('preserves emoji outside the decorative symbol cleanup list', () => {
-    const output = fixMarkdown('问题吗？😊')
+  it('preserves all emoji without leaving unpaired surrogates', () => {
+    const emojis = [
+      '✅',
+      '☑️',
+      '✔️',
+      '📌',
+      '✨',
+      '🛠️',
+      '🚀',
+      '🎯',
+      '⚠️',
+      '👋',
+      '😊',
+      '👍🏽',
+      '👨‍💻',
+      '❤️',
+      '🇨🇳',
+      '1️⃣',
+    ]
+    const output = fixMarkdown(`常用表情：${emojis.join(' ')}`)
     const hasUnpairedSurrogate = Array.from(output).some((character) => {
       const codePoint = character.codePointAt(0) ?? 0
       return codePoint >= 0xd800 && codePoint <= 0xdfff
     })
 
-    expect(output).toContain('😊')
+    for (const emoji of emojis) {
+      expect(output).toContain(emoji)
+    }
     expect(hasUnpairedSurrogate).toBe(false)
   })
 
-  it('still removes configured decorative symbols without damaging other emoji', () => {
-    const output = fixMarkdown('✅ 核心内容 📌 😊')
+  it('preserves decorative symbols as model-authored content', () => {
+    const output = fixMarkdown('✅ 核心内容 • 📌 下一步 🚀')
 
-    expect(output).not.toContain('✅')
-    expect(output).not.toContain('📌')
-    expect(output).toContain('😊')
+    expect(output).toContain('✅')
+    expect(output).toContain('•')
+    expect(output).toContain('📌')
+    expect(output).toContain('🚀')
   })
 })
