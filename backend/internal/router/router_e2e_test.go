@@ -60,11 +60,12 @@ func TestRouterConfigEndpoints(t *testing.T) {
 
 	updatePayload := map[string]any{
 		"chat": map[string]any{
-			"provider":    "ollama",
-			"baseUrl":     "http://chat.example.invalid/v1",
-			"model":       "chat-model-a",
-			"apiKey":      "",
-			"temperature": 0.4,
+			"provider":             "ollama",
+			"baseUrl":              "http://chat.example.invalid/v1",
+			"model":                "chat-model-a",
+			"apiKey":               "",
+			"temperature":          0.4,
+			"knowledgeTemperature": 0.2,
 		},
 		"embedding": map[string]any{
 			"provider": "openai-compatible",
@@ -97,6 +98,9 @@ func TestRouterConfigEndpoints(t *testing.T) {
 	decodeJSONResponse(t, resp.Body.Bytes(), &fetched)
 	if fetched.Chat.Temperature != 0.4 {
 		t.Fatalf("expected persisted chat temperature 0.4, got %v", fetched.Chat.Temperature)
+	}
+	if fetched.Chat.KnowledgeTemperature != 0.2 {
+		t.Fatalf("expected persisted knowledge temperature 0.2, got %v", fetched.Chat.KnowledgeTemperature)
 	}
 	if fetched.Embedding.APIKey != "" {
 		t.Fatalf("expected public config to redact embedding apiKey, got %s", fetched.Embedding.APIKey)

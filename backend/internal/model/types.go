@@ -109,14 +109,15 @@ type HealthResponse struct {
 }
 
 type ChatConfig struct {
-	Provider            string  `json:"provider"`
-	BaseURL             string  `json:"baseUrl"`
-	Model               string  `json:"model"`
-	APIKey              string  `json:"apiKey"`
-	APIKeyConfigured    bool    `json:"apiKeyConfigured,omitempty"`
-	ClearAPIKey         bool    `json:"clearApiKey,omitempty"`
-	Temperature         float64 `json:"temperature"`
-	ContextMessageLimit int     `json:"contextMessageLimit"`
+	Provider             string  `json:"provider"`
+	BaseURL              string  `json:"baseUrl"`
+	Model                string  `json:"model"`
+	APIKey               string  `json:"apiKey"`
+	APIKeyConfigured     bool    `json:"apiKeyConfigured,omitempty"`
+	ClearAPIKey          bool    `json:"clearApiKey,omitempty"`
+	Temperature          float64 `json:"temperature"`
+	KnowledgeTemperature float64 `json:"knowledgeTemperature"`
+	ContextMessageLimit  int     `json:"contextMessageLimit"`
 }
 
 type EmbeddingConfig struct {
@@ -649,23 +650,23 @@ type RetrievalDebugConfidence struct {
 }
 
 type RetrievalDebugResponse struct {
-	Query            string                          `json:"query"`
-	KnowledgeBaseID  string                          `json:"knowledgeBaseId,omitempty"`
-	DocumentID       string                          `json:"documentId,omitempty"`
-	SearchMode       string                          `json:"searchMode"`
-	RerankStrategy   string                          `json:"rerankStrategy"`
-	QueryRewriteUsed bool                            `json:"queryRewriteUsed"`
-	QueryVariants    []string                        `json:"queryVariants,omitempty"`
-	ElapsedMs        int64                           `json:"elapsedMs"`
-	Count            int                             `json:"count"`
-	LowConfidence    bool                            `json:"lowConfidence"`
-	Confidence       RetrievalDebugConfidence        `json:"confidence"`
-	ContextPreview   string                          `json:"contextPreview"`
-	Sources          []map[string]string             `json:"sources"`
-	EvalCandidate    *EvalGroundTruthCase            `json:"evalCandidate,omitempty"`
-	Trace            []RetrievalDebugTraceStep       `json:"trace,omitempty"`
-	Items            []RetrievalDebugChunk           `json:"items"`
-	VerboseDetails   *RetrievalDebugVerboseDetails   `json:"verboseDetails,omitempty"`
+	Query            string                        `json:"query"`
+	KnowledgeBaseID  string                        `json:"knowledgeBaseId,omitempty"`
+	DocumentID       string                        `json:"documentId,omitempty"`
+	SearchMode       string                        `json:"searchMode"`
+	RerankStrategy   string                        `json:"rerankStrategy"`
+	QueryRewriteUsed bool                          `json:"queryRewriteUsed"`
+	QueryVariants    []string                      `json:"queryVariants,omitempty"`
+	ElapsedMs        int64                         `json:"elapsedMs"`
+	Count            int                           `json:"count"`
+	LowConfidence    bool                          `json:"lowConfidence"`
+	Confidence       RetrievalDebugConfidence      `json:"confidence"`
+	ContextPreview   string                        `json:"contextPreview"`
+	Sources          []map[string]string           `json:"sources"`
+	EvalCandidate    *EvalGroundTruthCase          `json:"evalCandidate,omitempty"`
+	Trace            []RetrievalDebugTraceStep     `json:"trace,omitempty"`
+	Items            []RetrievalDebugChunk         `json:"items"`
+	VerboseDetails   *RetrievalDebugVerboseDetails `json:"verboseDetails,omitempty"`
 }
 
 type RetrievalDebugVerboseDetails struct {

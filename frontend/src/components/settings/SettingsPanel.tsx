@@ -55,7 +55,10 @@ const validateConfig = (config: AppConfig) => {
   }
 
   if (config.chat.temperature < 0 || config.chat.temperature > 1) {
-    return 'Temperature 需要在 0 到 1 之间'
+    return '普通聊天温度需要在 0 到 1 之间'
+  }
+  if (config.chat.knowledgeTemperature < 0.1 || config.chat.knowledgeTemperature > 0.5) {
+    return '知识库回答温度需要在 0.1 到 0.5 之间'
   }
   if (config.chat.contextMessageLimit < 1 || config.chat.contextMessageLimit > 100) {
     return '上下文消息数量需要在 1 到 100 之间'

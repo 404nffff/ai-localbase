@@ -63,12 +63,9 @@ const AISettings: React.FC<AISettingsProps> = ({
         >
           <header className="settings-config-panel-header">
             <div>
-              <span className="settings-config-panel-icon" aria-hidden="true">
-                <AppIcon name="brain" size={18} />
-              </span>
               <div>
-                <h3>聊天与推理</h3>
-                <p>配置对话生成、上下文窗口和思考模式模型。</p>
+                <h3>对话模型</h3>
+                <p>模型连接、生成策略与上下文。</p>
               </div>
             </div>
             <span className={`settings-compact-status ${config.chat.model ? 'enabled' : 'disabled'}`}>
@@ -142,15 +139,16 @@ const AISettings: React.FC<AISettingsProps> = ({
 
           <section className="settings-form-section">
             <header>
-              <h4>生成</h4>
-              <p>控制回答随机性、上下文规模和思考模式。</p>
+              <h4>生成策略</h4>
+              <p>普通聊天与知识库问答使用独立温度。</p>
             </header>
-            <div className="settings-form-grid settings-form-grid-dense">
-              <div className="settings-form-group settings-form-group-full">
+            <div className="settings-temperature-grid">
+              <div className="settings-temperature-control">
                 <label className="settings-form-label settings-form-label-inline" htmlFor="chat-temperature">
-                  <span>Temperature</span>
+                  <span>普通聊天</span>
                   <strong>{config.chat.temperature.toFixed(1)}</strong>
                 </label>
+                <small>控制未使用知识库时回答的自由度。</small>
                 <input
                   id="chat-temperature"
                   type="range"
@@ -161,6 +159,31 @@ const AISettings: React.FC<AISettingsProps> = ({
                   onChange={(event) => onChatConfigChange('temperature', Number(event.target.value))}
                 />
               </div>
+              <div className="settings-temperature-control">
+                <label className="settings-form-label settings-form-label-inline" htmlFor="knowledge-temperature">
+                  <span>知识库问答</span>
+                  <strong>{config.chat.knowledgeTemperature.toFixed(1)}</strong>
+                </label>
+                <small>较低温度更适合引用和事实回答。</small>
+                <input
+                  id="knowledge-temperature"
+                  type="range"
+                  min="0.1"
+                  max="0.5"
+                  step="0.1"
+                  value={config.chat.knowledgeTemperature}
+                  onChange={(event) => onChatConfigChange('knowledgeTemperature', Number(event.target.value))}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-form-section">
+            <header>
+              <h4>上下文与推理</h4>
+              <p>控制会话历史范围和思考模式模型。</p>
+            </header>
+            <div className="settings-form-grid settings-form-grid-dense">
               <div className="settings-form-group">
                 <label className="settings-form-label" htmlFor="chat-context-limit">上下文消息数量</label>
                 <input
@@ -211,12 +234,9 @@ const AISettings: React.FC<AISettingsProps> = ({
         >
           <header className="settings-config-panel-header">
             <div>
-              <span className="settings-config-panel-icon" aria-hidden="true">
-                <AppIcon name="database" size={18} />
-              </span>
               <div>
                 <h3>Embedding</h3>
-                <p>配置文档索引和语义召回使用的向量模型。</p>
+                <p>文档索引和语义召回使用的向量模型。</p>
               </div>
             </div>
             <span className={`settings-compact-status ${config.embedding.model ? 'enabled' : 'disabled'}`}>

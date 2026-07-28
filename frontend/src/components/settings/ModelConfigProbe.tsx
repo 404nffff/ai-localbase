@@ -57,6 +57,7 @@ export const ModelConfigTest: React.FC<ModelConfigTestProps> = (props) => {
               model: props.modelName,
               apiKey: props.apiKey,
               temperature: props.temperature,
+              knowledgeTemperature: 0.1,
               contextMessageLimit: 1,
             })
           : await testEmbeddingModelConfig({

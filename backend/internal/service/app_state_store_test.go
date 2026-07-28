@@ -15,10 +15,11 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	state := persistentAppState{
 		Config: model.AppConfig{
 			Chat: model.ChatConfig{
-				Provider:    "ollama",
-				BaseURL:     "http://example.invalid/v1",
-				Model:       "chat-model-a",
-				Temperature: 0.5,
+				Provider:             "ollama",
+				BaseURL:              "http://example.invalid/v1",
+				Model:                "chat-model-a",
+				Temperature:          0.5,
+				KnowledgeTemperature: 0.2,
 			},
 			Embedding: model.EmbeddingConfig{
 				Provider: "ollama",
@@ -67,6 +68,9 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Config.Chat.Model != "chat-model-a" {
 		t.Fatalf("expected chat model chat-model-a, got %s", loaded.Config.Chat.Model)
+	}
+	if loaded.Config.Chat.KnowledgeTemperature != 0.2 {
+		t.Fatalf("expected knowledge temperature 0.2, got %v", loaded.Config.Chat.KnowledgeTemperature)
 	}
 	if len(loaded.KnowledgeBases["kb-1"].Documents) != 1 {
 		t.Fatalf("expected persisted documents, got %d", len(loaded.KnowledgeBases["kb-1"].Documents))
@@ -141,6 +145,9 @@ func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 	config := service.GetConfig()
 	if config.Chat.Model != "persisted-chat-model-a" {
 		t.Fatalf("expected persisted chat model, got %s", config.Chat.Model)
+	}
+	if config.Chat.KnowledgeTemperature != defaultKnowledgeTemperature {
+		t.Fatalf("expected legacy state to use knowledge temperature %.1f, got %v", defaultKnowledgeTemperature, config.Chat.KnowledgeTemperature)
 	}
 
 	knowledgeBases := service.ListKnowledgeBases()

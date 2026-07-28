@@ -1149,7 +1149,7 @@ body,
 
 .settings-models-page,
 .settings-retrieval-page {
-  width: min(100%, 820px);
+  width: min(100%, 900px);
 }
 
 .settings-subnav {
@@ -1208,7 +1208,7 @@ body,
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  padding-bottom: 22px;
+  padding-bottom: 18px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -1216,19 +1216,7 @@ body,
   display: flex;
   min-width: 0;
   align-items: flex-start;
-  gap: 11px;
-}
-
-.settings-config-panel-icon {
-  display: inline-flex;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: 7px;
-  background: var(--color-primary-soft);
-  color: var(--color-primary-active);
+  gap: 0;
 }
 
 .settings-config-panel-header h3 {
@@ -1269,7 +1257,7 @@ body,
 }
 
 .settings-form-section {
-  padding: 24px 0;
+  padding: 22px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -1288,6 +1276,60 @@ body,
   margin: 4px 0 0;
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.settings-models-page .settings-form-group input,
+.settings-models-page .settings-form-group select {
+  border-color: var(--border-color);
+  background: var(--surface-secondary);
+}
+
+.settings-temperature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-temperature-control {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding-right: 22px;
+}
+
+.settings-temperature-control + .settings-temperature-control {
+  padding-right: 0;
+  padding-left: 22px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.settings-temperature-control .settings-form-label span {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.settings-temperature-control .settings-form-label strong {
+  min-width: 32px;
+  color: var(--color-primary-active);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.settings-temperature-control small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.settings-temperature-control input[type="range"] {
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--color-primary);
+  box-shadow: none;
 }
 
 .settings-test-row {
@@ -4269,6 +4311,22 @@ body,
 
   .settings-form-section {
     padding: 20px 0;
+  }
+
+  .settings-temperature-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .settings-temperature-control,
+  .settings-temperature-control + .settings-temperature-control {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .settings-temperature-control + .settings-temperature-control {
+    padding-top: 18px;
+    border-top: 1px solid var(--border-subtle);
   }
 
   .settings-test-row {

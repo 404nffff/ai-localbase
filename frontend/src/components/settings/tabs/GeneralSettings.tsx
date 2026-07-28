@@ -61,7 +61,7 @@ const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config }) => {
       title: '聊天模型',
       description: `${chatProviderLabel} · ${config.chat.baseUrl || '未配置 Base URL'}`,
       value: config.chat.model || '未配置',
-      meta: `上下文 ${config.chat.contextMessageLimit} 条`,
+      meta: `聊天温度 ${config.chat.temperature.toFixed(1)} · 知识库 ${config.chat.knowledgeTemperature.toFixed(1)} · 上下文 ${config.chat.contextMessageLimit} 条`,
       status: config.chat.model ? 'neutral' : 'disabled',
     },
     {

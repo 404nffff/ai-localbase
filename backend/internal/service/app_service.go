@@ -48,6 +48,8 @@ const (
 	maxMultiQuerySearchQueries    = 8
 	mcpJobCancelWarning           = "任务取消是 best-effort；如果底层导入已进入注册或索引阶段，文档可能已经完成导入。"
 	conversationScopeVersion      = 1
+	defaultKnowledgeTemperature   = 0.1
+	maxKnowledgeTemperature       = 0.5
 )
 
 var (
@@ -365,13 +367,14 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 	return &model.AppState{
 		Config: model.AppConfig{
 			Chat: model.ChatConfig{
-				Provider:            "ollama",
-				BaseURL:             ollamaBaseURL,
-				Model:               "qwen3.5:0.8b",
-				APIKey:              "",
-				APIKeyConfigured:    false,
-				Temperature:         0.7,
-				ContextMessageLimit: 12,
+				Provider:             "ollama",
+				BaseURL:              ollamaBaseURL,
+				Model:                "qwen3.5:0.8b",
+				APIKey:               "",
+				APIKeyConfigured:     false,
+				Temperature:          0.7,
+				KnowledgeTemperature: defaultKnowledgeTemperature,
+				ContextMessageLimit:  12,
 			},
 			Embedding: model.EmbeddingConfig{
 				Provider:         "ollama",
@@ -436,6 +439,7 @@ func (s *AppService) GetConfig() model.AppConfig {
 	if cfg.Chat.ContextMessageLimit <= 0 {
 		cfg.Chat.ContextMessageLimit = 12
 	}
+	cfg.Chat.KnowledgeTemperature = normalizeKnowledgeTemperature(cfg.Chat.KnowledgeTemperature)
 	cfg.Chat.APIKeyConfigured = strings.TrimSpace(cfg.Chat.APIKey) != ""
 	cfg.Embedding.APIKeyConfigured = strings.TrimSpace(cfg.Embedding.APIKey) != ""
 	cfg.MCP.BasePath = defaultMCPBasePath(cfg.MCP.BasePath)
@@ -1181,6 +1185,13 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 	if req.Chat.Temperature < 0 || req.Chat.Temperature > 2 {
 		return model.AppConfig{}, fmt.Errorf("chat temperature must be between 0 and 2")
 	}
+	knowledgeTemperature := req.Chat.KnowledgeTemperature
+	if knowledgeTemperature == 0 {
+		knowledgeTemperature = defaultKnowledgeTemperature
+	}
+	if knowledgeTemperature < defaultKnowledgeTemperature || knowledgeTemperature > maxKnowledgeTemperature {
+		return model.AppConfig{}, fmt.Errorf("knowledge temperature must be between 0.1 and 0.5")
+	}
 
 	embedProvider := strings.TrimSpace(req.Embedding.Provider)
 	embedBaseURL := strings.TrimSpace(req.Embedding.BaseURL)
@@ -1218,13 +1229,14 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 
 	nextConfig := model.AppConfig{
 		Chat: model.ChatConfig{
-			Provider:            chatProvider,
-			BaseURL:             chatBaseURL,
-			Model:               chatModel,
-			APIKey:              chatAPIKey,
-			APIKeyConfigured:    chatAPIKey != "",
-			Temperature:         req.Chat.Temperature,
-			ContextMessageLimit: contextMessageLimit,
+			Provider:             chatProvider,
+			BaseURL:              chatBaseURL,
+			Model:                chatModel,
+			APIKey:               chatAPIKey,
+			APIKeyConfigured:     chatAPIKey != "",
+			Temperature:          req.Chat.Temperature,
+			KnowledgeTemperature: knowledgeTemperature,
+			ContextMessageLimit:  contextMessageLimit,
 		},
 		Embedding: model.EmbeddingConfig{
 			Provider:         embedProvider,
@@ -2270,6 +2282,15 @@ func (s *AppService) CurrentChatConfig() model.ChatModelConfig {
 	return s.currentChatConfig()
 }
 
+func (s *AppService) KnowledgeTemperature() float64 {
+	if s == nil {
+		return defaultKnowledgeTemperature
+	}
+	s.state.Mu.RLock()
+	defer s.state.Mu.RUnlock()
+	return normalizeKnowledgeTemperature(s.state.Config.Chat.KnowledgeTemperature)
+}
+
 func (s *AppService) ServerConfig() model.ServerConfig {
 	if s == nil {
 		return model.ServerConfig{}
@@ -2434,6 +2455,16 @@ func (s *AppService) currentChatConfig() model.ChatModelConfig {
 		Temperature:         s.state.Config.Chat.Temperature,
 		ContextMessageLimit: contextMessageLimit,
 	}
+}
+
+func normalizeKnowledgeTemperature(value float64) float64 {
+	if value < defaultKnowledgeTemperature {
+		return defaultKnowledgeTemperature
+	}
+	if value > maxKnowledgeTemperature {
+		return maxKnowledgeTemperature
+	}
+	return value
 }
 
 func (s *AppService) resolveEmbeddingConfig(req model.ChatCompletionRequest) model.EmbeddingModelConfig {

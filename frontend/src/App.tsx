@@ -136,6 +136,7 @@ export interface ChatConfig {
   apiKeyConfigured?: boolean
   clearApiKey?: boolean
   temperature: number
+  knowledgeTemperature: number
   contextMessageLimit: number
 }
 
@@ -381,6 +382,10 @@ const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): Ap
     mcpConfig.tokenConfigured,
     fallback.mcp.token,
   )
+  const knowledgeTemperature =
+    typeof chatConfig.knowledgeTemperature === 'number' && Number.isFinite(chatConfig.knowledgeTemperature)
+      ? Math.max(0.1, Math.min(0.5, chatConfig.knowledgeTemperature))
+      : fallback.chat.knowledgeTemperature
 
   return {
     chat: {
@@ -389,6 +394,7 @@ const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): Ap
       apiKey: chatApiKey,
       apiKeyConfigured: Boolean(chatConfig.apiKeyConfigured || chatApiKey),
       clearApiKey: false,
+      knowledgeTemperature,
     },
     embedding: {
       ...fallback.embedding,
@@ -578,6 +584,7 @@ function AppContent() {
         model: 'llama3.2',
         apiKey: '',
         temperature: 0.7,
+        knowledgeTemperature: 0.1,
         contextMessageLimit: 12,
       },
       embedding: {

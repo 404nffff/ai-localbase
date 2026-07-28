@@ -696,7 +696,11 @@ func (h *AppHandler) prepareChatRequest(req model.ChatCompletionRequest) (model.
 	}
 
 	preparedReq := req
-	preparedReq.Config = applyKnowledgeGenerationPolicy(h.appService.CurrentChatConfig(), !skipKnowledgeRetrieval)
+	preparedReq.Config = applyKnowledgeGenerationPolicy(
+		h.appService.CurrentChatConfig(),
+		h.appService.KnowledgeTemperature(),
+		!skipKnowledgeRetrieval,
+	)
 	preparedReq.Config.ContextMessageLimit = h.appService.ContextMessageLimit()
 	preparedReq.Messages = h.appService.TrimChatMessages(filterOperationalChatMessages(req.Messages))
 	isDiagramRequest := strings.Contains(latestQuestion, "流程图") || strings.Contains(latestQuestion, "架构图") || strings.Contains(latestQuestion, "状态图") || strings.Contains(latestQuestion, "Mermaid")
@@ -738,11 +742,9 @@ func buildChatSystemPrompt(contextParts []string, isDiagramRequest bool) string 
 	return strings.Join(promptSections, "\n")
 }
 
-const maxKnowledgeGenerationTemperature = 0.1
-
-func applyKnowledgeGenerationPolicy(config model.ChatModelConfig, useKnowledgeRetrieval bool) model.ChatModelConfig {
-	if useKnowledgeRetrieval && config.Temperature > maxKnowledgeGenerationTemperature {
-		config.Temperature = maxKnowledgeGenerationTemperature
+func applyKnowledgeGenerationPolicy(config model.ChatModelConfig, knowledgeTemperature float64, useKnowledgeRetrieval bool) model.ChatModelConfig {
+	if useKnowledgeRetrieval {
+		config.Temperature = knowledgeTemperature
 	}
 	return config
 }

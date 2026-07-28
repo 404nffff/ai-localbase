@@ -80,18 +80,22 @@ func TestApplyKnowledgeGenerationPolicy(t *testing.T) {
 	tests := []struct {
 		name                  string
 		temperature           float64
+		knowledgeTemperature  float64
 		useKnowledgeRetrieval bool
 		expected              float64
 	}{
-		{name: "caps knowledge generation", temperature: 1, useKnowledgeRetrieval: true, expected: 0.1},
-		{name: "keeps lower knowledge temperature", temperature: 0.05, useKnowledgeRetrieval: true, expected: 0.05},
-		{name: "keeps deterministic knowledge temperature", temperature: 0, useKnowledgeRetrieval: true, expected: 0},
-		{name: "does not cap direct chat", temperature: 1, useKnowledgeRetrieval: false, expected: 1},
+		{name: "uses knowledge temperature", temperature: 1, knowledgeTemperature: 0.1, useKnowledgeRetrieval: true, expected: 0.1},
+		{name: "allows a higher configured knowledge temperature", temperature: 0.1, knowledgeTemperature: 0.4, useKnowledgeRetrieval: true, expected: 0.4},
+		{name: "does not override direct chat", temperature: 1, knowledgeTemperature: 0.1, useKnowledgeRetrieval: false, expected: 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := applyKnowledgeGenerationPolicy(model.ChatModelConfig{Temperature: tt.temperature}, tt.useKnowledgeRetrieval)
+			config := applyKnowledgeGenerationPolicy(
+				model.ChatModelConfig{Temperature: tt.temperature},
+				tt.knowledgeTemperature,
+				tt.useKnowledgeRetrieval,
+			)
 			if config.Temperature != tt.expected {
 				t.Fatalf("expected temperature %.2f, got %.2f", tt.expected, config.Temperature)
 			}
