@@ -1,6 +1,5 @@
 import React from 'react'
 import { APP_VERSION_LABEL, IS_RELEASE_BUILD } from '../../../utils/appInfo'
-import AppIcon from '../../common/AppIcon'
 
 const repositoryUrl = 'https://github.com/veyliss/ai-localbase'
 const releaseUrl = `${repositoryUrl}/releases`
@@ -16,20 +15,17 @@ const AboutSettings: React.FC<AboutSettingsProps> = ({ embedded = false }) => {
 
   return (
     <div className={embedded ? 'settings-about-page settings-about-embedded' : 'settings-tab-content settings-about-page'}>
-      <details className="settings-about-disclosure">
-        <summary>
-          <span>
-            <strong>{projectName}</strong>
-            <small>{APP_VERSION_LABEL} · {buildStatus}</small>
-          </span>
-          <AppIcon name="chevronDown" size={16} />
-        </summary>
-        <div className="settings-about-links">
+      <section className="settings-about-footer" aria-label="关于项目">
+        <div>
+          <strong>{projectName}</strong>
+          <small>{APP_VERSION_LABEL} · {buildStatus}</small>
+        </div>
+        <nav className="settings-about-links" aria-label="项目链接">
           <a href={repositoryUrl} target="_blank" rel="noreferrer">GitHub</a>
           <a href={releaseUrl} target="_blank" rel="noreferrer">发布记录</a>
           <a href={licenseUrl} target="_blank" rel="noreferrer">许可证</a>
-        </div>
-      </details>
+        </nav>
+      </section>
     </div>
   )
 }

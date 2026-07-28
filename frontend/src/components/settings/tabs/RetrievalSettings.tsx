@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo } from 'react'
 import type { RetrievalConfig } from '../../../App'
 import AppIcon, { type AppIconName } from '../../common/AppIcon'
 
@@ -94,18 +94,12 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
   onRetrievalConfigChange,
   onRetrievalConfigPatch,
 }) => {
-  const [showAdvanced, setShowAdvanced] = useState(false)
-
   const activePreset = useMemo<RetrievalPresetId>(
     () => retrievalPresets.find((preset) => matchesPreset(config, preset))?.id ?? 'custom',
     [config],
   )
 
   const handlePresetChange = (presetId: RetrievalPresetId) => {
-    if (presetId === 'custom') {
-      setShowAdvanced(true)
-      return
-    }
     const preset = retrievalPresets.find((item) => item.id === presetId)
     if (preset) {
       onRetrievalConfigPatch(preset.config)
@@ -123,8 +117,11 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
     <div className="settings-tab-content settings-retrieval-page">
       <section className="settings-preset-section">
         <header>
-          <h3>检索预设</h3>
-          <p>先选择目标，再按需要微调参数。</p>
+          <div>
+            <h3>检索预设</h3>
+            <p>选择预设后仍可直接微调下方全部参数。</p>
+          </div>
+          {activePreset === 'custom' && <span className="settings-preset-current">当前为自定义配置</span>}
         </header>
         <div className="settings-preset-options" aria-label="检索预设">
           {retrievalPresets.map((preset) => (
@@ -141,17 +138,6 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
               <small>{preset.description}</small>
             </button>
           ))}
-          <button
-            aria-pressed={activePreset === 'custom'}
-            className={activePreset === 'custom' ? 'active' : ''}
-            onClick={() => handlePresetChange('custom')}
-            title="保留当前配置并展开高级参数"
-            type="button"
-          >
-            <span aria-hidden="true"><AppIcon name="settings" size={17} /></span>
-            <strong>自定义</strong>
-            <small>保留当前配置并展开高级参数</small>
-          </button>
         </div>
       </section>
 
@@ -214,134 +200,114 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
         </div>
       </section>
 
-      <details
-        className="settings-advanced-section"
-        onToggle={(event) => setShowAdvanced(event.currentTarget.open)}
-        open={showAdvanced}
-      >
-        <summary>
-          <span>
-            <strong>高级参数</strong>
-            <small>问题改写、候选规模与低置信补强</small>
-          </span>
-          <span className="settings-advanced-summary">
-            最终 {config.topKKnowledgeBase} · 候选 {config.candidateTopKAllDocs}
-          </span>
-          <AppIcon name="chevronDown" size={17} />
-        </summary>
-
-        <div className="settings-advanced-content">
-          <section className="settings-form-section">
-            <header>
-              <h4>问题改写</h4>
-              <p>为模糊问题生成多个检索表达。</p>
-            </header>
-            <div className="settings-form-grid settings-form-grid-dense">
-              <label className="settings-toggle-row settings-form-group-full" htmlFor="retrieval-query-rewrite">
-                <span>
-                  <strong>启用问题改写</strong>
-                  <small>复杂问题通常能获得更完整的召回。</small>
-                </span>
-                <input
-                  id="retrieval-query-rewrite"
-                  type="checkbox"
-                  checked={config.enableQueryRewrite}
-                  onChange={(event) => onRetrievalConfigChange('enableQueryRewrite', event.target.checked)}
-                />
-              </label>
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-query-variants">改写数量</label>
-                <input
-                  disabled={!config.enableQueryRewrite}
-                  id="retrieval-query-variants"
-                  type="number"
-                  min="1"
-                  max="5"
-                  value={config.queryRewriteMaxVariants}
-                  onChange={(event) => onRetrievalConfigChange('queryRewriteMaxVariants', Number(event.target.value))}
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="settings-form-section">
-            <header>
-              <h4>召回规模</h4>
-              <p>控制初始候选和最终进入上下文的片段数量。</p>
-            </header>
-            <div className="settings-form-grid settings-form-grid-dense">
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-document-top-k">文档 TopK</label>
-                <input
-                  id="retrieval-document-top-k"
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={config.topKDocument}
-                  onChange={(event) => onRetrievalConfigChange('topKDocument', Number(event.target.value))}
-                />
-              </div>
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-document-candidates">文档候选</label>
-                <input
-                  id="retrieval-document-candidates"
-                  type="number"
-                  min={config.topKDocument}
-                  max="80"
-                  value={config.candidateTopKDocument}
-                  onChange={(event) => onRetrievalConfigChange('candidateTopKDocument', Number(event.target.value))}
-                />
-              </div>
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-kb-top-k">知识库 TopK</label>
-                <input
-                  id="retrieval-kb-top-k"
-                  type="number"
-                  min="1"
-                  max="40"
-                  value={config.topKKnowledgeBase}
-                  onChange={(event) => onRetrievalConfigChange('topKKnowledgeBase', Number(event.target.value))}
-                />
-              </div>
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-kb-candidates">知识库候选</label>
-                <input
-                  id="retrieval-kb-candidates"
-                  type="number"
-                  min={config.topKKnowledgeBase}
-                  max="120"
-                  value={config.candidateTopKAllDocs}
-                  onChange={(event) => onRetrievalConfigChange('candidateTopKAllDocs', Number(event.target.value))}
-                />
-              </div>
-              <div className="settings-form-group">
-                <label className="settings-form-label" htmlFor="retrieval-chunks-per-document">每文档片段数</label>
-                <input
-                  id="retrieval-chunks-per-document"
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={config.maxChunksPerDocument}
-                  onChange={(event) => onRetrievalConfigChange('maxChunksPerDocument', Number(event.target.value))}
-                />
-              </div>
-            </div>
-          </section>
-
-          <label className="settings-toggle-row" htmlFor="retrieval-confidence-boost">
+      <section className="settings-form-section settings-retrieval-detail">
+        <header>
+          <h4>查询增强</h4>
+          <p>为模糊问题生成多个检索表达。</p>
+        </header>
+        <div className="settings-form-grid settings-form-grid-dense">
+          <label className="settings-toggle-row settings-form-group-full" htmlFor="retrieval-query-rewrite">
             <span>
-              <strong>低置信自动补强</strong>
-              <small>召回置信偏低时扩大候选并补充片段。</small>
+              <strong>启用问题改写</strong>
+              <small>复杂问题通常能获得更完整的召回。</small>
             </span>
             <input
-              id="retrieval-confidence-boost"
+              id="retrieval-query-rewrite"
               type="checkbox"
-              checked={config.enableLowConfidenceBoost}
-              onChange={(event) => onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)}
+              checked={config.enableQueryRewrite}
+              onChange={(event) => onRetrievalConfigChange('enableQueryRewrite', event.target.checked)}
             />
           </label>
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-query-variants">改写数量</label>
+            <input
+              disabled={!config.enableQueryRewrite}
+              id="retrieval-query-variants"
+              type="number"
+              min="1"
+              max="5"
+              value={config.queryRewriteMaxVariants}
+              onChange={(event) => onRetrievalConfigChange('queryRewriteMaxVariants', Number(event.target.value))}
+            />
+          </div>
         </div>
-      </details>
+      </section>
+
+      <section className="settings-form-section settings-retrieval-detail">
+        <header>
+          <h4>召回规模</h4>
+          <p>控制初始候选和最终进入上下文的片段数量。</p>
+        </header>
+        <div className="settings-form-grid settings-form-grid-dense">
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-document-top-k">文档 TopK</label>
+            <input
+              id="retrieval-document-top-k"
+              type="number"
+              min="1"
+              max="30"
+              value={config.topKDocument}
+              onChange={(event) => onRetrievalConfigChange('topKDocument', Number(event.target.value))}
+            />
+          </div>
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-document-candidates">文档候选</label>
+            <input
+              id="retrieval-document-candidates"
+              type="number"
+              min={config.topKDocument}
+              max="80"
+              value={config.candidateTopKDocument}
+              onChange={(event) => onRetrievalConfigChange('candidateTopKDocument', Number(event.target.value))}
+            />
+          </div>
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-kb-top-k">知识库 TopK</label>
+            <input
+              id="retrieval-kb-top-k"
+              type="number"
+              min="1"
+              max="40"
+              value={config.topKKnowledgeBase}
+              onChange={(event) => onRetrievalConfigChange('topKKnowledgeBase', Number(event.target.value))}
+            />
+          </div>
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-kb-candidates">知识库候选</label>
+            <input
+              id="retrieval-kb-candidates"
+              type="number"
+              min={config.topKKnowledgeBase}
+              max="120"
+              value={config.candidateTopKAllDocs}
+              onChange={(event) => onRetrievalConfigChange('candidateTopKAllDocs', Number(event.target.value))}
+            />
+          </div>
+          <div className="settings-form-group">
+            <label className="settings-form-label" htmlFor="retrieval-chunks-per-document">每文档片段数</label>
+            <input
+              id="retrieval-chunks-per-document"
+              type="number"
+              min="1"
+              max="10"
+              value={config.maxChunksPerDocument}
+              onChange={(event) => onRetrievalConfigChange('maxChunksPerDocument', Number(event.target.value))}
+            />
+          </div>
+        </div>
+        <label className="settings-toggle-row settings-retrieval-confidence-row" htmlFor="retrieval-confidence-boost">
+          <span>
+            <strong>低置信自动补强</strong>
+            <small>召回置信偏低时扩大候选并补充片段。</small>
+          </span>
+          <input
+            id="retrieval-confidence-boost"
+            type="checkbox"
+            checked={config.enableLowConfidenceBoost}
+            onChange={(event) => onRetrievalConfigChange('enableLowConfidenceBoost', event.target.checked)}
+          />
+        </label>
+      </section>
     </div>
   )
 }

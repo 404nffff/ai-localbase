@@ -398,8 +398,13 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
           </div>
           <div className="settings-readonly-field">
             <span>认证方式</span>
-            <strong>Authorization Bearer</strong>
-            <small>使用带明确 Scope 的 API Key</small>
+            <strong>{config.recommendedAuthMode || 'API Key Scope'}</strong>
+            <small>Authorization Bearer</small>
+          </div>
+          <div className="settings-readonly-field">
+            <span>危险操作确认</span>
+            <strong>{config.dangerConfirmationMode || 'confirmNonce'}</strong>
+            <small>由服务端部署配置管理</small>
           </div>
           <div className="settings-readonly-field">
             <span>有效 API Key</span>
@@ -536,58 +541,53 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
       </section>
 
       <section className="settings-setting-section settings-template-section">
-        <details className="settings-compact-disclosure">
-          <summary>
-            <span>
-              <strong>客户端模板</strong>
-              <small>复制 Cherry Studio、Claude Desktop 或通用 HTTP 配置</small>
-            </span>
-            <AppIcon name="chevronDown" size={17} />
-          </summary>
-          <div className="settings-compact-disclosure-body">
-            <div className="settings-template-switcher" role="group" aria-label="MCP 客户端模板">
-              {templates.map((template) => (
-                <button
-                  aria-pressed={selectedTemplate.id === template.id}
-                  className={selectedTemplate.id === template.id ? 'active' : ''}
-                  key={template.id}
-                  onClick={() => {
-                    setSelectedTemplateId(template.id)
-                    setTemplateFeedback('')
-                  }}
-                  type="button"
-                >
-                  {template.name}
-                </button>
-              ))}
-            </div>
-
-            <article
-              aria-live="polite"
-              className="settings-mcp-template settings-mcp-template-single"
-            >
-              <div className="settings-mcp-template-head">
-                <div>
-                  <h4>{selectedTemplate.name}</h4>
-                  <p>{selectedTemplate.description}</p>
-                </div>
-                <button className="settings-action-btn" onClick={() => void handleCopyTemplate()} type="button">
-                  <AppIcon name={copiedTemplateId === selectedTemplate.id ? 'check' : 'copy'} size={16} />
-                  {copiedTemplateId === selectedTemplate.id ? '已复制' : '复制模板'}
-                </button>
-              </div>
-              <div className="settings-mcp-scope-row" aria-label="模板所需权限">
-                {selectedTemplate.scopes.map((scope) => (
-                  <span key={scope}>{scope}</span>
-                ))}
-              </div>
-              <pre className="settings-mcp-template-code">
-                <code>{selectedTemplate.content}</code>
-              </pre>
-            </article>
-            {templateFeedback && <small className="settings-feedback">{templateFeedback}</small>}
+        <div className="settings-setting-section-header">
+          <div>
+            <h3>客户端模板</h3>
+            <p>选择客户端后复制配置，API Key 位置保留为安全占位符。</p>
           </div>
-        </details>
+        </div>
+        <div className="settings-template-switcher" role="group" aria-label="MCP 客户端模板">
+          {templates.map((template) => (
+            <button
+              aria-pressed={selectedTemplate.id === template.id}
+              className={selectedTemplate.id === template.id ? 'active' : ''}
+              key={template.id}
+              onClick={() => {
+                setSelectedTemplateId(template.id)
+                setTemplateFeedback('')
+              }}
+              type="button"
+            >
+              {template.name}
+            </button>
+          ))}
+        </div>
+
+        <article
+          aria-live="polite"
+          className="settings-mcp-template settings-mcp-template-single"
+        >
+          <div className="settings-mcp-template-head">
+            <div>
+              <h4>{selectedTemplate.name}</h4>
+              <p>{selectedTemplate.description}</p>
+            </div>
+            <button className="settings-action-btn" onClick={() => void handleCopyTemplate()} type="button">
+              <AppIcon name={copiedTemplateId === selectedTemplate.id ? 'check' : 'copy'} size={16} />
+              {copiedTemplateId === selectedTemplate.id ? '已复制' : '复制模板'}
+            </button>
+          </div>
+          <div className="settings-mcp-scope-row" aria-label="模板所需权限">
+            {selectedTemplate.scopes.map((scope) => (
+              <span key={scope}>{scope}</span>
+            ))}
+          </div>
+          <pre className="settings-mcp-template-code">
+            <code>{selectedTemplate.content}</code>
+          </pre>
+        </article>
+        {templateFeedback && <small className="settings-feedback">{templateFeedback}</small>}
       </section>
 
       <section className="settings-setting-section settings-legacy-section">

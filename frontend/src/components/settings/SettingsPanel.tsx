@@ -307,7 +307,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const activePanel = useMemo(() => {
     switch (activeTab) {
       case 'overview':
-        return <GeneralSettings config={draftConfig} />
+        return <GeneralSettings config={draftConfig} thinkModel={draftThinkModel} />
       case 'models':
         return (
           <AISettings

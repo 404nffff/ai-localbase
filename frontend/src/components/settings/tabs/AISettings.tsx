@@ -125,90 +125,71 @@ const AISettings: React.FC<AISettingsProps> = ({
             </div>
           </section>
 
-          <details className="settings-advanced-section settings-model-advanced">
-            <summary>
-              <span>
-                <strong>高级参数</strong>
-                <small>生成温度、上下文和推理模型</small>
-              </span>
-              <span className="settings-advanced-summary">
-                温度 {config.chat.temperature.toFixed(1)} · 上下文 {config.chat.contextMessageLimit} 条
-              </span>
-              <AppIcon name="chevronDown" size={16} />
-            </summary>
-            <div className="settings-advanced-content">
-              <section className="settings-form-section">
-                <header>
-                  <h4>生成策略</h4>
-                </header>
-                <div className="settings-temperature-grid">
-                  <div className="settings-temperature-control">
-                    <label className="settings-form-label settings-form-label-inline" htmlFor="chat-temperature">
-                      <span>普通聊天</span>
-                      <strong>{config.chat.temperature.toFixed(1)}</strong>
-                    </label>
-                    <small>控制未使用知识库时回答的自由度。</small>
-                    <input
-                      id="chat-temperature"
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value={config.chat.temperature}
-                      onChange={(event) => onChatConfigChange('temperature', Number(event.target.value))}
-                    />
-                  </div>
-                  <div className="settings-temperature-control">
-                    <label className="settings-form-label settings-form-label-inline" htmlFor="knowledge-temperature">
-                      <span>知识库问答</span>
-                      <strong>{config.chat.knowledgeTemperature.toFixed(1)}</strong>
-                    </label>
-                    <small>较低温度更适合引用和事实回答。</small>
-                    <input
-                      id="knowledge-temperature"
-                      type="range"
-                      min="0.1"
-                      max="0.5"
-                      step="0.1"
-                      value={config.chat.knowledgeTemperature}
-                      onChange={(event) => onChatConfigChange('knowledgeTemperature', Number(event.target.value))}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="settings-form-section">
-                <header>
-                  <h4>上下文与推理</h4>
-                </header>
-                <div className="settings-form-grid settings-form-grid-dense">
-                  <div className="settings-form-group">
-                    <label className="settings-form-label" htmlFor="chat-context-limit">上下文消息数量</label>
-                    <input
-                      id="chat-context-limit"
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={config.chat.contextMessageLimit}
-                      onChange={(event) => onChatConfigChange('contextMessageLimit', Number(event.target.value))}
-                    />
-                    <small>每次发送给模型的最近消息条数，范围 1-100。</small>
-                  </div>
-                  <div className="settings-form-group">
-                    <label className="settings-form-label" htmlFor="think-model">思考模式模型</label>
-                    <input
-                      id="think-model"
-                      type="text"
-                      value={chatModeSettings.thinkModel}
-                      onChange={(event) => onThinkModelChange(event.target.value)}
-                      placeholder="deepseek-r1:8b"
-                    />
-                    <small>留空时使用聊天模型。</small>
-                  </div>
-                </div>
-              </section>
+          <section className="settings-form-section settings-model-parameters">
+            <header>
+              <h4>生成与推理</h4>
+              <p>温度、会话上下文和思考模式模型。</p>
+            </header>
+            <div className="settings-temperature-grid">
+              <div className="settings-temperature-control">
+                <label className="settings-form-label settings-form-label-inline" htmlFor="chat-temperature">
+                  <span>普通聊天</span>
+                  <strong>{config.chat.temperature.toFixed(1)}</strong>
+                </label>
+                <small>控制未使用知识库时回答的自由度。</small>
+                <input
+                  id="chat-temperature"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={config.chat.temperature}
+                  onChange={(event) => onChatConfigChange('temperature', Number(event.target.value))}
+                />
+              </div>
+              <div className="settings-temperature-control">
+                <label className="settings-form-label settings-form-label-inline" htmlFor="knowledge-temperature">
+                  <span>知识库问答</span>
+                  <strong>{config.chat.knowledgeTemperature.toFixed(1)}</strong>
+                </label>
+                <small>较低温度更适合引用和事实回答。</small>
+                <input
+                  id="knowledge-temperature"
+                  type="range"
+                  min="0.1"
+                  max="0.5"
+                  step="0.1"
+                  value={config.chat.knowledgeTemperature}
+                  onChange={(event) => onChatConfigChange('knowledgeTemperature', Number(event.target.value))}
+                />
+              </div>
             </div>
-          </details>
+            <div className="settings-form-grid settings-form-grid-dense settings-model-context-grid">
+              <div className="settings-form-group">
+                <label className="settings-form-label" htmlFor="chat-context-limit">上下文消息数量</label>
+                <input
+                  id="chat-context-limit"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={config.chat.contextMessageLimit}
+                  onChange={(event) => onChatConfigChange('contextMessageLimit', Number(event.target.value))}
+                />
+                <small>每次发送给模型的最近消息条数，范围 1-100。</small>
+              </div>
+              <div className="settings-form-group">
+                <label className="settings-form-label" htmlFor="think-model">思考模式模型</label>
+                <input
+                  id="think-model"
+                  type="text"
+                  value={chatModeSettings.thinkModel}
+                  onChange={(event) => onThinkModelChange(event.target.value)}
+                  placeholder="deepseek-r1:8b"
+                />
+                <small>留空时使用聊天模型。</small>
+              </div>
+            </div>
+          </section>
 
           <div className="settings-test-row">
             <div>

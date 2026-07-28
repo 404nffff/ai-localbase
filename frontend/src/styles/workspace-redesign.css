@@ -1240,8 +1240,7 @@ body,
 
 .settings-subnav button:focus-visible,
 .settings-preset-options button:focus-visible,
-.settings-mobile-back:focus-visible,
-.settings-advanced-section summary:focus-visible {
+.settings-mobile-back:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus);
 }
@@ -1379,6 +1378,12 @@ body,
   box-shadow: none;
 }
 
+.settings-model-context-grid {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .settings-test-row {
   display: flex;
   align-items: center;
@@ -1417,6 +1422,10 @@ body,
 }
 
 .settings-preset-section > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 14px;
 }
 
@@ -1433,9 +1442,16 @@ body,
   font-size: 11px;
 }
 
+.settings-preset-current {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .settings-preset-options {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--border-color);
@@ -1499,6 +1515,12 @@ body,
 .settings-retrieval-core {
   margin-top: 24px;
   border-top: 1px solid var(--border-color);
+}
+
+.settings-retrieval-confidence-row {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-toggle-row {
@@ -1568,102 +1590,27 @@ body,
   box-shadow: var(--shadow-focus);
 }
 
-.settings-advanced-section {
-  border-bottom: 1px solid var(--border-color);
-}
-
-.settings-advanced-section > summary {
-  display: grid;
-  min-height: 70px;
-  grid-template-columns: minmax(0, 1fr) auto 18px;
-  align-items: center;
-  gap: 16px;
-  padding: 0;
-  color: var(--text-primary);
-  list-style: none;
-  cursor: pointer;
-}
-
-.settings-advanced-section > summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-advanced-section > summary > span:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.settings-advanced-section > summary strong {
-  font-size: 12px;
-  font-weight: 690;
-}
-
-.settings-advanced-section > summary small,
-.settings-advanced-summary {
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-
-.settings-advanced-section > summary > svg {
-  color: var(--text-tertiary);
-  transition: transform var(--transition-fast);
-}
-
-.settings-advanced-section[open] > summary > svg {
-  transform: rotate(180deg);
-}
-
-.settings-advanced-content {
-  padding: 0 0 20px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.settings-advanced-content .settings-form-section:last-of-type {
-  border-bottom: 0;
-}
-
-.settings-model-advanced {
-  border-color: var(--border-subtle);
-}
-
-.settings-about-disclosure,
-.settings-compact-disclosure {
-  display: block;
-}
-
-.settings-about-disclosure > summary,
-.settings-compact-disclosure > summary {
-  display: grid;
+.settings-about-footer {
+  display: flex;
   min-height: 56px;
-  grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
-  gap: 14px;
-  color: var(--text-primary);
-  list-style: none;
-  cursor: pointer;
+  justify-content: space-between;
+  gap: 20px;
 }
 
-.settings-about-disclosure > summary::-webkit-details-marker,
-.settings-compact-disclosure > summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-about-disclosure > summary > span,
-.settings-compact-disclosure > summary > span {
+.settings-about-footer > div {
   display: grid;
   min-width: 0;
   gap: 3px;
 }
 
-.settings-about-disclosure > summary strong,
-.settings-compact-disclosure > summary strong {
+.settings-about-footer strong {
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 690;
 }
 
-.settings-about-disclosure > summary small,
-.settings-compact-disclosure > summary small {
+.settings-about-footer small {
   overflow: hidden;
   color: var(--text-secondary);
   font-size: 10px;
@@ -1672,22 +1619,11 @@ body,
   white-space: nowrap;
 }
 
-.settings-about-disclosure > summary > svg,
-.settings-compact-disclosure > summary > svg {
-  color: var(--text-tertiary);
-  transition: transform var(--transition-fast);
-}
-
-.settings-about-disclosure[open] > summary > svg,
-.settings-compact-disclosure[open] > summary > svg {
-  transform: rotate(180deg);
-}
-
 .settings-about-links {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px 20px;
-  padding: 0 0 16px;
 }
 
 .settings-about-links a {
@@ -1716,15 +1652,11 @@ body,
 }
 
 .settings-template-section {
-  gap: 0;
+  gap: 16px;
 }
 
-.settings-compact-disclosure-body {
-  display: grid;
-  gap: 16px;
-  padding: 18px 0 2px;
-  border-top: 1px solid var(--border-subtle);
-  animation: settingsInlineReveal 0.18s ease-out both;
+.settings-access-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .settings-security-subnav {
@@ -4537,9 +4469,19 @@ body,
     justify-content: flex-end;
   }
 
-  .settings-about-disclosure > summary small,
-  .settings-compact-disclosure > summary small {
-    white-space: normal;
+  .settings-about-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 4px;
+  }
+
+  .settings-about-links {
+    justify-content: flex-start;
+  }
+
+  .settings-access-summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-security-content {
@@ -4676,19 +4618,11 @@ body,
   }
 
   .settings-preset-options {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .settings-preset-options button {
     min-height: 40px;
-  }
-
-  .settings-advanced-section > summary {
-    grid-template-columns: minmax(0, 1fr) 18px;
-  }
-
-  .settings-advanced-summary {
-    display: none;
   }
 
   .settings-form-grid,
