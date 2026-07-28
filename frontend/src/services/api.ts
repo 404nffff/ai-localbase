@@ -473,18 +473,50 @@ export const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): Kno
   createdAt: knowledgeBase.createdAt,
 })
 
+const isLegacyOperationalAssistantMessage = (
+  message: BackendConversation['messages'][number],
+) => {
+  if (message.role !== 'assistant') return false
+
+  const content = message.content.trim()
+  if (
+    content ===
+      '你好，我是 AI LocalBase 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。' ||
+    content ===
+      '你好，我是 AI Local Base 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。' ||
+    content === '当前会话已清空。你可以继续发起新的提问。'
+  ) {
+    return true
+  }
+  if (
+    content.startsWith('当前模型正在后台处理会话「') &&
+    content.endsWith('请等待其完成后再发起新问题。')
+  ) {
+    return true
+  }
+  return (
+    content.startsWith('⚠️ AI 模型调用失败') ||
+    content.startsWith('⚠ AI 模型调用失败') ||
+    content.startsWith('⚠️ AI 模型调用已降级') ||
+    content.startsWith('⚠ AI 模型调用已降级') ||
+    content.replaceAll(' ', '').includes('AI模型调用已降级至安全阈值')
+  )
+}
+
 export const normalizeConversation = (conversation: BackendConversation): Conversation => ({
   id: conversation.id,
   title: conversation.title,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
-  messages: (conversation.messages ?? []).map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    timestamp: message.createdAt,
-    metadata: message.metadata,
-  })),
+  messages: (conversation.messages ?? [])
+    .filter((message) => !isLegacyOperationalAssistantMessage(message))
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: message.createdAt,
+      metadata: message.metadata,
+    })),
 })
 
 export const parseJsonResponse = async <T>(response: Response): Promise<T | null> => {

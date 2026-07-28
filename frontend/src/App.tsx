@@ -101,6 +101,7 @@ export interface Conversation {
   messages: ChatMessage[]
   createdAt: string
   updatedAt: string
+  localOnly?: boolean
 }
 
 export interface DocumentItem {
@@ -330,9 +331,6 @@ const createId = () => {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-const isDegradedFallbackContent = (content: string) =>
-  /降级|fallback|无法完成流式|已切换|上游错误|模型服务暂不可用/.test(content)
-
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
@@ -457,7 +455,7 @@ const normalizeChatMetadata = (metadata?: ChatCompletionResponse['metadata'] | C
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
-const createWelcomeConversation = (): Conversation => {
+const createEmptyConversation = (): Conversation => {
   const now = new Date().toISOString()
 
   return {
@@ -465,15 +463,8 @@ const createWelcomeConversation = (): Conversation => {
     title: '新的对话',
     createdAt: now,
     updatedAt: now,
-    messages: [
-      {
-        id: createId(),
-        role: 'assistant',
-        content:
-          '你好，我是 AI LocalBase 助手。你可以先选择知识库，或者进一步选中某个文档后再提问。',
-        timestamp: now,
-      },
-    ],
+    messages: [],
+    localOnly: true,
   }
 }
 
@@ -521,7 +512,7 @@ function AppContent() {
   const [authWarningsShown, setAuthWarningsShown] = useState(false)
   const [globalLoading] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const initialConversation = createWelcomeConversation()
+    const initialConversation = createEmptyConversation()
     return [initialConversation]
   })
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
@@ -747,10 +738,6 @@ function AppContent() {
   const generatingConversationTitle =
     conversations.find((conversation) => conversation.id === streamingConversationId)?.title ?? '当前会话'
 
-  const persistConversation = async (conversation: Conversation) => {
-    return saveConversation(conversation)
-  }
-
   const replaceConversation = useCallback((updatedConversation: Conversation) => {
     setConversations((prev) => {
       const hasConversation = prev.some(
@@ -775,27 +762,19 @@ function AppContent() {
     return false
   }
 
-  const handleCreateConversation = async () => {
-    const conversation = createWelcomeConversation()
+  const handleCreateConversation = () => {
+    const conversation = createEmptyConversation()
 
     setConversations((prev) => [conversation, ...prev])
     setActiveConversationId(conversation.id)
-
-    try {
-      const savedConversation = await persistConversation(conversation)
-      setConversations((prev) =>
-        prev.map((item) => (item.id === conversation.id ? savedConversation : item)),
-      )
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : '新建会话失败，请稍后重试。'
-      window.alert(`新建会话失败：${message}`)
-    }
   }
 
   const handleSelectConversation = async (conversationId: string) => {
     const existingConversation = conversations.find((conversation) => conversation.id === conversationId)
-    if (existingConversation && existingConversation.messages.length > 0) {
+    if (
+      existingConversation?.localOnly ||
+      (existingConversation && existingConversation.messages.length > 0)
+    ) {
       setActiveConversationId(conversationId)
       return
     }
@@ -826,7 +805,7 @@ function AppContent() {
       return
     }
 
-    const isLocalOnly = targetConversation.messages.length > 0 && !targetConversation.messages.some((message) => message.role === 'user')
+    const isLocalOnly = Boolean(targetConversation.localOnly)
 
     if (isLocalOnly) {
       setConversations((prev) =>
@@ -872,7 +851,7 @@ function AppContent() {
       return
     }
 
-    const isLocalOnly = targetConversation.messages.length > 0 && !targetConversation.messages.some((message) => message.role === 'user')
+    const isLocalOnly = Boolean(targetConversation.localOnly)
 
     try {
       if (!isLocalOnly) {
@@ -885,7 +864,7 @@ function AppContent() {
       const fallbackConversation =
         remainingConversations[0] ??
         (() => {
-          const conversation = createWelcomeConversation()
+          const conversation = createEmptyConversation()
           return conversation
         })()
 
@@ -903,7 +882,7 @@ function AppContent() {
     }
   }
 
-  const handleClearConversation = () => {
+  const handleClearConversation = async () => {
     if (!activeConversation) {
       return
     }
@@ -913,25 +892,21 @@ function AppContent() {
       return
     }
 
-    const resetMessage: ChatMessage = {
-      id: createId(),
-      role: 'assistant',
-      content: '当前会话已清空。你可以继续发起新的提问。',
-      timestamp: new Date().toISOString(),
+    try {
+      if (!activeConversation.localOnly) {
+        await deleteConversation(activeConversation.id)
+      }
+      const emptyConversation = createEmptyConversation()
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === activeConversation.id ? emptyConversation : conversation,
+        ),
+      )
+      setActiveConversationId(emptyConversation.id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '清空会话失败，请稍后重试。'
+      window.alert(`清空会话失败：${message}`)
     }
-
-    setConversations((prev) =>
-      prev.map((conversation) =>
-        conversation.id === activeConversation.id
-          ? {
-              ...conversation,
-              title: '新的对话',
-              messages: [resetMessage],
-              updatedAt: resetMessage.timestamp,
-            }
-          : conversation,
-      ),
-    )
   }
 
   const handleEditMessage = async (messageId: string, newContent: string) => {
@@ -1655,27 +1630,9 @@ function AppContent() {
     }
 
     if (isOllamaSingleFlightMode && streamingConversationId) {
-      setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== activeConversation.id) {
-            return conversation
-          }
-
-          const now = new Date().toISOString()
-          return {
-            ...conversation,
-            messages: [
-              ...conversation.messages,
-              {
-                id: createId(),
-                role: 'assistant',
-                content: `当前模型正在后台处理会话「${generatingConversationTitle}」，请等待其完成后再发起新问题。`,
-                timestamp: now,
-              },
-            ],
-            updatedAt: now,
-          }
-        }),
+      showToast(
+        'warning',
+        `当前模型正在处理会话「${generatingConversationTitle}」，请等待完成。`,
       )
       return
     }
@@ -1739,7 +1696,10 @@ function AppContent() {
       return activeRequest?.requestId === requestId && activeRequest.conversationId === conversationId
     }
 
-    const updateAssistantMessage = (updater: (current: ChatMessage) => ChatMessage) => {
+    const updateAssistantMessage = (
+      updater: (current: ChatMessage) => ChatMessage,
+      markPersisted = false,
+    ) => {
       if (!isCurrentRequestActive()) {
         return
       }
@@ -1752,6 +1712,7 @@ function AppContent() {
 
           return {
             ...conversation,
+            localOnly: markPersisted ? false : conversation.localOnly,
             messages: conversation.messages.map((message) =>
               message.id === assistantMessageId
                 ? {
@@ -1767,14 +1728,14 @@ function AppContent() {
     }
 
     const finalizeAssistantMessage = (contentOverride?: string, metadata?: ChatMessageMetadata) => {
-      updateAssistantMessage((current) => ({
-        ...current,
-        content:
-          contentOverride !== undefined
-            ? contentOverride || '后端未返回有效回答。'
-            : current.content || '后端未返回有效回答。',
-        metadata: metadata ?? current.metadata,
-      }))
+      updateAssistantMessage(
+        (current) => ({
+          ...current,
+          content: contentOverride !== undefined ? contentOverride : current.content,
+          metadata: metadata ?? current.metadata,
+        }),
+        true,
+      )
     }
 
     const buildFriendlyChatError = (error: unknown) => {
@@ -1851,10 +1812,11 @@ function AppContent() {
       if (!data) {
         throw new Error('聊天接口返回空响应')
       }
-      finalizeAssistantMessage(
-        data.choices[0]?.message?.content || '后端未返回有效回答。',
-        normalizeChatMetadata(data.metadata),
-      )
+      const assistantContent = data.choices[0]?.message?.content
+      if (!assistantContent?.trim()) {
+        throw new Error('聊天模型返回空回答')
+      }
+      finalizeAssistantMessage(assistantContent, normalizeChatMetadata(data.metadata))
     }
 
     const requestWithFallback = async () => {
@@ -1954,15 +1916,10 @@ function AppContent() {
 
         if (eventName === 'done') {
           markChunkReceived()
-          const degradedMetadata =
-            normalizeChatMetadata(payload.metadata) ??
-            (payload.content && isDegradedFallbackContent(payload.content)
-              ? {
-                  degraded: true,
-                  fallbackStrategy: 'stream-fallback-message',
-                }
-              : undefined)
-          finalizeAssistantMessage(payload.content, degradedMetadata)
+          if (!payload.content?.trim()) {
+            throw new Error('聊天模型返回空回答')
+          }
+          finalizeAssistantMessage(payload.content, normalizeChatMetadata(payload.metadata))
           streamCompleted = true
           return
         }
@@ -2009,7 +1966,7 @@ function AppContent() {
       }
 
       if (!streamCompleted) {
-        finalizeAssistantMessage()
+        throw new Error('流式响应未正常结束')
       }
     }
 
@@ -2039,10 +1996,21 @@ function AppContent() {
         setBackendReady(false)
         void waitForBackendReady(8, 1500)
       }
-      updateAssistantMessage((current) => ({
-        ...current,
-        content: buildFriendlyChatError(error),
-      }))
+      if (isCurrentRequestActive()) {
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.id === conversationId
+              ? {
+                  ...conversation,
+                  messages: conversation.messages.filter(
+                    (message) => message.id !== assistantMessageId,
+                  ),
+                }
+              : conversation,
+          ),
+        )
+      }
+      showToast('error', buildFriendlyChatError(error), 6000)
     } finally {
       const activeRequest = activeChatRequestRef.current
       if (activeRequest?.requestId === requestId && activeRequest.conversationId === conversationId) {
