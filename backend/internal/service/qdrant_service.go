@@ -38,6 +38,11 @@ type QdrantSearchResult struct {
 	Payload map[string]any
 }
 
+type QdrantStoredPoint struct {
+	ID      any
+	Payload map[string]any
+}
+
 // SearchResult 对外统一的检索返回结构
 type SearchResult = QdrantSearchResult
 
@@ -84,6 +89,23 @@ type qdrantQueryRequest struct {
 	Limit       int            `json:"limit"`
 	Filter      map[string]any `json:"filter,omitempty"`
 	WithPayload bool           `json:"with_payload"`
+}
+
+type qdrantScrollRequest struct {
+	Limit       int  `json:"limit"`
+	Offset      any  `json:"offset,omitempty"`
+	WithPayload bool `json:"with_payload"`
+	WithVector  bool `json:"with_vector"`
+}
+
+type qdrantScrollResponse struct {
+	Result struct {
+		Points []struct {
+			ID      any            `json:"id"`
+			Payload map[string]any `json:"payload"`
+		} `json:"points"`
+		NextPageOffset any `json:"next_page_offset"`
+	} `json:"result"`
 }
 
 type qdrantScoredPoint struct {
@@ -234,6 +256,50 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 		}
 	}
 	return nil
+}
+
+func (s *QdrantService) ScrollPointPayloads(ctx context.Context, knowledgeBaseID string) ([]QdrantStoredPoint, error) {
+	if !s.IsEnabled() {
+		return nil, nil
+	}
+
+	const (
+		pageSize = 100
+		maxPages = 10000
+	)
+	requestPath := "/collections/" + url.PathEscape(s.CollectionName(knowledgeBaseID)) + "/points/scroll"
+	points := make([]QdrantStoredPoint, 0)
+	var offset any
+	for page := 0; page < maxPages; page++ {
+		responseBody, err := s.doJSON(ctx, http.MethodPost, requestPath, qdrantScrollRequest{
+			Limit:       pageSize,
+			Offset:      offset,
+			WithPayload: true,
+			WithVector:  false,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		decoder := json.NewDecoder(bytes.NewReader(responseBody))
+		decoder.UseNumber()
+		var response qdrantScrollResponse
+		if err := decoder.Decode(&response); err != nil {
+			return nil, fmt.Errorf("decode qdrant scroll response: %w", err)
+		}
+		for _, point := range response.Result.Points {
+			points = append(points, QdrantStoredPoint{
+				ID:      point.ID,
+				Payload: clonePayload(point.Payload),
+			})
+		}
+		if response.Result.NextPageOffset == nil {
+			return points, nil
+		}
+		offset = response.Result.NextPageOffset
+	}
+
+	return nil, fmt.Errorf("qdrant scroll exceeded %d pages", maxPages)
 }
 
 func (s *QdrantService) DeletePointsByFilter(ctx context.Context, knowledgeBaseID string, filter map[string]any) error {

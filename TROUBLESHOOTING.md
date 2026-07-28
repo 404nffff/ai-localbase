@@ -115,7 +115,15 @@ docker compose exec backend sh -c "apk add --no-cache curl && curl -v http://hos
    docker compose up -d --build
    ```
 
-4. **验证后端配置**：
+4. **原始文件缺失时，从旧 Qdrant collection 迁移 payload 并重新生成向量**：
+   ```bash
+   docker compose run --rm --no-deps \
+     --entrypoint ./migrate-qdrant-vectors backend \
+     -source-prefix kb_768_
+   ```
+   迁移会保留旧 collection，根据当前 Embedding 模型重新生成向量，并写入当前 `QDRANT_COLLECTION_PREFIX`。
+
+5. **验证后端配置**：
    ```bash
    curl -s http://localhost:8080/api/config | jq .embedding
    ```
