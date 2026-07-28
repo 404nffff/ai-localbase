@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,11 +45,12 @@ type TestEmbeddingModelRequest struct {
 
 // TestModelResponse 测试响应
 type TestModelResponse struct {
-	Success      bool   `json:"success"`
-	LatencyMs    int64  `json:"latency_ms,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
-	VectorSize   int    `json:"vector_size,omitempty"` // embedding only
-	ModelInfo    string `json:"model_info,omitempty"`
+	Success            bool   `json:"success"`
+	LatencyMs          int64  `json:"latency_ms,omitempty"`
+	ErrorMessage       string `json:"error_message,omitempty"`
+	VectorSize         int    `json:"vector_size,omitempty"`          // embedding only
+	ExpectedVectorSize int    `json:"expected_vector_size,omitempty"` // embedding only
+	ModelInfo          string `json:"model_info,omitempty"`
 }
 
 // HealthSummaryResponse 综合健康检查响应
@@ -151,15 +153,18 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 		BaseURL:  req.BaseURL,
 		Model:    req.Model,
 		APIKey:   apiKey,
-	}, []string{testText}, 768)
+	}, []string{testText}, h.expectedEmbeddingVectorSize())
 
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
+		actualSize, expectedSize := embeddingDimensionDetails(err)
 		c.JSON(http.StatusOK, TestModelResponse{
-			Success:      false,
-			LatencyMs:    latency,
-			ErrorMessage: formatErrorMessage(err),
+			Success:            false,
+			LatencyMs:          latency,
+			ErrorMessage:       formatErrorMessage(err),
+			VectorSize:         actualSize,
+			ExpectedVectorSize: expectedSize,
 		})
 		return
 	}
@@ -175,10 +180,11 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, TestModelResponse{
-		Success:    true,
-		LatencyMs:  latency,
-		VectorSize: len(vectors[0]),
-		ModelInfo:  fmt.Sprintf("Embedding successful (vector size: %d)", len(vectors[0])),
+		Success:            true,
+		LatencyMs:          latency,
+		VectorSize:         len(vectors[0]),
+		ExpectedVectorSize: h.expectedEmbeddingVectorSize(),
+		ModelInfo:          fmt.Sprintf("Embedding successful (vector size: %d)", len(vectors[0])),
 	})
 }
 
@@ -202,6 +208,17 @@ func (h *ConfigHandler) resolveEmbeddingAPIKey(candidate string) string {
 		return ""
 	}
 	return strings.TrimSpace(h.appService.GetConfig().Embedding.APIKey)
+}
+
+func (h *ConfigHandler) expectedEmbeddingVectorSize() int {
+	if h == nil || h.appService == nil {
+		return 768
+	}
+	vectorSize := h.appService.ServerConfig().QdrantVectorSize
+	if vectorSize <= 0 {
+		return 768
+	}
+	return vectorSize
 }
 
 // HealthSummary 综合健康检查
@@ -326,7 +343,7 @@ func (h *ConfigHandler) checkEmbeddingModelHealth(ctx context.Context) Component
 		BaseURL:  config.Embedding.BaseURL,
 		Model:    config.Embedding.Model,
 		APIKey:   config.Embedding.APIKey,
-	}, []string{"test"}, 768)
+	}, []string{"test"}, h.expectedEmbeddingVectorSize())
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -393,6 +410,15 @@ func formatErrorMessage(err error) string {
 		return ""
 	}
 
+	var dimensionErr *service.EmbeddingDimensionMismatchError
+	if errors.As(err, &dimensionErr) {
+		return fmt.Sprintf(
+			"Embedding 模型输出 %d 维，但当前 QDRANT_VECTOR_SIZE=%d。请修改维度、使用新的 QDRANT_COLLECTION_PREFIX，并重新索引知识库。",
+			dimensionErr.Actual,
+			dimensionErr.Expected,
+		)
+	}
+
 	errMsg := err.Error()
 
 	// 常见错误的友好提示
@@ -416,4 +442,12 @@ func formatErrorMessage(err error) string {
 	}
 
 	return errMsg
+}
+
+func embeddingDimensionDetails(err error) (actual int, expected int) {
+	var dimensionErr *service.EmbeddingDimensionMismatchError
+	if errors.As(err, &dimensionErr) {
+		return dimensionErr.Actual, dimensionErr.Expected
+	}
+	return 0, 0
 }

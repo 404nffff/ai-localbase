@@ -165,6 +165,26 @@ type RetrievedChunk struct {
 	SparseRank        int
 }
 
+type EmbeddingDimensionMismatchError struct {
+	BatchItem int
+	Expected  int
+	Actual    int
+	Cached    bool
+}
+
+func (e *EmbeddingDimensionMismatchError) Error() string {
+	location := fmt.Sprintf(" at batch item %d", e.BatchItem)
+	if e.Cached {
+		location = " in cached embedding"
+	}
+	return fmt.Sprintf(
+		"embedding dimension mismatch%s: QDRANT_VECTOR_SIZE=%d, model returned %d; update QDRANT_VECTOR_SIZE, use a new QDRANT_COLLECTION_PREFIX, and rebuild the index",
+		location,
+		e.Expected,
+		e.Actual,
+	)
+}
+
 type openAIEmbeddingRequest struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
@@ -345,7 +365,12 @@ func (s *RagService) EmbedTexts(ctx context.Context, cfg model.EmbeddingModelCon
 			key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
 			if cached := s.cache.Get(key); cached != nil {
 				if len(cached) != vectorSize {
-					return nil, fmt.Errorf("cached embedding dimension mismatch: expected %d, got %d", vectorSize, len(cached))
+					return nil, &EmbeddingDimensionMismatchError{
+						BatchItem: i + j,
+						Expected:  vectorSize,
+						Actual:    len(cached),
+						Cached:    true,
+					}
 				}
 				batchVectors[j] = cached
 				continue
@@ -364,7 +389,11 @@ func (s *RagService) EmbedTexts(ctx context.Context, cfg model.EmbeddingModelCon
 			}
 			for k, vector := range embeddings {
 				if len(vector) != vectorSize {
-					return nil, fmt.Errorf("embedding dimension mismatch at batch item %d: expected %d, got %d", i+uncachedIdx[k], vectorSize, len(vector))
+					return nil, &EmbeddingDimensionMismatchError{
+						BatchItem: i + uncachedIdx[k],
+						Expected:  vectorSize,
+						Actual:    len(vector),
+					}
 				}
 				idx := uncachedIdx[k]
 				batchVectors[idx] = vector

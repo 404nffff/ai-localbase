@@ -113,6 +113,13 @@ func TestRagServiceEmbedTextsRejectsDimensionMismatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "embedding dimension mismatch") {
 		t.Fatalf("expected dimension mismatch error, got %v", err)
 	}
+	dimensionErr, ok := err.(*EmbeddingDimensionMismatchError)
+	if !ok || dimensionErr.Expected != 4 || dimensionErr.Actual != 3 || dimensionErr.BatchItem != 0 {
+		t.Fatalf("expected structured dimension mismatch, got %#v", err)
+	}
+	if !strings.Contains(err.Error(), "QDRANT_COLLECTION_PREFIX") || !strings.Contains(err.Error(), "rebuild the index") {
+		t.Fatalf("expected actionable migration guidance, got %q", err.Error())
+	}
 	if embeddings != nil {
 		t.Fatalf("expected no resized embeddings, got %#v", embeddings)
 	}

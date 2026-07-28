@@ -119,6 +119,7 @@ export interface TestModelResponse {
   latency_ms?: number
   error_message?: string
   vector_size?: number
+  expected_vector_size?: number
   model_info?: string
 }
 

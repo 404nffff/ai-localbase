@@ -111,7 +111,12 @@ export const ModelConfigTest: React.FC<ModelConfigTestProps> = (props) => {
               <span className="test-latency">{result.latency_ms} ms</span>
             ) : null}
             {typeof result?.vector_size === 'number' ? (
-              <span className="test-info">Vector size: {result.vector_size}</span>
+              <span className="test-info">模型输出维度：{result.vector_size}</span>
+            ) : null}
+            {typeof result?.expected_vector_size === 'number' ? (
+              <span className="test-info">
+                Qdrant 配置维度：{result.expected_vector_size}
+              </span>
             ) : null}
             {!result?.success && result?.error_message ? (
               <span className="test-error-msg">{result.error_message}</span>
