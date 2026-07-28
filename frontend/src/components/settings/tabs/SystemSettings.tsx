@@ -14,6 +14,13 @@ interface SystemSettingsProps {
 }
 
 type SecurityEventFilter = 'all' | 'account' | 'api-key' | 'mcp' | 'failures'
+type SecurityView = 'account' | 'sessions' | 'events'
+
+const securityViews: Array<{ id: SecurityView; label: string; icon: 'user' | 'clock' | 'shield' }> = [
+  { id: 'account', label: '账户', icon: 'user' },
+  { id: 'sessions', label: '设备', icon: 'clock' },
+  { id: 'events', label: '安全记录', icon: 'shield' },
+]
 
 const securityEventFilters: Array<{ id: SecurityEventFilter; label: string }> = [
   { id: 'all', label: '全部' },
@@ -170,6 +177,7 @@ const SystemSettings: React.FC<SystemSettingsProps> = ({ onLogout }) => {
   const { username, expiresAt, logoutAll, changePassword } = useAuth()
   const [sessions, setSessions] = useState<AuthSessionInfo[]>([])
   const [events, setEvents] = useState<SecurityEventInfo[]>([])
+  const [activeView, setActiveView] = useState<SecurityView>('account')
   const [eventFilter, setEventFilter] = useState<SecurityEventFilter>('all')
   const [loading, setLoading] = useState(true)
   const [feedback, setFeedback] = useState('')
@@ -408,158 +416,194 @@ const SystemSettings: React.FC<SystemSettingsProps> = ({ onLogout }) => {
           )}
         </section>
 
-        <section className="settings-setting-section">
-          <div className="settings-setting-section-header">
-            <div>
-              <h3>密码</h3>
-              <p>更新 root 密码后，所有已登录会话会立即失效。</p>
-            </div>
-          </div>
-          <div className="settings-setting-list">
-            <div className="settings-setting-row">
-              <div className="settings-setting-row-main">
-                <strong>登录密码</strong>
-                <span>需要输入当前密码才能完成变更。</span>
-              </div>
-              <div className="settings-setting-row-action">
-                <span className="settings-status-pill warning">会吊销会话</span>
-                <button
-                  className="settings-action-btn"
-                  onClick={() => setShowPasswordForm((visible) => !visible)}
-                  type="button"
-                >
-                  {showPasswordForm ? '收起' : '修改'}
-                </button>
-              </div>
-            </div>
-            {showPasswordForm && (
-              <div className="settings-inline-panel">
-                <form className="settings-form-grid settings-form-grid-dense settings-password-form" onSubmit={handleChangePassword}>
-                  <div className="settings-form-group">
-                    <label className="settings-form-label">当前密码</label>
-                    <input
-                      autoComplete="current-password"
-                      onChange={(event) => setCurrentPassword(event.target.value)}
-                      type="password"
-                      value={currentPassword}
-                    />
-                  </div>
-                  <div className="settings-form-group">
-                    <label className="settings-form-label">新密码</label>
-                    <input
-                      autoComplete="new-password"
-                      onChange={(event) => setNewPassword(event.target.value)}
-                      type="password"
-                      value={newPassword}
-                    />
-                    <div className={`settings-password-meter ${passwordStrength.tone}`}>
-                      <span>{passwordStrength.label}</span>
-                      <small>{passwordStrength.hint}</small>
-                    </div>
-                  </div>
-                  <div className="settings-form-group">
-                    <label className="settings-form-label">确认新密码</label>
-                    <input
-                      autoComplete="new-password"
-                      onChange={(event) => setConfirmPassword(event.target.value)}
-                      type="password"
-                      value={confirmPassword}
-                    />
-                  </div>
-                  <div className="settings-form-group settings-security-action-cell">
-                    <button
-                      className="settings-action-btn settings-action-btn-primary"
-                      disabled={busyAction === 'change-password'}
-                      type="submit"
-                    >
-                      {busyAction === 'change-password' ? '更新中...' : '更新密码'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="settings-setting-section">
-          <div className="settings-setting-section-header settings-setting-section-header-action">
-            <div>
-              <h3>设备会话</h3>
-              <p>按浏览器和系统识别登录设备，展开后可查看完整连接信息。</p>
-            </div>
+        <nav className="settings-security-subnav" aria-label="账户与安全视图">
+          {securityViews.map((view) => (
             <button
-              aria-label="刷新设备会话"
-              className="settings-action-btn settings-icon-action"
-              onClick={() => void loadSecurityData()}
-              title="刷新设备会话"
+              aria-current={activeView === view.id ? 'page' : undefined}
+              className={activeView === view.id ? 'active' : ''}
+              key={view.id}
+              onClick={() => setActiveView(view.id)}
               type="button"
             >
-              <AppIcon name="refresh" size={16} />
+              <AppIcon name={view.icon} size={16} />
+              <span>{view.label}</span>
+              {view.id === 'sessions' && <strong>{activeSessions.length}</strong>}
+              {view.id === 'events' && <strong>{events.length}</strong>}
             </button>
-          </div>
-          <div className="settings-security-list settings-security-entry-list">
-            {!loading && sessions.length === 0 && <div className="settings-empty-row">暂无会话记录</div>}
-            {currentSessions.length > 0 && <div className="settings-list-group-label">当前设备</div>}
-            {currentSessions.map(renderSessionRow)}
-            {otherSessions.length > 0 && <div className="settings-list-group-label">其它设备</div>}
-            {otherSessions.map(renderSessionRow)}
-            {inactiveSessions.length > 0 && <div className="settings-list-group-label">最近失效</div>}
-            {inactiveSessions.map(renderSessionRow)}
-          </div>
-        </section>
+          ))}
+        </nav>
 
-        <section className="settings-setting-section">
-          <div className="settings-setting-section-header">
-            <div>
-              <h3>安全记录</h3>
-              <p>统一查看登录、密码、API Key 和 MCP 调用事件。</p>
-            </div>
-          </div>
+        <div className="settings-security-view" key={activeView}>
+          {activeView === 'account' && (
+            <>
+              <section className="settings-setting-section">
+                <div className="settings-setting-section-header">
+                  <div>
+                    <h3>密码</h3>
+                    <p>更新 root 密码后，所有已登录会话会立即失效。</p>
+                  </div>
+                </div>
+                <div className="settings-setting-list">
+                  <div className="settings-setting-row">
+                    <div className="settings-setting-row-main">
+                      <strong>登录密码</strong>
+                      <span>需要输入当前密码才能完成变更。</span>
+                    </div>
+                    <div className="settings-setting-row-action">
+                      <span className="settings-status-pill warning">会吊销会话</span>
+                      <button
+                        className="settings-action-btn"
+                        onClick={() => setShowPasswordForm((visible) => !visible)}
+                        type="button"
+                      >
+                        {showPasswordForm ? '收起' : '修改'}
+                      </button>
+                    </div>
+                  </div>
+                  {showPasswordForm && (
+                    <div className="settings-inline-panel">
+                      <form className="settings-form-grid settings-form-grid-dense settings-password-form" onSubmit={handleChangePassword}>
+                        <div className="settings-form-group">
+                          <label className="settings-form-label">当前密码</label>
+                          <input
+                            autoComplete="current-password"
+                            onChange={(event) => setCurrentPassword(event.target.value)}
+                            type="password"
+                            value={currentPassword}
+                          />
+                        </div>
+                        <div className="settings-form-group">
+                          <label className="settings-form-label">新密码</label>
+                          <input
+                            autoComplete="new-password"
+                            onChange={(event) => setNewPassword(event.target.value)}
+                            type="password"
+                            value={newPassword}
+                          />
+                          <div className={`settings-password-meter ${passwordStrength.tone}`}>
+                            <span>{passwordStrength.label}</span>
+                            <small>{passwordStrength.hint}</small>
+                          </div>
+                        </div>
+                        <div className="settings-form-group">
+                          <label className="settings-form-label">确认新密码</label>
+                          <input
+                            autoComplete="new-password"
+                            onChange={(event) => setConfirmPassword(event.target.value)}
+                            type="password"
+                            value={confirmPassword}
+                          />
+                        </div>
+                        <div className="settings-form-group settings-security-action-cell">
+                          <button
+                            className="settings-action-btn settings-action-btn-primary"
+                            disabled={busyAction === 'change-password'}
+                            type="submit"
+                          >
+                            {busyAction === 'change-password' ? '更新中...' : '更新密码'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                </div>
+              </section>
 
-          <div className="settings-record-filters" role="group" aria-label="安全记录筛选">
-            {securityEventFilters.map((filter) => (
-              <button
-                aria-pressed={eventFilter === filter.id}
-                className={eventFilter === filter.id ? 'active' : ''}
-                key={filter.id}
-                onClick={() => setEventFilter(filter.id)}
-                type="button"
-              >
-                <span>{filter.label}</span>
-                <strong>{eventCounts[filter.id]}</strong>
-              </button>
-            ))}
-          </div>
+              <section className="settings-setting-section settings-setting-section-danger">
+                <div className="settings-setting-list">
+                  <div className="settings-setting-row">
+                    <div className="settings-setting-row-main">
+                      <strong>会话操作</strong>
+                      <span>退出当前设备，或撤销所有已登录设备。</span>
+                    </div>
+                    <div className="settings-setting-row-action">
+                      <button className="btn-danger settings-logout-btn-full" onClick={() => setShowLogoutConfirm(true)} type="button">
+                        退出登录
+                      </button>
+                      <button
+                        className="btn-danger settings-logout-btn-full"
+                        disabled={busyAction === 'logout-all'}
+                        onClick={() => setShowLogoutAllConfirm(true)}
+                        type="button"
+                      >
+                        退出所有设备
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
 
-          <div className="settings-security-list settings-security-entry-list settings-event-list">
-            {!loading && filteredEvents.length === 0 && <div className="settings-empty-row">当前筛选下暂无安全记录</div>}
-            {filteredEvents.map(renderEventRow)}
-          </div>
-        </section>
-
-        <section className="settings-setting-section settings-setting-section-danger">
-          <div className="settings-setting-list">
-            <div className="settings-setting-row">
-              <div className="settings-setting-row-main">
-                <strong>会话操作</strong>
-                <span>退出当前设备，或撤销所有已登录设备。</span>
-              </div>
-              <div className="settings-setting-row-action">
-                <button className="btn-danger settings-logout-btn-full" onClick={() => setShowLogoutConfirm(true)} type="button">
-                  退出登录
-                </button>
+          {activeView === 'sessions' && (
+            <section className="settings-setting-section settings-security-view-section">
+              <div className="settings-setting-section-header settings-setting-section-header-action">
+                <div>
+                  <h3>设备会话</h3>
+                  <p>按浏览器和系统识别登录设备，展开后可查看完整连接信息。</p>
+                </div>
                 <button
-                  className="btn-danger settings-logout-btn-full"
-                  disabled={busyAction === 'logout-all'}
-                  onClick={() => setShowLogoutAllConfirm(true)}
+                  aria-label="刷新设备会话"
+                  className="settings-action-btn settings-icon-action"
+                  onClick={() => void loadSecurityData()}
+                  title="刷新设备会话"
                   type="button"
                 >
-                  退出所有设备
+                  <AppIcon name="refresh" size={16} />
                 </button>
               </div>
-            </div>
-          </div>
-        </section>
+              <div className="settings-security-list settings-security-entry-list">
+                {!loading && sessions.length === 0 && <div className="settings-empty-row">暂无会话记录</div>}
+                {currentSessions.length > 0 && <div className="settings-list-group-label">当前设备</div>}
+                {currentSessions.map(renderSessionRow)}
+                {otherSessions.length > 0 && <div className="settings-list-group-label">其它设备</div>}
+                {otherSessions.map(renderSessionRow)}
+                {inactiveSessions.length > 0 && <div className="settings-list-group-label">最近失效</div>}
+                {inactiveSessions.map(renderSessionRow)}
+              </div>
+            </section>
+          )}
+
+          {activeView === 'events' && (
+            <section className="settings-setting-section settings-security-view-section">
+              <div className="settings-setting-section-header settings-setting-section-header-action">
+                <div>
+                  <h3>安全记录</h3>
+                  <p>统一查看登录、密码、API Key 和 MCP 调用事件。</p>
+                </div>
+                <button
+                  aria-label="刷新安全记录"
+                  className="settings-action-btn settings-icon-action"
+                  onClick={() => void loadSecurityData()}
+                  title="刷新安全记录"
+                  type="button"
+                >
+                  <AppIcon name="refresh" size={16} />
+                </button>
+              </div>
+
+              <div className="settings-record-filters" role="group" aria-label="安全记录筛选">
+                {securityEventFilters.map((filter) => (
+                  <button
+                    aria-pressed={eventFilter === filter.id}
+                    className={eventFilter === filter.id ? 'active' : ''}
+                    key={filter.id}
+                    onClick={() => setEventFilter(filter.id)}
+                    type="button"
+                  >
+                    <span>{filter.label}</span>
+                    <strong>{eventCounts[filter.id]}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="settings-security-list settings-security-entry-list settings-event-list">
+                {!loading && filteredEvents.length === 0 && <div className="settings-empty-row">当前筛选下暂无安全记录</div>}
+                {filteredEvents.map(renderEventRow)}
+              </div>
+            </section>
+          )}
+        </div>
       </div>
 
       <ConfirmDialog

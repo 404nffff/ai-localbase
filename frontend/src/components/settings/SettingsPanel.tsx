@@ -361,29 +361,22 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       className={`settings-workspace app-workspace ${mobileDetailOpen ? 'mobile-detail-open' : ''}`}
       aria-labelledby="settings-workspace-title"
     >
-      <header className="workspace-page-header settings-workspace-header">
-        <div>
-          <span className="workspace-page-kicker">AI LocalBase</span>
-          <h2 id="settings-workspace-title">设置</h2>
-          <p>管理本地模型、检索策略、系统授权与账户安全。</p>
-        </div>
-        <button
-          className="workspace-page-back"
-          onClick={handleClose}
-          aria-label="返回聊天"
-          title="返回聊天"
-          type="button"
-        >
-          <AppIcon name="chevronLeft" size={20} />
-        </button>
-      </header>
-
       <div className={`settings-layout ${mobileDetailOpen ? 'mobile-detail-open' : ''}`}>
         <aside className="settings-sidebar" aria-label="设置分类">
-          <div className="settings-mobile-list-header">
-            <strong>设置分类</strong>
-            <span>选择一项进行查看和修改</span>
-          </div>
+          <header className="settings-workspace-sidebar-header">
+            <div>
+              <span>AI LocalBase</span>
+              <strong id="settings-workspace-title">设置</strong>
+            </div>
+            <button
+              aria-label="返回聊天"
+              onClick={handleClose}
+              title="返回聊天"
+              type="button"
+            >
+              <AppIcon name="chevronLeft" size={18} />
+            </button>
+          </header>
           <nav
             aria-label="设置分类"
             className="settings-nav"
@@ -432,7 +425,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </button>
             <div>
               <h3>{activeNavItem.label}</h3>
-              <p className="settings-main-visible-description">{activeNavItem.description}</p>
             </div>
           </header>
 

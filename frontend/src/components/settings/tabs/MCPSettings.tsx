@@ -124,6 +124,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
   const [accessError, setAccessError] = useState('')
   const [tokenFeedback, setTokenFeedback] = useState('')
   const [templateFeedback, setTemplateFeedback] = useState('')
+  const [showKeyCreator, setShowKeyCreator] = useState(false)
   const [isMcpTokenVisible, setIsMcpTokenVisible] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('cherry-studio')
   const [copiedTemplateId, setCopiedTemplateId] = useState('')
@@ -291,8 +292,19 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
 
   const handleConfirmCreatedTokenSaved = () => {
     setCreatedToken('')
+    setShowKeyCreator(false)
     setAccessFeedback('API Key 已确认保存')
     setAccessError('')
+  }
+
+  const handleToggleKeyCreator = () => {
+    setAccessFeedback('')
+    setAccessError('')
+    if (showKeyCreator) {
+      setKeyName('')
+      setSelectedScopes(defaultAPIKeyScopes)
+    }
+    setShowKeyCreator((visible) => !visible)
   }
 
   const handleToggleScope = (scope: string) => {
@@ -403,15 +415,27 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
             <h3>API Key</h3>
             <p>为每个外部客户端单独命名并分配权限，密钥只在创建后显示一次。</p>
           </div>
-          <button
-            aria-label="刷新 API Key"
-            className="settings-action-btn settings-icon-action"
-            onClick={() => void loadAPIKeys()}
-            title="刷新 API Key"
-            type="button"
-          >
-            <AppIcon name="refresh" size={16} />
-          </button>
+          <div className="settings-section-actions">
+            <button
+              aria-controls="settings-api-key-creator"
+              aria-expanded={showKeyCreator}
+              className={`settings-action-btn ${showKeyCreator ? '' : 'settings-action-btn-primary'}`}
+              onClick={handleToggleKeyCreator}
+              type="button"
+            >
+              <AppIcon name={showKeyCreator ? 'x' : 'plus'} size={16} />
+              {showKeyCreator ? '取消' : '创建'}
+            </button>
+            <button
+              aria-label="刷新 API Key"
+              className="settings-action-btn settings-icon-action"
+              onClick={() => void loadAPIKeys()}
+              title="刷新 API Key"
+              type="button"
+            >
+              <AppIcon name="refresh" size={16} />
+            </button>
+          </div>
         </div>
 
         {(loadingKeys || accessFeedback || accessError) && (
@@ -422,61 +446,68 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
           </div>
         )}
 
-        <form className="settings-access-key-form" onSubmit={handleCreateAPIKey}>
-          <div className="settings-form-group settings-form-group-full">
-            <label className="settings-form-label" htmlFor="settings-api-key-name">密钥名称</label>
-            <input
-              autoComplete="off"
-              id="settings-api-key-name"
-              onChange={(event) => setKeyName(event.target.value)}
-              placeholder="例如：cherry-studio-mac"
-              type="text"
-              value={keyName}
-            />
-            <small>使用客户端和设备名称，便于之后识别与撤销。</small>
-          </div>
-
-          <fieldset className="settings-scope-fieldset">
-            <legend>
-              <span>权限范围</span>
-              <small>已选择 {selectedScopes.length} 项</small>
-            </legend>
-            <div className="settings-scope-groups">
-              {apiKeyScopeGroups.map((group) => (
-                <div className="settings-scope-group" key={group.label}>
-                  <strong className="settings-scope-group-label">{group.label}</strong>
-                  <div className="settings-scope-options">
-                    {group.options.map((option) => (
-                      <label className="settings-scope-option" key={option.value}>
-                        <input
-                          checked={selectedScopes.includes(option.value)}
-                          onChange={() => handleToggleScope(option.value)}
-                          type="checkbox"
-                        />
-                        <span>
-                          <strong>{option.label}</strong>
-                          <small>{option.description}</small>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
+        {showKeyCreator && (
+          <form
+            className="settings-access-key-form settings-access-key-creator"
+            id="settings-api-key-creator"
+            onSubmit={handleCreateAPIKey}
+          >
+            <div className="settings-form-group settings-form-group-full">
+              <label className="settings-form-label" htmlFor="settings-api-key-name">密钥名称</label>
+              <input
+                autoComplete="off"
+                autoFocus
+                id="settings-api-key-name"
+                onChange={(event) => setKeyName(event.target.value)}
+                placeholder="例如：cherry-studio-mac"
+                type="text"
+                value={keyName}
+              />
+              <small>使用客户端和设备名称，便于之后识别与撤销。</small>
             </div>
-          </fieldset>
 
-          <div className="settings-access-key-actions">
-            <span>按实际用途选择最小权限；危险操作与管理权限应单独创建密钥。</span>
-            <button
-              className="settings-action-btn settings-action-btn-primary"
-              disabled={busyAction === 'create-key' || Boolean(createdToken)}
-              type="submit"
-            >
-              <AppIcon name={busyAction === 'create-key' ? 'loader' : 'plus'} size={16} />
-              {busyAction === 'create-key' ? '创建中...' : '创建 API Key'}
-            </button>
-          </div>
-        </form>
+            <fieldset className="settings-scope-fieldset">
+              <legend>
+                <span>权限范围</span>
+                <small>已选择 {selectedScopes.length} 项</small>
+              </legend>
+              <div className="settings-scope-groups">
+                {apiKeyScopeGroups.map((group) => (
+                  <div className="settings-scope-group" key={group.label}>
+                    <strong className="settings-scope-group-label">{group.label}</strong>
+                    <div className="settings-scope-options">
+                      {group.options.map((option) => (
+                        <label className="settings-scope-option" key={option.value}>
+                          <input
+                            checked={selectedScopes.includes(option.value)}
+                            onChange={() => handleToggleScope(option.value)}
+                            type="checkbox"
+                          />
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </fieldset>
+
+            <div className="settings-access-key-actions">
+              <span>按实际用途选择最小权限；危险操作与管理权限应单独创建密钥。</span>
+              <button
+                className="settings-action-btn settings-action-btn-primary"
+                disabled={busyAction === 'create-key' || Boolean(createdToken)}
+                type="submit"
+              >
+                <AppIcon name={busyAction === 'create-key' ? 'loader' : 'plus'} size={16} />
+                {busyAction === 'create-key' ? '创建中...' : '创建 API Key'}
+              </button>
+            </div>
+          </form>
+        )}
 
         <div className="settings-security-list settings-api-key-list">
           {!loadingKeys && apiKeys.length === 0 && <div className="settings-empty-row">暂无 API Key</div>}
@@ -504,55 +535,59 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
         </div>
       </section>
 
-      <section className="settings-setting-section">
-        <div className="settings-setting-section-header">
-          <div>
-            <h3>客户端模板</h3>
-            <p>选择客户端后复制对应配置，密钥位置保留为安全占位符。</p>
-          </div>
-        </div>
-
-        <div className="settings-template-switcher" role="group" aria-label="MCP 客户端模板">
-          {templates.map((template) => (
-            <button
-              aria-pressed={selectedTemplate.id === template.id}
-              className={selectedTemplate.id === template.id ? 'active' : ''}
-              key={template.id}
-              onClick={() => {
-                setSelectedTemplateId(template.id)
-                setTemplateFeedback('')
-              }}
-              type="button"
-            >
-              {template.name}
-            </button>
-          ))}
-        </div>
-
-        <article
-          aria-live="polite"
-          className="settings-mcp-template settings-mcp-template-single"
-        >
-          <div className="settings-mcp-template-head">
-            <div>
-              <h4>{selectedTemplate.name}</h4>
-              <p>{selectedTemplate.description}</p>
+      <section className="settings-setting-section settings-template-section">
+        <details className="settings-compact-disclosure">
+          <summary>
+            <span>
+              <strong>客户端模板</strong>
+              <small>复制 Cherry Studio、Claude Desktop 或通用 HTTP 配置</small>
+            </span>
+            <AppIcon name="chevronDown" size={17} />
+          </summary>
+          <div className="settings-compact-disclosure-body">
+            <div className="settings-template-switcher" role="group" aria-label="MCP 客户端模板">
+              {templates.map((template) => (
+                <button
+                  aria-pressed={selectedTemplate.id === template.id}
+                  className={selectedTemplate.id === template.id ? 'active' : ''}
+                  key={template.id}
+                  onClick={() => {
+                    setSelectedTemplateId(template.id)
+                    setTemplateFeedback('')
+                  }}
+                  type="button"
+                >
+                  {template.name}
+                </button>
+              ))}
             </div>
-            <button className="settings-action-btn" onClick={() => void handleCopyTemplate()} type="button">
-              <AppIcon name={copiedTemplateId === selectedTemplate.id ? 'check' : 'copy'} size={16} />
-              {copiedTemplateId === selectedTemplate.id ? '已复制' : '复制模板'}
-            </button>
+
+            <article
+              aria-live="polite"
+              className="settings-mcp-template settings-mcp-template-single"
+            >
+              <div className="settings-mcp-template-head">
+                <div>
+                  <h4>{selectedTemplate.name}</h4>
+                  <p>{selectedTemplate.description}</p>
+                </div>
+                <button className="settings-action-btn" onClick={() => void handleCopyTemplate()} type="button">
+                  <AppIcon name={copiedTemplateId === selectedTemplate.id ? 'check' : 'copy'} size={16} />
+                  {copiedTemplateId === selectedTemplate.id ? '已复制' : '复制模板'}
+                </button>
+              </div>
+              <div className="settings-mcp-scope-row" aria-label="模板所需权限">
+                {selectedTemplate.scopes.map((scope) => (
+                  <span key={scope}>{scope}</span>
+                ))}
+              </div>
+              <pre className="settings-mcp-template-code">
+                <code>{selectedTemplate.content}</code>
+              </pre>
+            </article>
+            {templateFeedback && <small className="settings-feedback">{templateFeedback}</small>}
           </div>
-          <div className="settings-mcp-scope-row" aria-label="模板所需权限">
-            {selectedTemplate.scopes.map((scope) => (
-              <span key={scope}>{scope}</span>
-            ))}
-          </div>
-          <pre className="settings-mcp-template-code">
-            <code>{selectedTemplate.content}</code>
-          </pre>
-        </article>
-        {templateFeedback && <small className="settings-feedback">{templateFeedback}</small>}
+        </details>
       </section>
 
       <section className="settings-setting-section settings-legacy-section">

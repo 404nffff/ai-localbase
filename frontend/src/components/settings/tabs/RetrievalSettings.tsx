@@ -133,6 +133,7 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
               className={activePreset === preset.id ? 'active' : ''}
               key={preset.id}
               onClick={() => handlePresetChange(preset.id)}
+              title={preset.description}
               type="button"
             >
               <span aria-hidden="true"><AppIcon name={preset.icon} size={17} /></span>
@@ -144,6 +145,7 @@ const RetrievalSettings: React.FC<RetrievalSettingsProps> = ({
             aria-pressed={activePreset === 'custom'}
             className={activePreset === 'custom' ? 'active' : ''}
             onClick={() => handlePresetChange('custom')}
+            title="保留当前配置并展开高级参数"
             type="button"
           >
             <span aria-hidden="true"><AppIcon name="settings" size={17} /></span>
