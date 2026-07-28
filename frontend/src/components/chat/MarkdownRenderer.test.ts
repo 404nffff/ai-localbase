@@ -40,4 +40,23 @@ describe('fixMarkdown', () => {
     expect(output).not.toContain('hidden')
     expect(output).toContain('## 答案')
   })
+
+  it('preserves emoji outside the decorative symbol cleanup list', () => {
+    const output = fixMarkdown('问题吗？😊')
+    const hasUnpairedSurrogate = Array.from(output).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint >= 0xd800 && codePoint <= 0xdfff
+    })
+
+    expect(output).toContain('😊')
+    expect(hasUnpairedSurrogate).toBe(false)
+  })
+
+  it('still removes configured decorative symbols without damaging other emoji', () => {
+    const output = fixMarkdown('✅ 核心内容 📌 😊')
+
+    expect(output).not.toContain('✅')
+    expect(output).not.toContain('📌')
+    expect(output).toContain('😊')
+  })
 })

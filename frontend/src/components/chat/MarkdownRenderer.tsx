@@ -1785,7 +1785,10 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed.replace(/([^\n])\s+([-*+])\s+/g, '$1\n$2 ')
   fixed = fixed.replace(/([^\n])\s+-\s+(?=[^\n：:]+[：:])/g, '$1\n- ')
 
-  fixed = fixed.replace(/[✅☑️✔🟩🟦🔹🔸•📌✨📍🛠️📦🚀🎯💡🔥⭐👉🔧📝📣⚠️❗❓]/g, '')
+  fixed = fixed.replace(
+    /[✅☑✔🟩🟦🔹🔸•📌✨📍🛠📦🚀🎯💡🔥⭐👉🔧📝📣⚠❗❓]\uFE0F?/gu,
+    '',
+  )
   fixed = fixed.replace(/-\s*(\d+[.)、])/g, '$1')
   fixed = fixed.replace(/([^\n])\s+(总结|结论|建议|风险|下一步|关键任务|阶段功能目标|理由|备注|关键依赖)[:：]/g, '$1\n\n$2：')
   fixed = fixed.replace(/\s+(---|———+|───+)\s+/g, '\n\n---\n\n')
