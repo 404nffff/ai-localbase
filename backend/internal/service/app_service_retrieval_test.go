@@ -152,7 +152,7 @@ func TestNormalizeRetrievalConfigIncludesRerankAndRewrite(t *testing.T) {
 
 func TestBuildRetrievalDebugConfidence(t *testing.T) {
 	t.Run("empty result is low confidence", func(t *testing.T) {
-		confidence := buildRetrievalDebugConfidence("张三的薪资是多少", nil, false)
+		confidence := buildRetrievalDebugConfidence("张三的薪资是多少", nil)
 		if confidence.Status != "low" {
 			t.Fatalf("expected low confidence, got %s", confidence.Status)
 		}
@@ -167,7 +167,7 @@ func TestBuildRetrievalDebugConfidence(t *testing.T) {
 				DocumentChunk: DocumentChunk{Text: "张三 薪资 24000"},
 				Score:         0.05,
 			},
-		}, false)
+		})
 		if confidence.Status != "low" {
 			t.Fatalf("expected low confidence, got %s", confidence.Status)
 		}
@@ -186,7 +186,7 @@ func TestBuildRetrievalDebugConfidence(t *testing.T) {
 				DocumentChunk: DocumentChunk{Text: "张三 教师编号 111222333111"},
 				Score:         0.86,
 			},
-		}, false)
+		})
 		if confidence.Status != "normal" {
 			t.Fatalf("expected normal confidence, got %s with reasons %v", confidence.Status, confidence.Reasons)
 		}
@@ -753,7 +753,7 @@ func TestBuildRetrievalDebugMatchReasons(t *testing.T) {
 		},
 		Score:    0.82,
 		RawScore: 0.86,
-	}, false)
+	})
 
 	joined := strings.Join(reasons, " ")
 	if !strings.Contains(joined, "匹配查询证据词") {
@@ -770,10 +770,10 @@ func TestBuildRetrievalDebugMatchReasons(t *testing.T) {
 		},
 		Score:    0.72,
 		RawScore: 0.61,
-	}, true)
+	})
 	joined = strings.Join(structuredReasons, " ")
-	if !strings.Contains(joined, "结构化数据片段") || !strings.Contains(joined, "确定性结构化查询补充") {
-		t.Fatalf("expected structured deterministic reasons, got %#v", structuredReasons)
+	if !strings.Contains(joined, "结构化数据片段") || strings.Contains(joined, "确定性") {
+		t.Fatalf("expected only evidence-backed structured reasons, got %#v", structuredReasons)
 	}
 }
 

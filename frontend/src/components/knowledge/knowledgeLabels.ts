@@ -21,29 +21,7 @@ export const healthStatusLabel = (status: KnowledgeBaseHealthResponse['status'])
 }
 
 export const chunkKindLabel = (kind: string): string => {
-  if (kind === 'structured_deterministic') return '确定性'
   if (kind === 'structured_summary') return '摘要'
   if (kind === 'structured_row') return '数据行'
   return '正文'
-}
-
-export const structuredIntentLabel = (intent?: string): string => {
-  switch (intent) {
-    case 'max':
-      return '最大值'
-    case 'min':
-      return '最小值'
-    case 'average':
-      return '平均值'
-    case 'filter':
-      return '筛选'
-    case 'group':
-      return '分布'
-    case 'count':
-      return '计数'
-    case 'preview':
-      return '预览'
-    default:
-      return ''
-  }
 }

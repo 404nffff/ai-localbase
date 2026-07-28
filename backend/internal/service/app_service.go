@@ -1806,22 +1806,6 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	}
 
 	query := latestUserMessage(req.Messages)
-	deterministicStartedAt := time.Now()
-	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(req, query)
-	if err != nil {
-		return "", nil, err
-	}
-	if deterministicUsed {
-		chunks = append(deterministicChunks, chunks...)
-	}
-	logRetrievalStageMetrics(req, query, "context_structured_deterministic", deterministicStartedAt, map[string]any{
-		"status":      "ok",
-		"used":        deterministicUsed,
-		"intent":      string(deterministicResult.Plan.Intent),
-		"targetField": deterministicResult.Plan.TargetField,
-		"chunks":      len(deterministicChunks),
-	})
-
 	expandStartedAt := time.Now()
 	chunks = s.expandStructuredSourceRows(req, query, chunks)
 	logRetrievalStageMetrics(req, query, "context_expand_structured_rows", expandStartedAt, map[string]any{
@@ -1999,27 +1983,6 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 			Reason: "未启用查询改写",
 		})
 	}
-	deterministicChunks, deterministicResult, deterministicUsed, err := s.buildStructuredDeterministicChunks(chatReq, query)
-	if err != nil {
-		return model.RetrievalDebugResponse{}, err
-	}
-	if deterministicUsed {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:       "deterministic",
-			Status:      "ok",
-			Reason:      "命中结构化查询意图，补充确定性结果",
-			InputCount:  len(chunks),
-			OutputCount: len(chunks) + len(deterministicChunks),
-		})
-		chunks = append(deterministicChunks, chunks...)
-	} else {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:       "deterministic",
-			Status:      "skipped",
-			Reason:      "未识别到可确定执行的结构化查询意图",
-			OutputCount: len(chunks),
-		})
-	}
 	expandedInputCount := len(chunks)
 	chunks = s.expandStructuredSourceRows(chatReq, query, chunks)
 	if len(chunks) != expandedInputCount {
@@ -2052,7 +2015,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 		})
 		chunks = chunks[:req.TopK]
 	}
-	confidence := buildRetrievalDebugConfidence(query, chunks, deterministicUsed)
+	confidence := buildRetrievalDebugConfidence(query, chunks)
 	retrievalLowConfidence := confidence.Status == "low"
 	evidenceGate := s.buildRetrievalEvidenceGateDiagnostic(chatReq, query, chunks)
 
@@ -2062,31 +2025,28 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 
 	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
 	for _, chunk := range chunks {
-		items = append(items, buildRetrievalDebugChunk(query, chunk, deterministicUsed))
+		items = append(items, buildRetrievalDebugChunk(query, chunk))
 	}
 
 	return model.RetrievalDebugResponse{
-		Query:             query,
-		KnowledgeBaseID:   chatReq.KnowledgeBaseID,
-		DocumentID:        chatReq.DocumentID,
-		SearchMode:        s.resolvedRetrievalSearchMode(chatReq),
-		RerankStrategy:    s.rerankStrategyForRequest(chatReq),
-		QueryRewriteUsed:  s.queryRewriteEnabledForRequest(chatReq),
-		QueryVariants:     queryVariants,
-		StructuredIntent:  string(deterministicResult.Plan.Intent),
-		TargetField:       deterministicResult.Plan.TargetField,
-		DeterministicUsed: deterministicUsed,
-		ElapsedMs:         time.Since(startedAt).Milliseconds(),
-		Count:             len(items),
-		LowConfidence:     retrievalLowConfidence,
-		Confidence:        confidence,
-		EvidenceGate:      evidenceGate,
-		ContextPreview:    contextText,
-		Sources:           sources,
-		EvalCandidate:     evalCandidate,
-		Trace:             trace,
-		Items:             items,
-		VerboseDetails:    verboseDetails,
+		Query:            query,
+		KnowledgeBaseID:  chatReq.KnowledgeBaseID,
+		DocumentID:       chatReq.DocumentID,
+		SearchMode:       s.resolvedRetrievalSearchMode(chatReq),
+		RerankStrategy:   s.rerankStrategyForRequest(chatReq),
+		QueryRewriteUsed: s.queryRewriteEnabledForRequest(chatReq),
+		QueryVariants:    queryVariants,
+		ElapsedMs:        time.Since(startedAt).Milliseconds(),
+		Count:            len(items),
+		LowConfidence:    retrievalLowConfidence,
+		Confidence:       confidence,
+		EvidenceGate:     evidenceGate,
+		ContextPreview:   contextText,
+		Sources:          sources,
+		EvalCandidate:    evalCandidate,
+		Trace:            trace,
+		Items:            items,
+		VerboseDetails:   verboseDetails,
 	}, nil
 }
 
@@ -2225,7 +2185,7 @@ func convertToDebugChunks(chunks []RetrievedChunk, query string, limit int) []mo
 	count := minInt(len(chunks), limit)
 	result := make([]model.RetrievalDebugChunk, count)
 	for i := 0; i < count; i++ {
-		result[i] = buildRetrievalDebugChunk(query, chunks[i], false)
+		result[i] = buildRetrievalDebugChunk(query, chunks[i])
 	}
 	return result
 }
@@ -2299,7 +2259,7 @@ func calculateDiversityScore(chunks []RetrievedChunk) float64 {
 	return 1.0 - avgSimilarity
 }
 
-func buildRetrievalDebugChunk(query string, chunk RetrievedChunk, deterministicUsed bool) model.RetrievalDebugChunk {
+func buildRetrievalDebugChunk(query string, chunk RetrievedChunk) model.RetrievalDebugChunk {
 	return model.RetrievalDebugChunk{
 		ID:                chunk.ID,
 		KnowledgeBaseID:   chunk.KnowledgeBaseID,
@@ -2309,7 +2269,7 @@ func buildRetrievalDebugChunk(query string, chunk RetrievedChunk, deterministicU
 		Kind:              chunk.Kind,
 		Score:             chunk.Score,
 		Text:              truncateRunes(strings.TrimSpace(chunk.Text), retrievalDebugChunkTextLimit),
-		MatchReasons:      buildRetrievalDebugMatchReasons(query, chunk, deterministicUsed),
+		MatchReasons:      buildRetrievalDebugMatchReasons(query, chunk),
 		RetrievalChannels: chunk.RetrievalChannels,
 		DenseRank:         chunk.DenseRank,
 		SparseRank:        chunk.SparseRank,
@@ -2387,12 +2347,12 @@ func (s *AppService) buildRetrievalEvidenceGateDiagnostic(req model.ChatCompleti
 		DirectEvidenceCount: directEvidenceCount,
 		WeakEvidenceCount:   weakEvidenceCount,
 		RemovedCount:        removedCount,
-		TopBefore:           debugChunksFromRetrieved(query, candidates, 5, false),
-		TopAfter:            debugChunksFromRetrieved(query, selected, 5, false),
+		TopBefore:           debugChunksFromRetrieved(query, candidates, 5),
+		TopAfter:            debugChunksFromRetrieved(query, selected, 5),
 	}
 }
 
-func debugChunksFromRetrieved(query string, chunks []RetrievedChunk, limit int, deterministicUsed bool) []model.RetrievalDebugChunk {
+func debugChunksFromRetrieved(query string, chunks []RetrievedChunk, limit int) []model.RetrievalDebugChunk {
 	if len(chunks) == 0 || limit <= 0 {
 		return nil
 	}
@@ -2401,7 +2361,7 @@ func debugChunksFromRetrieved(query string, chunks []RetrievedChunk, limit int, 
 	}
 	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
 	for _, chunk := range chunks {
-		items = append(items, buildRetrievalDebugChunk(query, chunk, deterministicUsed))
+		items = append(items, buildRetrievalDebugChunk(query, chunk))
 	}
 	return items
 }
@@ -3477,53 +3437,6 @@ func buildChunkText(chunks []RetrievedChunk) string {
 		lines = append(lines, fmt.Sprintf("[%s#%d] %s", chunk.DocumentName, chunk.Index+1, chunk.Text))
 	}
 	return strings.Join(lines, "\n\n")
-}
-
-func (s *AppService) buildStructuredDeterministicChunks(req model.ChatCompletionRequest, query string) ([]RetrievedChunk, structuredDeterministicResult, bool, error) {
-	result, ok, err := s.buildStructuredDeterministicResult(req, query)
-	if err != nil || !ok {
-		return nil, result, ok, err
-	}
-
-	content := strings.TrimSpace(result.Content)
-	if content == "" {
-		return nil, result, false, nil
-	}
-
-	chunk := RetrievedChunk{
-		DocumentChunk: DocumentChunk{
-			ID:              structuredDeterministicChunkID(req, query, result),
-			KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-			DocumentID:      strings.TrimSpace(req.DocumentID),
-			DocumentName:    "结构化确定性查询",
-			Text:            "结构化确定性查询结果（后端直接读取 CSV/XLSX 原始行计算，优先于向量摘要）：\n" + content,
-			Kind:            "structured_deterministic",
-		},
-		Score: 1,
-	}
-
-	if len(result.Sources) > 0 {
-		first := result.Sources[0]
-		chunk.KnowledgeBaseID = first["knowledgeBaseId"]
-		chunk.DocumentID = first["documentId"]
-		if len(result.Sources) == 1 && strings.TrimSpace(first["documentName"]) != "" {
-			chunk.DocumentName = first["documentName"]
-		}
-	}
-
-	return []RetrievedChunk{chunk}, result, true, nil
-}
-
-func structuredDeterministicChunkID(req model.ChatCompletionRequest, query string, result structuredDeterministicResult) string {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(strings.TrimSpace(req.KnowledgeBaseID)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strings.TrimSpace(req.DocumentID)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strings.TrimSpace(query)))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(result.Content))
-	return fmt.Sprintf("structured-deterministic-%x", h.Sum64())
 }
 
 func buildRetrievalDebugEvalCandidate(req model.ChatCompletionRequest, query string, lowConfidence bool, chunks []RetrievedChunk, contextText string) *model.EvalGroundTruthCase {
@@ -4801,7 +4714,7 @@ func isLowConfidenceSelection(query string, chunks []RetrievedChunk) bool {
 	return queryEvidenceCoverage(query, chunks) < 0.2
 }
 
-func buildRetrievalDebugConfidence(query string, chunks []RetrievedChunk, deterministicUsed bool) model.RetrievalDebugConfidence {
+func buildRetrievalDebugConfidence(query string, chunks []RetrievedChunk) model.RetrievalDebugConfidence {
 	topScore := 0.0
 	if len(chunks) > 0 {
 		topScore = chunks[0].Score
@@ -4842,23 +4755,14 @@ func buildRetrievalDebugConfidence(query string, chunks []RetrievedChunk, determ
 		suggestions = append(suggestions, "启用 Query Rewrite 或改用更贴近文档原文的问法")
 	}
 	if len(reasons) == 0 {
-		summary := "置信正常：命中分数和问题实体覆盖率都处于可接受范围。"
-		if deterministicUsed {
-			summary = "置信正常：已命中结构化确定性路径，并补充了可核对的结构化结果。"
-		}
 		return model.RetrievalDebugConfidence{
 			Status:           "normal",
-			Summary:          summary,
+			Summary:          "置信正常：命中分数和问题实体覆盖率都处于可接受范围。",
 			TopScore:         topScore,
 			AverageScore:     avgScore,
 			EvidenceCoverage: evidenceCoverage,
 		}
 	}
-	if deterministicUsed {
-		reasons = append(reasons, "已命中结构化确定性路径，但仍存在其他低置信信号")
-		suggestions = append(suggestions, "优先核对确定性结果是否覆盖目标字段")
-	}
-
 	return model.RetrievalDebugConfidence{
 		Status:           "low",
 		Summary:          "低置信：当前证据不足以稳定支撑回答，建议复核后再作为依据。",
@@ -5165,7 +5069,7 @@ func sortFactEvidenceChunks(query string, chunks []RetrievedChunk) {
 	})
 }
 
-func buildRetrievalDebugMatchReasons(query string, chunk RetrievedChunk, deterministicUsed bool) []string {
+func buildRetrievalDebugMatchReasons(query string, chunk RetrievedChunk) []string {
 	reasons := make([]string, 0, 5)
 	terms := queryEvidenceTerms(query)
 	if len(terms) > 0 {
@@ -5198,10 +5102,6 @@ func buildRetrievalDebugMatchReasons(query string, chunk RetrievedChunk, determi
 	if containsString(chunk.RetrievalChannels, "lexical") {
 		reasons = append(reasons, "主体属性词法兜底命中")
 	}
-	if deterministicUsed && (chunk.Kind == "structured_summary" || chunk.Kind == "structured_row") {
-		reasons = append(reasons, "确定性结构化查询补充")
-	}
-
 	if len(reasons) == 0 {
 		reasons = append(reasons, "由检索排序策略保留")
 	}

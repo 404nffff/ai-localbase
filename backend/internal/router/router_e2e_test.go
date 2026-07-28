@@ -775,8 +775,8 @@ func TestMCPStructuredDataQueryAndEvalDataset(t *testing.T) {
 	if debugResp.Code != http.StatusOK {
 		t.Fatalf("expected debug status 200, got %d, body=%s", debugResp.Code, debugResp.Body.String())
 	}
-	if !strings.Contains(debugResp.Body.String(), `"deterministicUsed":true`) || !strings.Contains(debugResp.Body.String(), `"structuredIntent":"max"`) {
-		t.Fatalf("expected retrieval debug deterministic metadata, got %s", debugResp.Body.String())
+	if strings.Contains(debugResp.Body.String(), `"deterministicUsed"`) || strings.Contains(debugResp.Body.String(), `"structuredIntent"`) {
+		t.Fatalf("did not expect backend-generated deterministic metadata, got %s", debugResp.Body.String())
 	}
 
 	reindexResp := performRequestWithHeaders(

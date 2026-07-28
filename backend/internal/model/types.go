@@ -659,27 +659,24 @@ type RetrievalEvidenceGateDiagnostic struct {
 }
 
 type RetrievalDebugResponse struct {
-	Query             string                          `json:"query"`
-	KnowledgeBaseID   string                          `json:"knowledgeBaseId,omitempty"`
-	DocumentID        string                          `json:"documentId,omitempty"`
-	SearchMode        string                          `json:"searchMode"`
-	RerankStrategy    string                          `json:"rerankStrategy"`
-	QueryRewriteUsed  bool                            `json:"queryRewriteUsed"`
-	QueryVariants     []string                        `json:"queryVariants,omitempty"`
-	StructuredIntent  string                          `json:"structuredIntent,omitempty"`
-	TargetField       string                          `json:"targetField,omitempty"`
-	DeterministicUsed bool                            `json:"deterministicUsed"`
-	ElapsedMs         int64                           `json:"elapsedMs"`
-	Count             int                             `json:"count"`
-	LowConfidence     bool                            `json:"lowConfidence"`
-	Confidence        RetrievalDebugConfidence        `json:"confidence"`
-	EvidenceGate      RetrievalEvidenceGateDiagnostic `json:"evidenceGate,omitempty"`
-	ContextPreview    string                          `json:"contextPreview"`
-	Sources           []map[string]string             `json:"sources"`
-	EvalCandidate     *EvalGroundTruthCase            `json:"evalCandidate,omitempty"`
-	Trace             []RetrievalDebugTraceStep       `json:"trace,omitempty"`
-	Items             []RetrievalDebugChunk           `json:"items"`
-	VerboseDetails    *RetrievalDebugVerboseDetails   `json:"verboseDetails,omitempty"`
+	Query            string                          `json:"query"`
+	KnowledgeBaseID  string                          `json:"knowledgeBaseId,omitempty"`
+	DocumentID       string                          `json:"documentId,omitempty"`
+	SearchMode       string                          `json:"searchMode"`
+	RerankStrategy   string                          `json:"rerankStrategy"`
+	QueryRewriteUsed bool                            `json:"queryRewriteUsed"`
+	QueryVariants    []string                        `json:"queryVariants,omitempty"`
+	ElapsedMs        int64                           `json:"elapsedMs"`
+	Count            int                             `json:"count"`
+	LowConfidence    bool                            `json:"lowConfidence"`
+	Confidence       RetrievalDebugConfidence        `json:"confidence"`
+	EvidenceGate     RetrievalEvidenceGateDiagnostic `json:"evidenceGate,omitempty"`
+	ContextPreview   string                          `json:"contextPreview"`
+	Sources          []map[string]string             `json:"sources"`
+	EvalCandidate    *EvalGroundTruthCase            `json:"evalCandidate,omitempty"`
+	Trace            []RetrievalDebugTraceStep       `json:"trace,omitempty"`
+	Items            []RetrievalDebugChunk           `json:"items"`
+	VerboseDetails   *RetrievalDebugVerboseDetails   `json:"verboseDetails,omitempty"`
 }
 
 type RetrievalDebugVerboseDetails struct {

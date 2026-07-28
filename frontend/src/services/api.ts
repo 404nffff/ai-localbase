@@ -317,9 +317,6 @@ export interface RetrievalDebugResponse {
   searchMode: string
   rerankStrategy: string
   queryRewriteUsed: boolean
-  structuredIntent?: string
-  targetField?: string
-  deterministicUsed: boolean
   elapsedMs: number
   count: number
   lowConfidence: boolean

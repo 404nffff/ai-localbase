@@ -318,7 +318,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "debug_retrieval",
-			Description: "执行检索调试，返回命中 chunk、分数、低置信标记、结构化确定性补全状态和评测候选。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			Description: "执行检索调试，返回命中 chunk、检索分数、低置信标记和评测候选。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":           map[string]any{"type": "string", "description": "检索调试问题"},
@@ -351,9 +351,6 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					return ToolCallResult{}, err
 				}
 				summary := fmt.Sprintf("检索调试完成：命中 %d 个 chunk，耗时 %d ms。", response.Count, response.ElapsedMs)
-				if response.DeterministicUsed {
-					summary += " 已使用结构化确定性补全。"
-				}
 				if response.LowConfidence {
 					summary += " 当前结果低置信，可沉淀为评测样本。"
 				}
@@ -1229,9 +1226,6 @@ func retrievalModeScore(response model.RetrievalDebugResponse) float64 {
 	}
 	if response.Count == 0 {
 		score -= 0.3
-	}
-	if response.DeterministicUsed {
-		score += 0.1
 	}
 	return score
 }

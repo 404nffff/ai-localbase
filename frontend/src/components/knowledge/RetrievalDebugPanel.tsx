@@ -1,7 +1,7 @@
 import React from 'react'
 import type { RetrievalDebugResponse, RetrievalSearchMode } from '../../services/api'
 import AppIcon from '../common/AppIcon'
-import { chunkKindLabel, structuredIntentLabel } from './knowledgeLabels'
+import { chunkKindLabel } from './knowledgeLabels'
 
 interface RetrievalDebugPanelProps {
   scopeLabel: string
@@ -204,7 +204,7 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
             <h4>命中结果</h4>
             <p>按最终排序分数展示，共 {result.items.length} 个 Chunk</p>
           </div>
-          <span>{result.queryRewriteUsed ? '查询已改写' : '原始查询'} · {result.deterministicUsed ? '确定性补全' : '向量优先'}</span>
+          <span>{result.queryRewriteUsed ? '查询已改写' : '原始查询'} · 检索排序</span>
         </div>
 
         <div className="kb-retrieval-hits">
@@ -264,13 +264,6 @@ const RetrievalDebugPanel: React.FC<RetrievalDebugPanelProps> = ({
                 {retrievalContributionSummary(result).map((item) => <span key={item}>{item}</span>)}
               </div>
             </section>
-
-            {structuredIntentLabel(result.structuredIntent) && (
-              <section>
-                <h4>结构化意图</h4>
-                <p>{structuredIntentLabel(result.structuredIntent)}{result.targetField ? `：${result.targetField}` : ''}</p>
-              </section>
-            )}
 
             {result.evidenceGate && (
               <section>

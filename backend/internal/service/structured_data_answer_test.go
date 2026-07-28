@@ -134,29 +134,21 @@ func TestTryBuildStructuredDataAnswerAcrossKnowledgeBaseTables(t *testing.T) {
 	}
 }
 
-func TestBuildStructuredDeterministicChunks(t *testing.T) {
+func TestBuildRetrievalContextDoesNotInjectStructuredAnswer(t *testing.T) {
 	service := newStructuredAnswerTestService(t)
-	chunks, result, ok, err := service.buildStructuredDeterministicChunks(
-		model.ChatCompletionRequest{
-			DocumentID: "doc-users",
-			Messages:   []model.ChatMessage{{Role: "user", Content: "薪资最高的是谁"}},
-		},
-		"薪资最高的是谁",
-	)
-	if err != nil || !ok {
-		t.Fatalf("expected deterministic chunks, ok=%v err=%v", ok, err)
+	service.rag = NewRagService()
+	service.queryRewriter = NewLLMQueryRewriter(nil, 3)
+	enableQueryRewrite := true
+	contextText, sources, err := service.BuildRetrievalContext(model.ChatCompletionRequest{
+		DocumentID:         "doc-users",
+		EnableQueryRewrite: &enableQueryRewrite,
+		Messages:           []model.ChatMessage{{Role: "user", Content: "薪资最高的是谁"}},
+	})
+	if err != nil {
+		t.Fatalf("build retrieval context: %v", err)
 	}
-	if result.Plan.Intent != structuredIntentMax || result.Plan.TargetField != "薪资" {
-		t.Fatalf("unexpected plan: %#v", result.Plan)
-	}
-	if len(chunks) != 1 {
-		t.Fatalf("expected one deterministic chunk, got %d", len(chunks))
-	}
-	if chunks[0].Kind != "structured_deterministic" {
-		t.Fatalf("expected deterministic chunk kind, got %s", chunks[0].Kind)
-	}
-	if !strings.Contains(chunks[0].Text, "|张三|上海|24000|45|") {
-		t.Fatalf("expected source row in deterministic chunk, got %q", chunks[0].Text)
+	if contextText != "" || len(sources) != 0 {
+		t.Fatalf("expected no backend-generated answer without retrieved chunks, context=%q sources=%#v", contextText, sources)
 	}
 }
 
