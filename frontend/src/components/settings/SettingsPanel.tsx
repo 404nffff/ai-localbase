@@ -357,7 +357,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   ])
 
   return (
-    <section className="settings-workspace app-workspace" aria-labelledby="settings-workspace-title">
+    <section
+      className={`settings-workspace app-workspace ${mobileDetailOpen ? 'mobile-detail-open' : ''}`}
+      aria-labelledby="settings-workspace-title"
+    >
       <header className="workspace-page-header settings-workspace-header">
         <div>
           <span className="workspace-page-kicker">AI LocalBase</span>
@@ -444,7 +447,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             {activePanel}
           </section>
 
-          <footer className={`settings-save-bar ${saveError ? 'has-error' : ''}`}>
+          <footer
+            className={`settings-save-bar ${saveError ? 'has-error' : ''} ${isDirty ? 'is-dirty' : 'is-clean'}`}
+          >
             <div className="settings-save-state" role="status" aria-live="polite">
               <span className="settings-save-state-icon" aria-hidden="true">
                 <AppIcon
