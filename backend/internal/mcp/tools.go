@@ -25,7 +25,7 @@ type AppServiceReader interface {
 	GetConversation(id string) (*model.Conversation, error)
 	BuildRetrievalContext(req model.ChatCompletionRequest) (string, []map[string]string, error)
 	DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error)
-	TryBuildStructuredDataAnswer(req model.ChatCompletionRequest) (string, []map[string]string, bool, error)
+	QueryStructuredData(req model.ChatCompletionRequest) (service.StructuredDataQueryResult, []map[string]string, bool, error)
 	ListEvalRuns(knowledgeBaseID, datasetID string) []model.EvalRunSummary
 	GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (model.GenerateEvalDatasetResponse, error)
 	AddEvalDatasetCandidate(req model.AddEvalDatasetCandidateRequest) (model.AddEvalDatasetCandidateResponse, error)
@@ -274,7 +274,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "query_structured_data",
-			Description: "对 CSV / XLSX 结构化文档执行确定性查询，可用于预览、筛选、最大/最小值、平均值和分布统计。参数 query 必填，documentId 或 knowledgeBaseId 至少提供一个。",
+			Description: "对 CSV / XLSX 结构化文档执行查询，返回行、字段、聚合值和来源数据，不生成最终回答。参数 query 必填，documentId 或 knowledgeBaseId 至少提供一个。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":           map[string]any{"type": "string", "description": "结构化数据问题，例如：展示数据表格、筛选城市是上海的数据、薪资最高的是谁、按城市统计分布"},
@@ -296,7 +296,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if documentID == "" && knowledgeBaseID == "" {
 					return ToolCallResult{}, fmt.Errorf("documentId or knowledgeBaseId is required")
 				}
-				content, sources, ok, err := appService.TryBuildStructuredDataAnswer(model.ChatCompletionRequest{
+				result, sources, ok, err := appService.QueryStructuredData(model.ChatCompletionRequest{
 					KnowledgeBaseID: knowledgeBaseID,
 					DocumentID:      documentID,
 					Messages: []model.ChatMessage{{
@@ -313,7 +313,22 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 						map[string]any{"documentId": documentID, "knowledgeBaseId": knowledgeBaseID, "query": query, "matched": false},
 					), nil
 				}
-				return NewTextResult(content, map[string]any{"sources": sources, "documentId": documentID, "knowledgeBaseId": knowledgeBaseID, "query": query, "matched": true}), nil
+				encoded, err := json.Marshal(result)
+				if err != nil {
+					return ToolCallResult{}, fmt.Errorf("encode structured data result: %w", err)
+				}
+				return ToolCallResult{
+					Summary: fmt.Sprintf("结构化查询完成：类型 %s，共 %d 行，匹配 %d 行。", result.Intent, result.TotalRows, result.MatchedRows),
+					Content: []ToolContent{{Type: "text", Text: string(encoded)}},
+					Data: map[string]any{
+						"structuredData":  result,
+						"sources":         sources,
+						"documentId":      documentID,
+						"knowledgeBaseId": knowledgeBaseID,
+						"query":           query,
+						"matched":         true,
+					},
+				}, nil
 			},
 		},
 		{
@@ -359,7 +374,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "answer_with_sources",
-			Description: "从知识库或文档整理可引用证据；结构化文档可返回确定性计算结果，但不会调用聊天模型生成最终答案。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
+			Description: "从知识库或文档整理可引用证据；结构化文档返回查询数据，不调用聊天模型，也不生成最终回答。参数 query 必填，knowledgeBaseId 或 documentId 至少提供一个。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":           map[string]any{"type": "string", "description": "用户问题"},
@@ -391,23 +406,44 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					}},
 					Embedding: embeddingModelConfigFromAppConfig(appService.GetConfig()),
 				}
-				evidence, sources, structuredUsed, err := appService.TryBuildStructuredDataAnswer(chatReq)
+				structuredData, sources, structuredUsed, err := appService.QueryStructuredData(chatReq)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				evidence = strings.TrimSpace(evidence)
-				mode := "structured_result"
-				if !structuredUsed {
-					mode = "retrieval_context"
-					evidence, sources, err = appService.BuildRetrievalContext(chatReq)
+
+				mode := "structured_data"
+				contentText := ""
+				data := map[string]any{
+					"sources":         sources,
+					"mode":            mode,
+					"query":           query,
+					"knowledgeBaseId": knowledgeBaseID,
+					"documentId":      documentID,
+				}
+				if structuredUsed {
+					encoded, err := json.Marshal(structuredData)
+					if err != nil {
+						return ToolCallResult{}, fmt.Errorf("encode structured data result: %w", err)
+					}
+					contentText = string(encoded)
+					data["structuredData"] = structuredData
+				} else {
+					mode = "retrieval_evidence"
+					evidence, retrievalSources, err := appService.BuildRetrievalContext(chatReq)
 					if err != nil {
 						return ToolCallResult{}, err
 					}
 					evidence = strings.TrimSpace(evidence)
+					sources = retrievalSources
+					contentText = evidence
+					data["mode"] = mode
+					data["evidence"] = evidence
+					data["sources"] = sources
 				}
+
 				warnings := []string{}
-				if evidence == "" {
-					evidence = "未检索到可用于回答的内容。"
+				if contentText == "" {
+					contentText = "未检索到可用证据。"
 					warnings = append(warnings, "未找到相关证据，建议换用更具体的问题或扩大检索范围。")
 				}
 				if len(sources) == 0 {
@@ -415,17 +451,9 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 
 				return ToolCallResult{
-					Summary: fmt.Sprintf("已整理可引用证据包，模式为 %s，来源 %d 条。", mode, len(sources)),
-					Content: []ToolContent{{Type: "text", Text: evidence}},
-					Data: map[string]any{
-						"evidence":        evidence,
-						"answer":          evidence,
-						"sources":         sources,
-						"mode":            mode,
-						"query":           query,
-						"knowledgeBaseId": knowledgeBaseID,
-						"documentId":      documentID,
-					},
+					Summary:  fmt.Sprintf("已整理证据包，模式为 %s，来源 %d 条。", mode, len(sources)),
+					Content:  []ToolContent{{Type: "text", Text: contentText}},
+					Data:     data,
 					Warnings: warnings,
 					NextActions: []string{
 						"需要排查命中质量时调用 debug_retrieval。",

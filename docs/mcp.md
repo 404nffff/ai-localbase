@@ -141,8 +141,8 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `get_conversation` | `read-only` | 获取单个会话详情 |
 | `search_knowledge_base` | `read-only` | 按知识库执行检索 |
 | `search_document` | `read-only` | 按单个文档执行检索 |
-| `query_structured_data` | `read-only` | 对 CSV / XLSX 执行确定性结构化查询 |
-| `debug_retrieval` | `read-only` | 调试检索命中、低置信和确定性补全 |
+| `query_structured_data` | `read-only` | 对 CSV / XLSX 执行结构化查询并返回数据 |
+| `debug_retrieval` | `read-only` | 调试检索命中、分数和低置信状态 |
 | `answer_with_sources` | `read-only` | 从知识库或文档整理可引用证据包 |
 | `inspect_knowledge_base_quality` | `read-only` | 聚合索引健康、最近评估和质量建议 |
 | `compare_retrieval_modes` | `read-only` | 对比 dense 与 hybrid 检索结果 |
@@ -314,11 +314,11 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 - `documentId` 或 `knowledgeBaseId` 至少提供一个
 - 支持 CSV / XLSX 表格的预览、筛选、计数、最大值、最小值、平均值和分布统计
-- 当前结构化查询会直接读取原始表格行，适合“薪资最高是谁”“平均年龄是多少”这类确定性问题
+- 查询结果是供 Agent 或模型使用的结构化数据，不是最终回答
 
 返回内容：
 
-- Markdown 格式的结构化查询结果
+- `structuredData`，包含查询类型、字段、匹配行、聚合值、分组和截断状态
 - `sources` 来源列表
 - `matched` 是否成功匹配结构化查询计划
 
@@ -336,7 +336,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 说明：
 
 - `knowledgeBaseId` 或 `documentId` 至少提供一个
-- 用于调试真实检索命中、chunk 分数、结构化确定性补全和低置信状态
+- 用于调试真实检索命中、chunk 分数和低置信状态
 - 当结果低置信时，会返回可人工复核的评测候选 `evalCandidate`
 
 返回内容：
@@ -344,9 +344,6 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - 命中 chunk 列表
 - 检索耗时
 - `lowConfidence`
-- `deterministicUsed`
-- `structuredIntent`
-- `targetField`
 - `contextPreview`
 - `evalCandidate`
 
@@ -363,13 +360,13 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 说明：
 
 - `knowledgeBaseId` 或 `documentId` 至少提供一个
-- 优先尝试结构化确定性查询，未命中时返回检索上下文证据包
-- 工具不会调用聊天模型生成最终答案；调用方应基于 `evidence` 与 `sources` 自行组织回答
+- 结构化文档返回 `structuredData`，普通文档返回检索 `evidence`
+- 工具不会调用聊天模型或生成最终答案；调用方应基于数据、证据与来源自行组织回答
 - 适合 Agent 在回答用户前先获取可引用证据包
 
 返回内容：
 
-- `answer`
+- `evidence` 或 `structuredData`
 - `sources`
 - `mode`
 - `warnings`

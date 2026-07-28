@@ -720,8 +720,25 @@ func TestMCPStructuredDataQueryAndEvalDataset(t *testing.T) {
 	if queryResp.Code != http.StatusOK {
 		t.Fatalf("expected query status 200, got %d, body=%s", queryResp.Code, queryResp.Body.String())
 	}
-	if !strings.Contains(queryResp.Body.String(), "|张三|上海|24000|") || !strings.Contains(queryResp.Body.String(), "|王五|上海|7000|") {
+	if !strings.Contains(queryResp.Body.String(), `"structuredData"`) || !strings.Contains(queryResp.Body.String(), `"姓名":"张三"`) || !strings.Contains(queryResp.Body.String(), `"姓名":"王五"`) {
 		t.Fatalf("expected structured rows in MCP result, got %s", queryResp.Body.String())
+	}
+	if strings.Contains(queryResp.Body.String(), `"answer"`) || strings.Contains(queryResp.Body.String(), "|姓名|") {
+		t.Fatalf("expected structured data without a backend-authored answer, got %s", queryResp.Body.String())
+	}
+
+	evidenceResp := performMCPToolCall(t, engine, headers, 23, "answer_with_sources", map[string]any{
+		"documentId": documentID,
+		"query":      "筛选城市是上海的数据",
+	})
+	if evidenceResp.Code != http.StatusOK {
+		t.Fatalf("expected evidence status 200, got %d, body=%s", evidenceResp.Code, evidenceResp.Body.String())
+	}
+	if !strings.Contains(evidenceResp.Body.String(), `"structuredData"`) || !strings.Contains(evidenceResp.Body.String(), `"mode":"structured_data"`) {
+		t.Fatalf("expected structured evidence data, got %s", evidenceResp.Body.String())
+	}
+	if strings.Contains(evidenceResp.Body.String(), `"answer"`) || strings.Contains(evidenceResp.Body.String(), `"evidence"`) {
+		t.Fatalf("expected structured evidence without answer or duplicated evidence fields, got %s", evidenceResp.Body.String())
 	}
 
 	detailResp := performRequestWithHeaders(
@@ -1150,8 +1167,8 @@ func TestMCPAgentOrientedTools(t *testing.T) {
 	if !strings.Contains(answerResp.Body.String(), `"evidence"`) || !strings.Contains(answerResp.Body.String(), `"sources"`) {
 		t.Fatalf("expected evidence package with sources, got %s", answerResp.Body.String())
 	}
-	if strings.Contains(answerResp.Body.String(), "已生成带来源答案草稿") {
-		t.Fatalf("expected tool not to claim model-generated answer, got %s", answerResp.Body.String())
+	if strings.Contains(answerResp.Body.String(), `"answer"`) || strings.Contains(answerResp.Body.String(), "已生成带来源答案草稿") {
+		t.Fatalf("expected tool to return evidence without an answer field, got %s", answerResp.Body.String())
 	}
 
 	summaryResp := performMCPToolCall(t, engine, adminHeaders, 703, "summarize_document", map[string]any{

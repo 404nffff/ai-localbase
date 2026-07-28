@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"math"
 	"path/filepath"
 	"sort"
@@ -13,7 +12,7 @@ import (
 )
 
 const (
-	structuredAnswerPreviewLimit = 20
+	structuredQueryRowLimit = 20
 )
 
 type structuredQueryIntent string
@@ -35,10 +34,40 @@ type structuredQueryPlan struct {
 	TargetField string
 }
 
-type structuredDeterministicResult struct {
-	Plan    structuredQueryPlan
-	Content string
-	Sources []map[string]string
+type StructuredDataQueryResult struct {
+	Query         string                    `json:"query"`
+	Intent        string                    `json:"intent"`
+	FilterField   string                    `json:"filterField,omitempty"`
+	FilterValue   string                    `json:"filterValue,omitempty"`
+	TargetField   string                    `json:"targetField,omitempty"`
+	TotalRows     int                       `json:"totalRows"`
+	MatchedRows   int                       `json:"matchedRows"`
+	Columns       []string                  `json:"columns,omitempty"`
+	Rows          []StructuredDataResultRow `json:"rows,omitempty"`
+	Aggregate     *StructuredDataAggregate  `json:"aggregate,omitempty"`
+	Groups        []StructuredDataGroup     `json:"groups,omitempty"`
+	RowsTruncated bool                      `json:"rowsTruncated,omitempty"`
+}
+
+type StructuredDataResultRow struct {
+	KnowledgeBaseID string            `json:"knowledgeBaseId"`
+	DocumentID      string            `json:"documentId"`
+	DocumentName    string            `json:"documentName"`
+	Sheet           string            `json:"sheet,omitempty"`
+	RowNumber       int               `json:"rowNumber"`
+	Values          map[string]string `json:"values"`
+}
+
+type StructuredDataAggregate struct {
+	Operation   string  `json:"operation"`
+	Field       string  `json:"field,omitempty"`
+	Value       float64 `json:"value"`
+	SampleCount int     `json:"sampleCount"`
+}
+
+type StructuredDataGroup struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
 }
 
 type structuredTableDocument struct {
@@ -47,38 +76,39 @@ type structuredTableDocument struct {
 }
 
 type structuredRowMatch struct {
-	Table util.StructuredTable
-	Row   util.StructuredTableRow
+	Document model.Document
+	Table    util.StructuredTable
+	Row      util.StructuredTableRow
 }
 
-func (s *AppService) TryBuildStructuredDataAnswer(req model.ChatCompletionRequest) (string, []map[string]string, bool, error) {
+func (s *AppService) QueryStructuredData(req model.ChatCompletionRequest) (StructuredDataQueryResult, []map[string]string, bool, error) {
 	query := latestUserMessage(req.Messages)
 	if !looksLikeStructuredDataQuery(query) {
-		return "", nil, false, nil
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
 
-	result, ok, err := s.buildStructuredDeterministicResult(req, query)
+	result, sources, ok, err := s.buildStructuredDataQueryResult(req, query)
 	if err != nil || !ok {
-		return "", nil, ok, err
+		return StructuredDataQueryResult{}, nil, ok, err
 	}
-	return result.Content, result.Sources, true, nil
+	return result, sources, true, nil
 }
 
-func (s *AppService) buildStructuredDeterministicResult(req model.ChatCompletionRequest, query string) (structuredDeterministicResult, bool, error) {
+func (s *AppService) buildStructuredDataQueryResult(req model.ChatCompletionRequest, query string) (StructuredDataQueryResult, []map[string]string, bool, error) {
 	if !looksLikeStructuredDataQuery(query) {
-		return structuredDeterministicResult{}, false, nil
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
 
 	documents := s.resolveStructuredTableDocuments(req)
 	if len(documents) == 0 {
-		return structuredDeterministicResult{}, false, nil
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
 
 	tables := make([]structuredTableDocument, 0, len(documents))
 	for _, document := range documents {
 		parsed, err := util.ExtractStructuredTables(document.Path)
 		if err != nil {
-			return structuredDeterministicResult{}, true, err
+			return StructuredDataQueryResult{}, nil, true, err
 		}
 		if len(parsed) == 0 {
 			continue
@@ -86,25 +116,19 @@ func (s *AppService) buildStructuredDeterministicResult(req model.ChatCompletion
 		tables = append(tables, structuredTableDocument{Document: document, Tables: parsed})
 	}
 	if len(tables) == 0 {
-		return structuredDeterministicResult{}, false, nil
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
 
 	plan := buildStructuredQueryPlan(query, tables)
 	if plan.Intent == "" {
-		return structuredDeterministicResult{}, false, nil
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
 
-	content := renderStructuredQueryAnswer(query, plan, tables)
-	if strings.TrimSpace(content) == "" {
-		return structuredDeterministicResult{}, false, nil
+	result, ok := buildStructuredDataResult(query, plan, tables)
+	if !ok {
+		return StructuredDataQueryResult{}, nil, false, nil
 	}
-
-	sources := structuredDataSources(tables)
-	return structuredDeterministicResult{
-		Plan:    plan,
-		Content: content,
-		Sources: sources,
-	}, true, nil
+	return result, structuredDataSources(tables), true, nil
 }
 
 func looksLikeStructuredDataQuery(query string) bool {
@@ -343,130 +367,102 @@ func isStructuredCountQuestion(query string) bool {
 		containsAnyText(query, []string{"记录", "行", "条", "数据", "人员", "名单", "用户", "教师", "老师", "员工"})
 }
 
-func renderStructuredQueryAnswer(query string, plan structuredQueryPlan, documents []structuredTableDocument) string {
+func buildStructuredDataResult(query string, plan structuredQueryPlan, documents []structuredTableDocument) (StructuredDataQueryResult, bool) {
+	allRows := collectStructuredRows(documents, "", "")
+	result := StructuredDataQueryResult{
+		Query:       strings.TrimSpace(query),
+		Intent:      string(plan.Intent),
+		FilterField: plan.FilterField,
+		FilterValue: plan.FilterValue,
+		TargetField: plan.TargetField,
+		TotalRows:   len(allRows),
+		Columns:     allStructuredHeaders(documents),
+	}
+
 	switch plan.Intent {
 	case structuredIntentCount:
-		return renderStructuredCountAnswer(documents)
-	case structuredIntentFilter:
-		return renderStructuredFilterAnswer(plan, documents)
-	case structuredIntentMax, structuredIntentMin:
-		return renderStructuredExtremumAnswer(plan, documents)
-	case structuredIntentAverage:
-		return renderStructuredAverageAnswer(plan, documents)
-	case structuredIntentGroup:
-		return renderStructuredGroupAnswer(plan, documents)
+		result.MatchedRows = len(allRows)
+		return result, true
 	case structuredIntentPreview:
-		return renderStructuredPreviewAnswer(query, documents)
-	default:
-		return ""
-	}
-}
-
-func renderStructuredCountAnswer(documents []structuredTableDocument) string {
-	total := 0
-	for _, document := range documents {
-		for _, table := range document.Tables {
-			total += len(table.Rows)
+		limit := structuredQueryRowLimit
+		if containsAnyText(query, []string{"完整", "全部", "所有"}) {
+			limit *= 2
 		}
+		result.MatchedRows = len(allRows)
+		result.Rows, result.RowsTruncated = structuredResultRows(allRows, limit)
+		return result, true
+	case structuredIntentFilter:
+		matches := collectStructuredRows(documents, plan.FilterField, plan.FilterValue)
+		result.MatchedRows = len(matches)
+		result.Rows, result.RowsTruncated = structuredResultRows(matches, structuredQueryRowLimit)
+		return result, true
+	case structuredIntentMax, structuredIntentMin:
+		return buildStructuredExtremumResult(result, plan, allRows)
+	case structuredIntentAverage:
+		return buildStructuredAverageResult(result, plan, allRows)
+	case structuredIntentGroup:
+		return buildStructuredGroupResult(result, plan, allRows)
+	default:
+		return StructuredDataQueryResult{}, false
 	}
-	return strings.TrimSpace(fmt.Sprintf(`## 数据统计
-
-### 记录数量
-
-- **总记录数**：%d 条
-
-> 该结果由后端直接读取结构化文件行数得到。`, total))
 }
 
-func renderStructuredPreviewAnswer(query string, documents []structuredTableDocument) string {
-	limit := structuredAnswerPreviewLimit
-	if containsAnyText(query, []string{"完整", "全部", "所有"}) {
-		limit = structuredAnswerPreviewLimit * 2
-	}
-
-	matches := collectStructuredRows(documents, "", "")
-	if len(matches) == 0 {
-		return ""
-	}
-	return renderStructuredRowsAnswer("数据预览", matches, limit)
-}
-
-func renderStructuredFilterAnswer(plan structuredQueryPlan, documents []structuredTableDocument) string {
-	matches := collectStructuredRows(documents, plan.FilterField, plan.FilterValue)
-	if len(matches) == 0 {
-		return strings.TrimSpace(fmt.Sprintf(`## 筛选结果
-
-### 命中记录
-
-- **筛选条件**：%s = %s
-- **命中数量**：0 条
-
-> 当前结构化文件中没有找到符合条件的记录。`, plan.FilterField, plan.FilterValue))
-	}
-	return renderStructuredRowsAnswer(
-		fmt.Sprintf("筛选结果：%s = %s", plan.FilterField, plan.FilterValue),
-		matches,
-		structuredAnswerPreviewLimit,
-	)
-}
-
-func renderStructuredExtremumAnswer(plan structuredQueryPlan, documents []structuredTableDocument) string {
+func buildStructuredExtremumResult(result StructuredDataQueryResult, plan structuredQueryPlan, rows []structuredRowMatch) (StructuredDataQueryResult, bool) {
 	targetField := strings.TrimSpace(plan.TargetField)
 	if targetField == "" {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
 	var best *structuredRowMatch
-	var bestValue float64
-	for _, match := range collectStructuredRows(documents, "", "") {
-		index := headerIndex(match.Table.Headers, targetField)
-		if index < 0 || index >= len(match.Row.Values) {
+	bestValue := 0.0
+	sampleCount := 0
+	for _, row := range rows {
+		index := headerIndex(row.Table.Headers, targetField)
+		if index < 0 || index >= len(row.Row.Values) {
 			continue
 		}
-		value, ok := parseStructuredNumber(match.Row.Values[index])
+		value, ok := parseStructuredNumber(row.Row.Values[index])
 		if !ok {
 			continue
 		}
+		sampleCount++
 		if best == nil ||
 			(plan.Intent == structuredIntentMax && value > bestValue) ||
 			(plan.Intent == structuredIntentMin && value < bestValue) {
-			item := match
+			item := row
 			best = &item
 			bestValue = value
 		}
 	}
 	if best == nil {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
-	title := "最大值"
-	if plan.Intent == structuredIntentMin {
-		title = "最小值"
+	result.MatchedRows = 1
+	result.Rows, _ = structuredResultRows([]structuredRowMatch{*best}, 1)
+	result.Aggregate = &StructuredDataAggregate{
+		Operation:   string(plan.Intent),
+		Field:       targetField,
+		Value:       bestValue,
+		SampleCount: sampleCount,
 	}
-	return strings.TrimSpace(fmt.Sprintf(`## %s
-
-### 结果
-
-- **字段**：%s
-- **数值**：%s
-
-%s`, title, targetField, formatStructuredNumber(bestValue), markdownTable(best.Table.Headers, []util.StructuredTableRow{best.Row})))
+	return result, true
 }
 
-func renderStructuredAverageAnswer(plan structuredQueryPlan, documents []structuredTableDocument) string {
+func buildStructuredAverageResult(result StructuredDataQueryResult, plan structuredQueryPlan, rows []structuredRowMatch) (StructuredDataQueryResult, bool) {
 	targetField := strings.TrimSpace(plan.TargetField)
 	if targetField == "" {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
 	total := 0.0
 	count := 0
-	for _, match := range collectStructuredRows(documents, "", "") {
-		index := headerIndex(match.Table.Headers, targetField)
-		if index < 0 || index >= len(match.Row.Values) {
+	for _, row := range rows {
+		index := headerIndex(row.Table.Headers, targetField)
+		if index < 0 || index >= len(row.Row.Values) {
 			continue
 		}
-		value, ok := parseStructuredNumber(match.Row.Values[index])
+		value, ok := parseStructuredNumber(row.Row.Values[index])
 		if !ok {
 			continue
 		}
@@ -474,64 +470,50 @@ func renderStructuredAverageAnswer(plan structuredQueryPlan, documents []structu
 		count++
 	}
 	if count == 0 {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
-	return strings.TrimSpace(fmt.Sprintf(`## 平均值
-
-### 结果
-
-- **字段**：%s
-- **有效记录数**：%d 条
-- **平均值**：%s
-
-> 该结果由后端直接读取结构化文件并计算得到。`, targetField, count, formatStructuredNumber(total/float64(count))))
+	result.MatchedRows = count
+	result.Aggregate = &StructuredDataAggregate{
+		Operation:   string(structuredIntentAverage),
+		Field:       targetField,
+		Value:       total / float64(count),
+		SampleCount: count,
+	}
+	return result, true
 }
 
-func renderStructuredGroupAnswer(plan structuredQueryPlan, documents []structuredTableDocument) string {
+func buildStructuredGroupResult(result StructuredDataQueryResult, plan structuredQueryPlan, rows []structuredRowMatch) (StructuredDataQueryResult, bool) {
 	targetField := strings.TrimSpace(plan.TargetField)
 	if targetField == "" {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
 	counts := map[string]int{}
-	for _, match := range collectStructuredRows(documents, "", "") {
-		index := headerIndex(match.Table.Headers, targetField)
-		if index < 0 || index >= len(match.Row.Values) {
+	for _, row := range rows {
+		index := headerIndex(row.Table.Headers, targetField)
+		if index < 0 || index >= len(row.Row.Values) {
 			continue
 		}
-		value := strings.TrimSpace(match.Row.Values[index])
-		if value == "" {
-			value = "空值"
-		}
+		value := strings.TrimSpace(row.Row.Values[index])
 		counts[value]++
 	}
 	if len(counts) == 0 {
-		return ""
+		return StructuredDataQueryResult{}, false
 	}
 
-	type item struct {
-		Value string
-		Count int
-	}
-	items := make([]item, 0, len(counts))
+	result.Groups = make([]StructuredDataGroup, 0, len(counts))
 	for value, count := range counts {
-		items = append(items, item{Value: value, Count: count})
+		result.Groups = append(result.Groups, StructuredDataGroup{Value: value, Count: count})
+		result.MatchedRows += count
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Count == items[j].Count {
-			return items[i].Value < items[j].Value
+	sort.Slice(result.Groups, func(i, j int) bool {
+		if result.Groups[i].Count == result.Groups[j].Count {
+			return result.Groups[i].Value < result.Groups[j].Value
 		}
-		return items[i].Count > items[j].Count
+		return result.Groups[i].Count > result.Groups[j].Count
 	})
-
-	builder := &strings.Builder{}
-	fmt.Fprintf(builder, "## 分布统计\n\n### %s\n\n", targetField)
-	builder.WriteString("|取值|数量|\n|---|---:|\n")
-	for _, item := range items {
-		fmt.Fprintf(builder, "|%s|%d|\n", escapeMarkdownCell(item.Value), item.Count)
-	}
-	return strings.TrimSpace(builder.String())
+	return result, true
 }
 
 func collectStructuredRows(documents []structuredTableDocument, field, value string) []structuredRowMatch {
@@ -548,78 +530,42 @@ func collectStructuredRows(documents []structuredTableDocument, field, value str
 						continue
 					}
 				}
-				matches = append(matches, structuredRowMatch{Table: table, Row: row})
+				matches = append(matches, structuredRowMatch{Document: document.Document, Table: table, Row: row})
 			}
 		}
 	}
 	return matches
 }
 
-func renderStructuredRowsAnswer(title string, matches []structuredRowMatch, limit int) string {
+func structuredResultRows(matches []structuredRowMatch, limit int) ([]StructuredDataResultRow, bool) {
 	if len(matches) == 0 || limit <= 0 {
-		return ""
+		return nil, len(matches) > 0
 	}
-	if len(matches) < limit {
-		limit = len(matches)
+	truncated := len(matches) > limit
+	if truncated {
+		matches = matches[:limit]
 	}
 
-	builder := &strings.Builder{}
-	fmt.Fprintf(builder, "## %s\n\n### 命中记录\n\n", title)
-	fmt.Fprintf(builder, "- **总数**：%d 条\n", len(matches))
-	if len(matches) > limit {
-		fmt.Fprintf(builder, "- **当前展示**：前 %d 条\n", limit)
-	}
-	builder.WriteString("\n")
-
-	currentTable := matches[0].Table
-	rows := make([]util.StructuredTableRow, 0, limit)
-	for _, match := range matches[:limit] {
-		if !sameStructuredTable(currentTable, match.Table) {
-			builder.WriteString(markdownTable(currentTable.Headers, rows))
-			builder.WriteString("\n\n")
-			currentTable = match.Table
-			rows = rows[:0]
-		}
-		rows = append(rows, match.Row)
-	}
-	builder.WriteString(markdownTable(currentTable.Headers, rows))
-
-	if len(matches) > limit {
-		builder.WriteString("\n\n> 数据较多，已按当前上下文限制展示部分记录。")
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func markdownTable(headers []string, rows []util.StructuredTableRow) string {
-	builder := &strings.Builder{}
-	builder.WriteString("|")
-	for _, header := range headers {
-		builder.WriteString(escapeMarkdownCell(header))
-		builder.WriteString("|")
-	}
-	builder.WriteString("\n|")
-	for range headers {
-		builder.WriteString("---|")
-	}
-	builder.WriteString("\n")
-
-	for _, row := range rows {
-		builder.WriteString("|")
-		for index := range headers {
+	rows := make([]StructuredDataResultRow, 0, len(matches))
+	for _, match := range matches {
+		values := make(map[string]string, len(match.Table.Headers))
+		for index, header := range match.Table.Headers {
 			value := ""
-			if index < len(row.Values) {
-				value = row.Values[index]
+			if index < len(match.Row.Values) {
+				value = match.Row.Values[index]
 			}
-			builder.WriteString(escapeMarkdownCell(value))
-			builder.WriteString("|")
+			values[header] = value
 		}
-		builder.WriteString("\n")
+		rows = append(rows, StructuredDataResultRow{
+			KnowledgeBaseID: match.Document.KnowledgeBaseID,
+			DocumentID:      match.Document.ID,
+			DocumentName:    match.Document.Name,
+			Sheet:           match.Table.Sheet,
+			RowNumber:       match.Row.Number,
+			Values:          values,
+		})
 	}
-	return strings.TrimSpace(builder.String())
-}
-
-func sameStructuredTable(left, right util.StructuredTable) bool {
-	return left.FileName == right.FileName && left.Sheet == right.Sheet && strings.Join(left.Headers, "\x00") == strings.Join(right.Headers, "\x00")
+	return rows, truncated
 }
 
 func headerIndex(headers []string, field string) int {
@@ -647,23 +593,6 @@ func parseStructuredNumber(value string) (float64, bool) {
 		return 0, false
 	}
 	return parsed, true
-}
-
-func formatStructuredNumber(value float64) string {
-	if math.Abs(value-math.Round(value)) < 1e-9 {
-		return fmt.Sprintf("%.0f", value)
-	}
-	return fmt.Sprintf("%.2f", value)
-}
-
-func escapeMarkdownCell(value string) string {
-	value = strings.ReplaceAll(strings.TrimSpace(value), "|", "\\|")
-	value = strings.ReplaceAll(value, "\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	if value == "" {
-		return "-"
-	}
-	return value
 }
 
 func structuredDataSources(documents []structuredTableDocument) []map[string]string {
