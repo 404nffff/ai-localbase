@@ -6,6 +6,7 @@ import type {
   KnowledgeBase,
   MCPConfig,
 } from '../App'
+import { filterCitationMetadata } from '../components/chat/citationSources'
 
 export const API_BASE_PATH = ''
 export const AUTH_UNAUTHORIZED_EVENT = 'ai-localbase:auth-unauthorized'
@@ -516,7 +517,7 @@ export const normalizeConversation = (conversation: BackendConversation): Conver
       role: message.role,
       content: message.content,
       timestamp: message.createdAt,
-      metadata: message.metadata,
+      metadata: filterCitationMetadata(message.metadata),
     })),
 })
 

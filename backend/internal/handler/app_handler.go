@@ -684,7 +684,6 @@ func (h *AppHandler) prepareChatRequest(ctx context.Context, req model.ChatCompl
 			toolExecutions := h.toolPlanner.Execute(ctx, plannedCalls)
 			toolUseContext, toolUseSources = mcp.BuildToolUseContext(toolExecutions)
 		}
-		toolUseSources = append(retrievalToolUseSources(req, retrievalContext), toolUseSources...)
 		contextSummary, contextSources, err = h.appService.BuildChatContext(req, documentIDsFromSources(retrievalSources))
 		if err != nil {
 			return model.ChatCompletionRequest{}, nil, err
@@ -797,26 +796,6 @@ func filterRedundantRetrievalToolPlans(plans []mcp.PlannedToolCall, retrievalCon
 		filtered = append(filtered, plan)
 	}
 	return filtered
-}
-
-func retrievalToolUseSources(req model.ChatCompletionRequest, retrievalContext string) []map[string]string {
-	if strings.TrimSpace(retrievalContext) == "" {
-		return nil
-	}
-	toolName := ""
-	switch {
-	case strings.TrimSpace(req.DocumentID) != "":
-		toolName = "search_document"
-	case strings.TrimSpace(req.KnowledgeBaseID) != "":
-		toolName = "search_knowledge_base"
-	default:
-		return nil
-	}
-	return []map[string]string{{
-		"toolName":        toolName,
-		"permissionLevel": "read-only",
-		"status":          "ok",
-	}}
 }
 
 func filterOperationalChatMessages(messages []model.ChatMessage) []model.ChatMessage {
@@ -1015,14 +994,7 @@ func calibrateCitationSources(question, answer string, sources []map[string]stri
 	queryTerms := citationTerms(question)
 	scored := make([]scoredCitationSource, 0, len(sources))
 	for index, source := range sources {
-		if sourceAlwaysCitable(source) {
-			next := cloneStringMap(source)
-			next["citationConfidence"] = "high"
-			scored = append(scored, scoredCitationSource{
-				source: next,
-				score:  1000 - index,
-				index:  index,
-			})
+		if !isDocumentCitationSource(source) {
 			continue
 		}
 
@@ -1035,10 +1007,8 @@ func calibrateCitationSources(question, answer string, sources []map[string]stri
 			continue
 		}
 
-		next := cloneStringMap(source)
-		next["citationConfidence"] = citationConfidence(answerHits, queryHits, rawScore)
 		scored = append(scored, scoredCitationSource{
-			source:     next,
+			source:     cloneStringMap(source),
 			score:      score,
 			index:      index,
 			answerHits: answerHits,
@@ -1079,16 +1049,13 @@ func calibrateCitationSources(question, answer string, sources []map[string]stri
 	return out
 }
 
-func sourceAlwaysCitable(source map[string]string) bool {
-	if strings.TrimSpace(source["toolName"]) != "" {
-		return true
+func isDocumentCitationSource(source map[string]string) bool {
+	for _, key := range []string{"knowledgeBaseId", "documentId", "documentName", "chunkId", "snippet"} {
+		if strings.TrimSpace(source[key]) == "" {
+			return false
+		}
 	}
-	switch strings.TrimSpace(source["sourceType"]) {
-	case "structured-data":
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 func citationSourceText(source map[string]string) string {
@@ -1111,19 +1078,6 @@ func sourcePassesCitationGate(answerHits, queryHits int, rawScore float64, answe
 		return true
 	}
 	return false
-}
-
-func citationConfidence(answerHits, queryHits int, rawScore float64) string {
-	switch {
-	case answerHits >= 3:
-		return "high"
-	case answerHits >= 2 || (answerHits >= 1 && queryHits >= 2):
-		return "medium"
-	case rawScore >= 0.8:
-		return "medium"
-	default:
-		return "low"
-	}
 }
 
 func parseCitationRawScore(value string) float64 {

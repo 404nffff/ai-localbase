@@ -55,7 +55,7 @@ const CitationPopover: React.FC<CitationPopoverProps> = ({
           <div className="citation-field">
             <label>文档名称</label>
             <div className="citation-value">
-              {source.documentName || source.toolName || '未知来源'}
+              {source.documentName || '未知来源'}
             </div>
           </div>
 
@@ -77,17 +77,6 @@ const CitationPopover: React.FC<CitationPopoverProps> = ({
             <div className="citation-field">
               <label>相关度分数</label>
               <div className="citation-value">{Number(source.score).toFixed(4)}</div>
-            </div>
-          )}
-
-          {source.citationConfidence && (
-            <div className="citation-field">
-              <label>证据强度</label>
-              <div className="citation-value">
-                {source.citationConfidence === 'high' && '强证据'}
-                {source.citationConfidence === 'medium' && '中证据'}
-                {source.citationConfidence === 'low' && '弱证据'}
-              </div>
             </div>
           )}
 

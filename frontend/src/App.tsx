@@ -44,6 +44,7 @@ import {
   updateAppConfig,
   updateEvalDatasetItem,
 } from './services/api'
+import { filterDocumentCitationSources } from './components/chat/citationSources'
 import type {
   DocumentDetailResponse,
   EvalDatasetDetail,
@@ -78,7 +79,6 @@ export interface ChatSourceMetadata {
   snippet?: string
   sourceType?: string
   toolName?: string
-  citationConfidence?: string
 }
 
 export interface CitationNavigationTarget {
@@ -450,7 +450,8 @@ const normalizeChatMetadata = (metadata?: ChatCompletionResponse['metadata'] | C
   if (metadata.fallbackStrategy) normalized.fallbackStrategy = metadata.fallbackStrategy
   if (metadata.upstreamError) normalized.upstreamError = metadata.upstreamError
   if (metadata.sources && metadata.sources.length > 0) {
-    normalized.sources = metadata.sources
+    const sources = filterDocumentCitationSources(metadata.sources)
+    if (sources.length > 0) normalized.sources = sources
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }

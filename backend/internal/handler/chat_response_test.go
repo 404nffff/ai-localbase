@@ -56,13 +56,3 @@ func TestFilterRedundantRetrievalToolPlans(t *testing.T) {
 		t.Fatalf("expected retrieval fallback to remain without direct context, got %#v", withoutContext)
 	}
 }
-
-func TestRetrievalToolUseSourcesPreservesMetadataWithoutSecondSearch(t *testing.T) {
-	sources := retrievalToolUseSources(model.ChatCompletionRequest{KnowledgeBaseID: "kb-1"}, "retrieved evidence")
-	if len(sources) != 1 || sources[0]["toolName"] != "search_knowledge_base" {
-		t.Fatalf("unexpected retrieval tool metadata: %#v", sources)
-	}
-	if sources[0]["permissionLevel"] != "read-only" {
-		t.Fatalf("expected read-only metadata, got %#v", sources[0])
-	}
-}

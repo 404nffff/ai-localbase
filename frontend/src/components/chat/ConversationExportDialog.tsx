@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react'
 import type { Conversation } from '../../App'
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap'
+import { filterDocumentCitationSources } from './citationSources'
 
 interface ConversationExportDialogProps {
   conversation: Conversation
@@ -41,11 +42,12 @@ const generateMarkdown = (conversation: Conversation): string => {
     lines.push(message.content)
     lines.push('')
 
-    if (message.metadata?.sources && message.metadata.sources.length > 0) {
+    const sources = filterDocumentCitationSources(message.metadata?.sources)
+    if (sources.length > 0) {
       lines.push('### 引用来源')
       lines.push('')
-      message.metadata.sources.forEach((source, index) => {
-        const sourceName = source.documentName || source.toolName || '未知来源'
+      sources.forEach((source, index) => {
+        const sourceName = source.documentName || '未知来源'
         lines.push(`${index + 1}. **${sourceName}**`)
         if (source.snippet) {
           lines.push(`   > ${source.snippet}`)

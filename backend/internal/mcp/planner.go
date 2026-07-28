@@ -99,15 +99,10 @@ func BuildToolUseContext(executions []ToolUseExecution) (string, []map[string]st
 	}
 
 	sections := make([]string, 0, len(executions))
-	sources := make([]map[string]string, 0, len(executions))
+	sources := make([]map[string]string, 0)
 	for _, execution := range executions {
 		if execution.IsError {
 			sections = append(sections, fmt.Sprintf("[工具 %s 调用失败]\n原因：%s", execution.ToolName, execution.Error))
-			sources = append(sources, map[string]string{
-				"toolName":        execution.ToolName,
-				"permissionLevel": string(execution.PermissionLevel),
-				"status":          "error",
-			})
 			continue
 		}
 
@@ -118,11 +113,6 @@ func BuildToolUseContext(executions []ToolUseExecution) (string, []map[string]st
 			}
 		}
 		sections = append(sections, fmt.Sprintf("[工具 %s 输出]\n%s", execution.ToolName, strings.Join(textParts, "\n")))
-		sources = append(sources, map[string]string{
-			"toolName":        execution.ToolName,
-			"permissionLevel": string(execution.PermissionLevel),
-			"status":          "ok",
-		})
 		sources = append(sources, toolDataSources(execution)...)
 	}
 
@@ -137,7 +127,7 @@ func toolDataSources(execution ToolUseExecution) []map[string]string {
 
 	output := make([]map[string]string, 0)
 	appendSource := func(source map[string]string) {
-		if len(source) == 0 {
+		if !isDocumentToolSource(source) {
 			return
 		}
 		item := make(map[string]string, len(source)+3)
@@ -167,6 +157,15 @@ func toolDataSources(execution ToolUseExecution) []map[string]string {
 		}
 	}
 	return output
+}
+
+func isDocumentToolSource(source map[string]string) bool {
+	for _, key := range []string{"knowledgeBaseId", "documentId", "documentName", "chunkId", "snippet"} {
+		if strings.TrimSpace(source[key]) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func stringMapFromAny(input map[string]any) map[string]string {

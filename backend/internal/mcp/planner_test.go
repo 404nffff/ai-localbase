@@ -49,8 +49,11 @@ func TestBuildToolUseContextPropagatesToolSources(t *testing.T) {
 		Content:         []ToolContent{{Type: "text", Text: "命中文本"}},
 		Data: map[string]any{
 			"sources": []map[string]string{{
-				"documentId":   "doc-1",
-				"documentName": "demo.md",
+				"knowledgeBaseId": "kb-1",
+				"documentId":      "doc-1",
+				"documentName":    "demo.md",
+				"chunkId":         "chunk-1",
+				"snippet":         "命中文本",
 			}},
 		},
 	}})
@@ -58,11 +61,50 @@ func TestBuildToolUseContextPropagatesToolSources(t *testing.T) {
 	if contextText == "" {
 		t.Fatal("expected context text")
 	}
-	if len(sources) != 2 {
-		t.Fatalf("expected base tool source plus propagated document source, got %#v", sources)
+	if len(sources) != 1 {
+		t.Fatalf("expected only the propagated document source, got %#v", sources)
 	}
-	if sources[1]["documentId"] != "doc-1" || sources[1]["toolName"] != "search_document" {
-		t.Fatalf("expected propagated source metadata, got %#v", sources[1])
+	if sources[0]["documentId"] != "doc-1" || sources[0]["toolName"] != "search_document" {
+		t.Fatalf("expected propagated source metadata, got %#v", sources[0])
+	}
+}
+
+func TestBuildToolUseContextDoesNotExposeToolExecutionsAsSources(t *testing.T) {
+	_, sources := BuildToolUseContext([]ToolUseExecution{
+		{
+			ToolName:        "search_document",
+			PermissionLevel: ToolPermissionReadOnly,
+			Content:         []ToolContent{{Type: "text", Text: "没有来源元数据的结果"}},
+		},
+		{
+			ToolName:        "search_knowledge_base",
+			PermissionLevel: ToolPermissionReadOnly,
+			IsError:         true,
+			Error:           "search failed",
+		},
+	})
+
+	if len(sources) != 0 {
+		t.Fatalf("expected tool executions not to become citation sources, got %#v", sources)
+	}
+}
+
+func TestBuildToolUseContextDropsIncompleteDocumentSources(t *testing.T) {
+	_, sources := BuildToolUseContext([]ToolUseExecution{{
+		ToolName:        "search_document",
+		PermissionLevel: ToolPermissionReadOnly,
+		Data: map[string]any{
+			"sources": []map[string]string{{
+				"knowledgeBaseId": "kb-1",
+				"documentId":      "doc-1",
+				"documentName":    "demo.md",
+				"chunkId":         "chunk-1",
+			}},
+		},
+	}})
+
+	if len(sources) != 0 {
+		t.Fatalf("expected source without snippet to be dropped, got %#v", sources)
 	}
 }
 
