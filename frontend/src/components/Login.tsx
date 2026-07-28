@@ -167,32 +167,7 @@ const Login: React.FC<LoginProps> = ({ checkingConnection = false }) => {
             <span><AppIcon name="database" size={22} /></span>
             <strong>AI LocalBase</strong>
           </div>
-
-          <div className="login-brand-copy">
-            <span className="login-brand-eyebrow">本地资料工作区</span>
-            <h1>从这里进入你的知识与模型环境</h1>
-            <p>仅授权账户可以访问当前部署中的资料、模型配置与系统凭据。</p>
-          </div>
-
-          <dl className="login-runtime-facts">
-            <div>
-              <dt>部署</dt>
-              <dd>本地环境</dd>
-            </div>
-            <div>
-              <dt>会话</dt>
-              <dd>服务端管理</dd>
-            </div>
-            <div>
-              <dt>访问</dt>
-              <dd>同源凭据</dd>
-            </div>
-          </dl>
-
-          <div className="login-brand-footer">
-            <span>受保护工作区</span>
-            {APP_VERSION && <span>{APP_VERSION}</span>}
-          </div>
+          {APP_VERSION && <span className="login-brand-version">{APP_VERSION}</span>}
         </aside>
 
         <section className="login-auth-panel">
@@ -200,16 +175,13 @@ const Login: React.FC<LoginProps> = ({ checkingConnection = false }) => {
             {isCheckingAuth ? (
               <div className="login-auth-state" role="status" aria-live="polite">
                 <span className="login-auth-state-icon is-loading"><AppIcon name="database" size={22} /></span>
-                <span className="login-auth-kicker">连接本地服务</span>
-                <h2>正在检查工作区</h2>
-                <p>确认认证配置与当前会话状态。</p>
+                <h2>正在连接</h2>
                 <div className="login-auth-progress"><span /></div>
               </div>
             ) : authConnectionError ? (
               <div className="login-auth-state" role="alert">
                 <span className="login-auth-state-icon is-error"><AppIcon name="alert" size={22} /></span>
-                <span className="login-auth-kicker">连接失败</span>
-                <h2>认证服务不可用</h2>
+                <h2>暂时无法连接</h2>
                 <p>{authConnectionError}</p>
                 <button className="login-retry-btn" onClick={() => void refreshAuthBootstrap()} type="button">
                   <AppIcon name="refresh" size={16} />
@@ -219,15 +191,9 @@ const Login: React.FC<LoginProps> = ({ checkingConnection = false }) => {
             ) : (
               <>
                 <header className="login-auth-header">
-                  <span className={`login-mode-label${setupRequired ? ' is-setup' : ''}`}>
-                    {setupRequired ? '首次初始化' : '管理员登录'}
-                  </span>
+                  {setupRequired && <span className="login-mode-label is-setup">首次初始化</span>}
                   <h2>{setupRequired ? '创建管理员账户' : '欢迎回来'}</h2>
-                  <p>
-                    {setupRequired
-                      ? '完成账户初始化后进入当前工作区。'
-                      : '验证管理员账户后继续进入工作区。'}
-                  </p>
+                  {setupRequired && <p>设置管理员账户后即可进入。</p>}
                 </header>
 
                 <form className="login-form" onSubmit={handleSubmit} aria-busy={isLoading}>
@@ -413,11 +379,6 @@ const Login: React.FC<LoginProps> = ({ checkingConnection = false }) => {
                     )}
                   </button>
                 </form>
-
-                <div className="login-session-note">
-                  <AppIcon name="shield" size={15} />
-                  <span>{setupRequired ? '账户凭据仅保存在当前部署环境。' : '登录会话可在账户设置中统一撤销。'}</span>
-                </div>
               </>
             )}
           </div>
