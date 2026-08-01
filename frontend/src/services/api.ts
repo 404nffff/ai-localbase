@@ -520,17 +520,21 @@ export const parseJsonResponse = async <T>(response: Response): Promise<T | null
 }
 
 export const extractErrorMessage = async (response: Response) => {
+  const fallbackMessage = response.status === 413
+    ? '文档超过服务器允许的上传大小，请减小文件后重试'
+    : response.statusText || '请求失败'
+
   try {
     const errorBody = await parseJsonResponse<ApiErrorResponse>(response)
     if (!errorBody) {
-      return response.statusText || '请求失败'
+      return fallbackMessage
     }
     if (typeof errorBody.error === 'string') {
-      return errorBody.error || '请求失败'
+      return errorBody.error || fallbackMessage
     }
-    return errorBody.error?.message || '请求失败'
+    return errorBody.error?.message || fallbackMessage
   } catch {
-    return '请求失败'
+    return fallbackMessage
   }
 }
 

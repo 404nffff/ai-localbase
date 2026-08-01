@@ -93,6 +93,7 @@ Docker 自托管建议设置：
 - `AUTH_SETUP_TOKEN=<随机值>`：如果不使用 `AUTH_PASSWORD`，建议设置初始化保护 Token。
 - `QDRANT_BIND_ADDRESS=127.0.0.1`：默认只允许宿主机本机访问 Qdrant 端口，避免服务器部署时暴露向量库。
 - `MAX_UPLOAD_BYTES=26214400`：默认单文件上传上限为 25 MiB，可按资源情况调大。
+- `NGINX_CLIENT_MAX_BODY_SIZE=32m`：Docker 前端代理请求体上限，需要高于单文件上传上限以容纳 multipart 开销。
 
 如果 `ENABLE_AUTH=true` 且未设置 `AUTH_PASSWORD`，首次访问 Web 页面会进入初始化向导。公网部署时请优先设置 `AUTH_PASSWORD` 或 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占。
 

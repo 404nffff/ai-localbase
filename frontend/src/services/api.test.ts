@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeConversation, serializeConversation } from './api'
+import { extractErrorMessage, normalizeConversation, serializeConversation } from './api'
 import type { BackendConversation } from './api'
 
 describe('normalizeConversation', () => {
@@ -95,5 +95,31 @@ describe('normalizeConversation', () => {
       knowledgeBaseId: 'kb-school',
       documentId: 'doc-school',
     })
+  })
+})
+
+describe('extractErrorMessage', () => {
+  it('returns a readable message for an nginx 413 html response', async () => {
+    const response = new Response('<html>Request Entity Too Large</html>', {
+      status: 413,
+      statusText: 'Request Entity Too Large',
+    })
+
+    await expect(extractErrorMessage(response)).resolves.toBe(
+      '文档超过服务器允许的上传大小，请减小文件后重试',
+    )
+  })
+
+  it('preserves the backend upload limit message', async () => {
+    const response = new Response(JSON.stringify({
+      error: 'uploaded file is too large, max size is 25.0 MiB',
+    }), {
+      status: 413,
+      headers: { 'Content-Type': 'application/json' },
+    })
+
+    await expect(extractErrorMessage(response)).resolves.toBe(
+      'uploaded file is too large, max size is 25.0 MiB',
+    )
   })
 })

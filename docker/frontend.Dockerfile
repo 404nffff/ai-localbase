@@ -15,11 +15,11 @@ RUN npm run build
 
 FROM nginx:alpine
 
-WORKDIR /etc/nginx/conf.d
+ENV NGINX_CLIENT_MAX_BODY_SIZE=32m
 
-RUN rm default.conf
+RUN rm /etc/nginx/conf.d/default.conf && mkdir -p /etc/nginx/templates
 
-COPY docker/nginx.conf ./default.conf
+COPY docker/nginx.conf /etc/nginx/templates/default.conf.template
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 

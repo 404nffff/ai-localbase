@@ -81,5 +81,6 @@ services:
       - backend
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-32m}
     ports:
       - "${FRONTEND_PORT:-4173}:4173"
