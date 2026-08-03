@@ -995,6 +995,7 @@ export interface StageUploadResponse {
 
 export interface BatchIndexRequest {
   uploadIds: string[]
+  async?: boolean
 }
 
 export interface BatchIndexResult {
@@ -1012,6 +1013,21 @@ export interface BatchIndexResponse {
   failed: number
   results: BatchIndexResult[]
   duration_ms: number
+  job?: MCPJob
+}
+
+export interface MCPJob {
+  jobId: string
+  type: string
+  status: string
+  progress: number
+  summary: string
+  result?: Record<string, unknown>
+  error?: string
+  warnings?: string[]
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
 }
 
 export interface DocumentIndexStatusResponse {
@@ -1035,11 +1051,23 @@ export const batchIndexDocuments = async (
   knowledgeBaseId: string,
   uploadIds: string[],
   concurrency?: number,
+  async = false,
 ): Promise<BatchIndexResponse> => (
   requestJson<BatchIndexResponse>(
     `/api/knowledge-bases/${knowledgeBaseId}/documents/batch-index`,
-    jsonRequest({ uploadIds, concurrency }, { method: 'POST' }),
+    jsonRequest({ uploadIds, concurrency, async }, { method: 'POST' }),
   )
+)
+
+export const getJobStatus = async (jobId: string): Promise<{ job: MCPJob }> => (
+  requestJson<{ job: MCPJob }>(`/api/jobs/${encodeURIComponent(jobId)}`)
+)
+
+export const cancelJob = async (jobId: string): Promise<{ job: MCPJob }> => (
+  requestJson<{ job: MCPJob }>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
 )
 
 export const getDocumentIndexStatus = async (

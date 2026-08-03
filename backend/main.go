@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"ai-localbase/internal/config"
 	"ai-localbase/internal/handler"
@@ -24,6 +25,11 @@ func main() {
 
 	if err := os.MkdirAll(serverConfig.UploadDir, 0o755); err != nil {
 		log.Fatalf("failed to create upload directory: %v", err)
+	}
+	if strings.TrimSpace(serverConfig.StagingDir) != "" {
+		if err := os.MkdirAll(serverConfig.StagingDir, 0o755); err != nil {
+			log.Fatalf("failed to create staging directory: %v", err)
+		}
 	}
 
 	qdrantService := service.NewQdrantService(serverConfig)
@@ -47,6 +53,7 @@ func main() {
 	}()
 
 	appService := service.NewAppService(qdrantService, stateStore, chatHistoryStore, serverConfig)
+	startUploadStagingCleanup(appService)
 	authService, err := service.NewAuthService(appService, serverConfig)
 	if err != nil {
 		log.Fatalf("failed to initialize auth service: %v", err)
@@ -83,4 +90,23 @@ func validateAuthConfig(serverConfig model.ServerConfig) error {
 		return fmt.Errorf("AUTH_RESET_TOKEN and AUTH_RESET_PASSWORD must be set together")
 	}
 	return nil
+}
+
+func startUploadStagingCleanup(appService *service.AppService) {
+	if appService == nil {
+		return
+	}
+	if err := appService.CleanupUploadStaging(); err != nil {
+		log.Printf("failed to clean upload staging directory at startup: %v", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := appService.CleanupUploadStaging(); err != nil {
+				log.Printf("failed to clean upload staging directory: %v", err)
+			}
+		}
+	}()
 }

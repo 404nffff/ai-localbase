@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"mime/multipart"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -148,6 +149,10 @@ func (c *LLMContextCompressor) Compress(ctx context.Context, query string, chunk
 }
 
 func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory ChatHistoryStore, serverConfig model.ServerConfig) *AppService {
+	stagingDir := strings.TrimSpace(serverConfig.StagingDir)
+	if stagingDir == "" && strings.TrimSpace(serverConfig.UploadDir) != "" {
+		stagingDir = filepath.Join(filepath.Dir(serverConfig.UploadDir), "staging")
+	}
 	service := &AppService{
 		state:             defaultAppState(serverConfig),
 		store:             store,
@@ -155,7 +160,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		qdrant:            qdrant,
 		rag:               NewRagService(),
 		serverConfig:      serverConfig,
-		staging:           NewUploadStagingService(filepath.Join("data", "staging"), 30*time.Minute),
+		staging:           NewUploadStagingService(stagingDir, 30*time.Minute),
 		mcpDangerConfirms: map[string]mcpDangerConfirmationRecord{},
 		mcpJobs:           map[string]model.MCPJob{},
 		mcpJobCancels:     map[string]context.CancelFunc{},
@@ -508,6 +513,13 @@ func (s *AppService) StageInlineUpload(fileName string, content []byte, source s
 	return s.staging.StageBytes(fileName, content, source)
 }
 
+func (s *AppService) CleanupUploadStaging() error {
+	if s == nil || s.staging == nil {
+		return fmt.Errorf("upload staging service is not configured")
+	}
+	return s.staging.CleanupExpired()
+}
+
 func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error) {
 	if s == nil || s.staging == nil {
 		return model.Document{}, fmt.Errorf("upload staging service is not configured")
@@ -517,6 +529,10 @@ func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName st
 		return model.Document{}, err
 	}
 	resolvedKnowledgeBaseID, err := s.ResolveKnowledgeBaseID(knowledgeBaseID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	permanentPath, err := s.staging.CopyTo(staged.ID, s.serverConfig.UploadDir)
 	if err != nil {
 		return model.Document{}, err
 	}
@@ -532,15 +548,19 @@ func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName st
 		SizeLabel:       staged.SizeLabel,
 		UploadedAt:      util.NowRFC3339(),
 		Status:          "processing",
-		Path:            staged.Path,
-		ContentPreview:  util.ExtractContentPreview(staged.Path),
+		Path:            permanentPath,
+		ContentPreview:  util.ExtractContentPreview(permanentPath),
 	}
 	uploaded, err := s.IndexDocument(document)
 	if err != nil {
+		_ = os.Remove(permanentPath)
 		return model.Document{}, err
 	}
 	if err := s.staging.MarkConsumed(uploadID); err != nil {
 		log.Printf("failed to mark staged upload consumed: %v", err)
+	}
+	if err := s.staging.Delete(uploadID); err != nil {
+		log.Printf("failed to remove consumed staged upload: %v", err)
 	}
 	return uploaded, nil
 }
@@ -832,6 +852,139 @@ func sanitizeMCPDangerValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func (s *AppService) StartBatchIndexJob(knowledgeBaseID string, uploadIDs []string, concurrency int) (model.MCPJob, error) {
+	if s == nil {
+		return model.MCPJob{}, fmt.Errorf("app service is nil")
+	}
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	if knowledgeBaseID == "" {
+		return model.MCPJob{}, fmt.Errorf("knowledgeBaseId is required")
+	}
+	if _, err := s.ResolveKnowledgeBaseID(knowledgeBaseID); err != nil {
+		return model.MCPJob{}, err
+	}
+	if len(uploadIDs) == 0 {
+		return model.MCPJob{}, fmt.Errorf("uploadIds cannot be empty")
+	}
+	if concurrency <= 0 {
+		concurrency = 3
+	}
+	if concurrency > 10 {
+		concurrency = 10
+	}
+
+	ids := make([]string, 0, len(uploadIDs))
+	for _, uploadID := range uploadIDs {
+		trimmedID := strings.TrimSpace(uploadID)
+		if trimmedID != "" {
+			ids = append(ids, trimmedID)
+		}
+	}
+	if len(ids) == 0 {
+		return model.MCPJob{}, fmt.Errorf("uploadIds cannot be empty")
+	}
+
+	now := util.NowRFC3339()
+	job := model.MCPJob{
+		ID:        util.NextID("job"),
+		Type:      "batch-index",
+		Status:    "queued",
+		Progress:  0,
+		Summary:   fmt.Sprintf("准备索引 %d 个文档。", len(ids)),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s.mcpJobMu.Lock()
+	if s.mcpJobs == nil {
+		s.mcpJobs = map[string]model.MCPJob{}
+	}
+	if s.mcpJobCancels == nil {
+		s.mcpJobCancels = map[string]context.CancelFunc{}
+	}
+	s.mcpJobs[job.ID] = job
+	s.mcpJobCancels[job.ID] = cancel
+	s.pruneMCPJobsLocked()
+	s.mcpJobMu.Unlock()
+
+	go s.runBatchIndexJob(ctx, job.ID, knowledgeBaseID, ids, concurrency)
+	return job, nil
+}
+
+func (s *AppService) runBatchIndexJob(ctx context.Context, jobID, knowledgeBaseID string, uploadIDs []string, concurrency int) {
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Status = "running"
+		job.Progress = 5
+		job.Summary = fmt.Sprintf("正在索引 %d 个文档。", len(uploadIDs))
+	})
+
+	type result struct {
+		value map[string]any
+		ok    bool
+	}
+	sem := make(chan struct{}, concurrency)
+	results := make(chan result, len(uploadIDs))
+	var wg sync.WaitGroup
+	for _, uploadID := range uploadIDs {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				results <- result{value: map[string]any{"uploadId": id, "success": false, "error": "job cancelled"}}
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				document, err := s.RegisterStagedUpload(id, knowledgeBaseID, "")
+				if err != nil {
+					results <- result{value: map[string]any{"uploadId": id, "success": false, "error": err.Error()}}
+					return
+				}
+				results <- result{value: map[string]any{
+					"uploadId":   id,
+					"documentId": document.ID,
+					"fileName":   document.Name,
+					"success":    true,
+					"document":   document,
+				}, ok: true}
+			}
+		}(uploadID)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	items := make([]map[string]any, 0, len(uploadIDs))
+	successful := 0
+	for item := range results {
+		items = append(items, item.value)
+		if item.ok {
+			successful++
+		}
+		completed := len(items)
+		progress := 10 + completed*85/len(uploadIDs)
+		s.updateMCPJob(jobID, func(job *model.MCPJob) {
+			job.Progress = progress
+			job.Summary = fmt.Sprintf("已完成 %d/%d 个文档。", completed, len(uploadIDs))
+		})
+	}
+
+	failed := len(items) - successful
+	resultData := map[string]any{
+		"total": len(uploadIDs), "successful": successful, "failed": failed, "results": items,
+	}
+	if ctx.Err() != nil {
+		s.completeMCPJob(jobID, "cancelled", 0, "批量索引任务已取消。", resultData, "")
+		return
+	}
+	status := "succeeded"
+	if failed > 0 {
+		status = "failed"
+	}
+	s.completeMCPJob(jobID, status, 100, fmt.Sprintf("批量索引完成，成功 %d 个，失败 %d 个。", successful, failed), resultData, "")
 }
 
 func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (model.MCPJob, error) {

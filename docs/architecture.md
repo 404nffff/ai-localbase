@@ -87,6 +87,9 @@ ai-localbase/
 | POST | `/api/uploads` | 以 multipart 形式暂存文件，返回 `uploadId` |
 | GET | `/api/knowledge-bases/:id/documents` | 列出知识库文档 |
 | POST | `/api/knowledge-bases/:id/documents` | 直接上传文档并索引 |
+| POST | `/api/knowledge-bases/:id/documents/batch-index` | 批量索引文档；`async=true` 时返回 Job |
+| GET | `/api/jobs/:jobId` | 查询异步索引 Job |
+| POST | `/api/jobs/:jobId/cancel` | 取消异步索引 Job |
 | DELETE | `/api/knowledge-bases/:id/documents/:docId` | 删除文档（含向量点）|
 | POST | `/v1/chat/completions` | OpenAI 兼容聊天（含 RAG，非流式）|
 | POST | `/v1/chat/completions/stream` | OpenAI 兼容聊天（含 RAG，SSE 流式）|
@@ -121,7 +124,7 @@ ai-localbase/
 业务逻辑核心，协调 Qdrant、RAG、LLM 三个下游服务。负责知识库/文档 CRUD、文档索引流水线（提取→切分→嵌入→写入Qdrant）、检索管道（动态TopK→rerank→MMR→低置信度兜底）、状态持久化，并负责把 HTTP staging 上传注册为正式知识库文档。
 
 ### UploadStagingService
-上传暂存服务。负责把大文件先写入 [`data/staging/`](docs/architecture.md)，生成 `uploadId`、计算摘要、设置过期时间，并为 MCP 的 `register_staged_upload` 提供文件引用能力，从而避免将大文件内容直接塞进 MCP 会话。
+上传暂存服务。负责把大文件先写入配置的 staging 目录，生成 `uploadId`、计算摘要、设置过期时间，并为 MCP 的 `register_staged_upload` 提供文件引用能力，从而避免将大文件内容直接塞进 MCP 会话。注册成功后，文件会先复制到永久上传目录，再执行索引；staging 只保留未完成导入的临时文件，并在启动时和运行期间定时清理过期文件。
 
 ### RagService  
 纯函数式文本处理层。负责文本切分（800字符窗口/120字符重叠）、嵌入调用（OpenAI兼容 + Ollama原生，含LRU缓存 + 分批 + 失败回退）、Prompt 上下文构建。

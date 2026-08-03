@@ -142,6 +142,65 @@ func (s *UploadStagingService) Delete(uploadID string) error {
 	return nil
 }
 
+// CopyTo copies a staged upload into a permanent application data directory.
+// The staged source remains available until the caller completes indexing.
+func (s *UploadStagingService) CopyTo(uploadID, destinationDir string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("upload staging service is nil")
+	}
+	staged, err := s.Get(uploadID)
+	if err != nil {
+		return "", err
+	}
+	trimmedDestinationDir := strings.TrimSpace(destinationDir)
+	if trimmedDestinationDir == "" {
+		return "", fmt.Errorf("destination directory is required")
+	}
+	if err := os.MkdirAll(trimmedDestinationDir, 0o755); err != nil {
+		return "", fmt.Errorf("create permanent upload directory: %w", err)
+	}
+
+	fileName := util.SanitizeFilename(staged.FileName)
+	if fileName == "" {
+		fileName = "upload"
+	}
+	destination := filepath.Join(trimmedDestinationDir, fmt.Sprintf("%s_%s", util.NextID("upload"), fileName))
+	temporary, err := os.CreateTemp(trimmedDestinationDir, ".staged-copy-*")
+	if err != nil {
+		return "", fmt.Errorf("create permanent upload file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	cleanupTemporary := true
+	defer func() {
+		if cleanupTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+
+	source, err := os.Open(staged.Path)
+	if err != nil {
+		_ = temporary.Close()
+		return "", fmt.Errorf("open staged upload: %w", err)
+	}
+	_, copyErr := io.Copy(temporary, source)
+	closeSourceErr := source.Close()
+	closeTemporaryErr := temporary.Close()
+	if copyErr != nil {
+		return "", fmt.Errorf("copy staged upload: %w", copyErr)
+	}
+	if closeSourceErr != nil {
+		return "", fmt.Errorf("close staged upload: %w", closeSourceErr)
+	}
+	if closeTemporaryErr != nil {
+		return "", fmt.Errorf("close permanent upload: %w", closeTemporaryErr)
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return "", fmt.Errorf("commit permanent upload: %w", err)
+	}
+	cleanupTemporary = false
+	return destination, nil
+}
+
 func (s *UploadStagingService) CleanupExpired() error {
 	if s == nil {
 		return fmt.Errorf("upload staging service is nil")
@@ -152,6 +211,7 @@ func (s *UploadStagingService) CleanupExpired() error {
 		path string
 	}
 	items := make([]expiredItem, 0)
+	activePaths := map[string]struct{}{}
 
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -160,7 +220,9 @@ func (s *UploadStagingService) CleanupExpired() error {
 		if err != nil || !expiresAt.After(now) {
 			items = append(items, expiredItem{id: id, path: item.Path})
 			delete(s.items, id)
+			continue
 		}
+		activePaths[filepath.Clean(item.Path)] = struct{}{}
 	}
 	s.mu.Unlock()
 
@@ -170,6 +232,34 @@ func (s *UploadStagingService) CleanupExpired() error {
 		}
 		if err := os.Remove(item.path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("cleanup staged file %s: %w", item.id, err)
+		}
+	}
+
+	entries, err := os.ReadDir(s.rootDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("scan staging directory: %w", err)
+	}
+	cutoff := now.Add(-s.ttl)
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		path := filepath.Join(s.rootDir, entry.Name())
+		if _, ok := activePaths[filepath.Clean(path)]; ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect staged file %s: %w", entry.Name(), err)
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("cleanup orphaned staged file %s: %w", entry.Name(), err)
 		}
 	}
 	return nil

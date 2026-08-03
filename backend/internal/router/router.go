@@ -80,6 +80,8 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 		api.DELETE("/eval/datasets/:datasetId/items/:itemId", appHandler.DeleteEvalDatasetItem)
 		api.DELETE("/eval/datasets/:datasetId", appHandler.DeleteEvalDataset)
 		api.POST("/uploads", appHandler.StageUpload)
+		api.GET("/jobs/:jobId", appHandler.GetJobStatus)
+		api.POST("/jobs/:jobId/cancel", appHandler.CancelJob)
 		api.GET("/knowledge-bases/:id/documents", appHandler.ListDocuments)
 		api.POST("/knowledge-bases/:id/documents", appHandler.UploadToKnowledgeBase)
 		api.POST("/knowledge-bases/:id/documents/batch-index", appHandler.BatchIndexDocuments)

@@ -15,6 +15,7 @@ import (
 type BatchIndexRequest struct {
 	UploadIDs   []string `json:"uploadIds" binding:"required"`
 	Concurrency int      `json:"concurrency,omitempty"` // 并发数，默认3
+	Async       bool     `json:"async,omitempty"`
 }
 
 // IndexResult 单个文档的索引结果
@@ -29,11 +30,12 @@ type IndexResult struct {
 
 // BatchIndexResponse 批量索引响应
 type BatchIndexResponse struct {
-	Total       int           `json:"total"`
-	Successful  int           `json:"successful"`
-	Failed      int           `json:"failed"`
-	Results     []IndexResult `json:"results"`
-	DurationMs  int64         `json:"duration_ms"`
+	Total      int           `json:"total"`
+	Successful int           `json:"successful"`
+	Failed     int           `json:"failed"`
+	Results    []IndexResult `json:"results"`
+	DurationMs int64         `json:"duration_ms"`
+	Job        *model.MCPJob `json:"job,omitempty"`
 }
 
 // BatchIndexDocuments 批量索引文档
@@ -52,6 +54,15 @@ func (h *AppHandler) BatchIndexDocuments(c *gin.Context) {
 
 	if len(req.UploadIDs) == 0 {
 		writeError(c, http.StatusBadRequest, "uploadIds cannot be empty")
+		return
+	}
+	if req.Async {
+		job, err := h.appService.StartBatchIndexJob(knowledgeBaseID, req.UploadIDs, req.Concurrency)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, BatchIndexResponse{Total: len(req.UploadIDs), Job: &job})
 		return
 	}
 

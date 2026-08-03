@@ -50,6 +50,26 @@ func (h *AppHandler) Health(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) GetJobStatus(c *gin.Context) {
+	jobID := c.Param("jobId")
+	job, err := h.appService.GetMCPJobStatus(jobID)
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
+func (h *AppHandler) CancelJob(c *gin.Context) {
+	jobID := c.Param("jobId")
+	job, err := h.appService.CancelMCPJob(jobID)
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
 func (h *AppHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, h.appService.GetPublicConfig())
 }
