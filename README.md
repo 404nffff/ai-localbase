@@ -47,6 +47,7 @@ AI LocalBase 适合个人或小团队在本地环境、自托管环境中快速�
 - Ollama / OpenAI 兼容模型接入测试
 - 检索策略实验与评估
 - 作为 MCP 能力后端供 Agent 调用
+- 批量文档支持异步索引 Job，可查询进度并取消任务
 
 ---
 
@@ -113,8 +114,10 @@ Docker 自托管建议设置：
 如果不想本地编译，可直接使用预构建镜像：
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+AI_LOCALBASE_IMAGE_TAG=v1.4.3 docker compose -f docker-compose.prod.yml up -d
 ```
+
+生产 Compose 在未提供 `ENABLE_AUTH` 时默认开启认证；如果使用 `.env.example`，请在启动前确认 `ENABLE_AUTH=true`，并设置 `AUTH_PASSWORD` 或 `AUTH_SETUP_TOKEN`。后端默认只绑定宿主机本机，浏览器通过前端 `4173` 端口访问；如确需直接访问后端，再显式设置 `BACKEND_BIND_ADDRESS=0.0.0.0`。
 
 更多镜像、版本与部署细节见 [`DOCKER_DEPLOY.md`](DOCKER_DEPLOY.md)。
 

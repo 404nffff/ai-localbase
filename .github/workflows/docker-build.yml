@@ -13,7 +13,55 @@ env:
   GITHUB_OWNER: veyliss
 
 jobs:
+  quality-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Run backend tests
+        working-directory: backend
+        run: go test ./...
+
+  quality-frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend quality checks
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test
+          npm run build
+
   build-backend:
+    needs: quality-backend
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,6 +112,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-frontend:
+    needs: quality-frontend
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -114,3 +163,48 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build release notes from annotated tag
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "## ${GITHUB_REF_NAME}" > RELEASE_NOTES.md
+          fi
+          cat >> RELEASE_NOTES.md <<'EOF'
+
+          ## Docker Images
+
+          - Backend: `ghcr.io/veyliss/ai-localbase-backend:${{ github.ref_name }}`
+          - Frontend: `ghcr.io/veyliss/ai-localbase-frontend:${{ github.ref_name }}`
+
+          ## Quick Start
+
+          ```bash
+          AI_LOCALBASE_IMAGE_TAG=${{ github.ref_name }} docker compose -f docker-compose.prod.yml up -d
+          ```
+
+          更多部署说明见 [`DOCKER_DEPLOY.md`](./DOCKER_DEPLOY.md)。
+          EOF
+
+      - name: Validate release notes
+        run: scripts/check-release-notes.sh "${GITHUB_REF_NAME}" RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: RELEASE_NOTES.md

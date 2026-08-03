@@ -40,11 +40,12 @@ git clone https://github.com/veyliss/ai-localbase.git
 cd ai-localbase
 
 # 使用生产环境 docker-compose (使用 GHCR 镜像)
-docker compose -f docker-compose.prod.yml up -d
+# 请先在 .env 中确认 ENABLE_AUTH=true，并设置 AUTH_PASSWORD 或 AUTH_SETUP_TOKEN。
+AI_LOCALBASE_IMAGE_TAG=v1.4.3 docker compose -f docker-compose.prod.yml up -d
 
 # 查看应用
 # 前端: http://localhost:4173
-# 后端 API: http://localhost:8080
+# 后端 API: http://localhost:8080（默认仅绑定本机）
 ```
 
 ### 环境变量配置
@@ -69,6 +70,10 @@ docker compose -f docker-compose.prod.yml up -d
 - `ENABLE_HYBRID_SEARCH`：开启 dense + sparse 混合检索。开启前建议切换新的 `QDRANT_COLLECTION_PREFIX` 并重建索引，让 Qdrant collection 使用 named dense/sparse vectors。
 - `QDRANT_API_KEY`：Qdrant API 密钥，可选
 - `QDRANT_BIND_ADDRESS`：Qdrant 暴露端口绑定地址，默认 `127.0.0.1`，服务器部署不建议改成公网地址
+- `AI_LOCALBASE_IMAGE_TAG`：预构建镜像版本，生产环境建议使用具体 tag，例如 `v1.4.3`，不要依赖 `latest`
+- `BACKEND_BIND_ADDRESS`：后端端口绑定地址，默认 `127.0.0.1`；前端容器通过内部网络访问后端
+- `ENABLE_AUTH`：生产 Compose 在变量未提供时默认 `true`；使用 `.env.example` 时也必须显式确认其为 `true`
+- `STAGING_DIR`：上传暂存目录，默认 `/app/data/staging`，必须与应用数据卷保持一致
 - `MAX_UPLOAD_BYTES`：单文件上传大小上限，默认 `26214400`，即 25 MiB
 
 ### 验证连接
@@ -89,12 +94,12 @@ docker compose -f docker-compose.prod.yml exec backend curl http://host.docker.i
 
 GitHub Actions 工作流已配置，首次推送后会自动运行。
 
-当前维护流程已拆分为两个独立工作流：
+当前维护流程由两个工作流组成：
 
-- [`Build and Push Docker Images`](.github/workflows/docker-build.yml)：负责构建并推送 GHCR 镜像
-- [`Create GitHub Release`](.github/workflows/release.yml)：负责在推送版本标签时自动创建 GitHub Release
+- [`Quality Gates`](.github/workflows/quality.yml)：负责 PR 与主线质量检查
+- [`Build and Push Docker Images`](.github/workflows/docker-build.yml)：负责 tag 质量检查、构建 GHCR 镜像，并在镜像成功后创建 GitHub Release
 
-首次推送主分支时，通常会触发镜像构建；推送版本标签时，会同时触发镜像版本构建和 Release 创建：
+首次推送主分支时，通常会触发镜像构建；推送版本标签时，会按“质量检查 → 镜像构建 → Release 创建”顺序执行：
 
 ```bash
 # 在本地构建并测试
@@ -131,18 +136,19 @@ git push origin v1.0.0
    - `ghcr.io/veyliss/ai-localbase-frontend:1.0`
 2. 在 GitHub Releases 页面自动创建对应版本发布
 
-发布 workflow 会在构建前校验 Docker metadata 输出，确保 `v` 前缀标签、无 `v` 版本标签和 `major.minor` 标签同时存在；Release workflow 会校验发布说明中的镜像引用与当前 Git tag 一致。
+发布 workflow 会在构建前校验 Docker metadata 输出，确保 `v` 前缀标签、无 `v` 版本标签和 `major.minor` 标签同时存在；镜像构建成功后再校验发布说明中的镜像引用与当前 Git tag 一致。
 
 如果只想构建镜像、不创建 GitHub Release，请不要推送版本标签，而是直接推送到 [`main`](DOCKER_DEPLOY.md:13) 或 [`develop`](DOCKER_DEPLOY.md:14)。
 
 ### 本地测试预构建镜像
 
 ```bash
-# 拉取最新镜像
+# 拉取指定版本镜像
+export AI_LOCALBASE_IMAGE_TAG=v1.4.3
 docker compose -f docker-compose.prod.yml pull
 
-# 启动
-docker compose -f docker-compose.prod.yml up -d
+# 启动指定版本
+AI_LOCALBASE_IMAGE_TAG=v1.4.3 docker compose -f docker-compose.prod.yml up -d
 
 # 测试
 curl http://localhost:8080/health
@@ -241,8 +247,7 @@ QDRANT_VECTOR_SIZE=1024 docker compose -f docker-compose.prod.yml up -d
 
 ## 相关文件
 
-- `.github/workflows/docker-build.yml` - Docker 镜像构建与推送工作流
-- `.github/workflows/release.yml` - GitHub Release 自动创建工作流
+- `.github/workflows/docker-build.yml` - 质量检查、Docker 镜像构建与 GitHub Release 工作流
 - `docker-compose.prod.yml` - 生产环境配置（使用 GHCR 镜像）
 - `docker-compose.yml` - 开发环境配置（本地构建）
 - `docker/backend.Dockerfile` - 后端镜像定义

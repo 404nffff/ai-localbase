@@ -92,6 +92,7 @@ docker compose up --build
 |------|--------|------|
 | `PORT` | `8080` | 后端服务监听端口 |
 | `UPLOAD_DIR` | `data/uploads` | 上传文件目录 |
+| `STAGING_DIR` | `data/staging` | 上传暂存目录，生产 Docker 应位于 `/app/data` 持久化卷内 |
 | `MAX_UPLOAD_BYTES` | `26214400` | 单文件上传大小上限，默认 25 MiB |
 | `NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Docker 前端代理请求体上限，应高于单文件上传上限 |
 | `STATE_FILE` | `data/app-state.json` | 应用状态文件 |
@@ -139,6 +140,13 @@ ENABLE_AUTH=false
 ENABLE_AUTH=true
 AUTH_USERNAME=root
 AUTH_PASSWORD=your-secure-password
+```
+
+生产 Compose 默认将后端端口绑定到 `127.0.0.1`，并支持通过 `AI_LOCALBASE_IMAGE_TAG` 固定前后端镜像版本。生产环境建议使用具体版本启动：
+
+```bash
+ENABLE_AUTH=true AUTH_PASSWORD=your-secure-password AI_LOCALBASE_IMAGE_TAG=v1.4.3 \
+  docker compose -f docker-compose.prod.yml up -d
 ```
 
 首次启动时，如果设置了 `AUTH_PASSWORD`，后端会自动创建 root 用户并保存密码哈希。如果未设置 `AUTH_PASSWORD`，Web 页面会进入首次初始化向导。公网部署时建议至少设置 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占；如果两者都未设置，当前版本默认只允许本机回环地址完成首次初始化。
