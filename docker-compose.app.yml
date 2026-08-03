@@ -30,6 +30,7 @@ services:
     environment:
       PORT: ${PORT:-8080}
       UPLOAD_DIR: ${UPLOAD_DIR:-/app/data/uploads}
+      STAGING_DIR: ${STAGING_DIR:-/app/data/staging}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
       STATE_FILE: ${STATE_FILE:-/app/data/app-state.json}
       CHAT_HISTORY_FILE: ${CHAT_HISTORY_FILE:-/app/data/chat-history.db}

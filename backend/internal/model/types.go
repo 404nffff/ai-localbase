@@ -5,6 +5,7 @@ import "sync"
 type ServerConfig struct {
 	Port                           string
 	UploadDir                      string
+	StagingDir                     string
 	MaxUploadBytes                 int64
 	StateFile                      string
 	ChatHistoryFile                string

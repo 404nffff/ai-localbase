@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -9,9 +10,11 @@ import (
 )
 
 func LoadServerConfig() model.ServerConfig {
+	uploadDir := getEnv("UPLOAD_DIR", "data/uploads")
 	return model.ServerConfig{
 		Port:                           getEnv("PORT", "8080"),
-		UploadDir:                      getEnv("UPLOAD_DIR", "data/uploads"),
+		UploadDir:                      uploadDir,
+		StagingDir:                     getEnv("STAGING_DIR", filepath.Join(filepath.Dir(uploadDir), "staging")),
 		MaxUploadBytes:                 getEnvAsInt64("MAX_UPLOAD_BYTES", 25*1024*1024),
 		StateFile:                      getEnv("STATE_FILE", "data/app-state.json"),
 		ChatHistoryFile:                getEnv("CHAT_HISTORY_FILE", "data/chat-history.db"),

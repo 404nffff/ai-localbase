@@ -24,16 +24,17 @@ services:
       retries: 5
 
   backend:
-    image: ghcr.io/veyliss/ai-localbase-backend:latest
+    image: ghcr.io/veyliss/ai-localbase-backend:${AI_LOCALBASE_IMAGE_TAG:-latest}
     container_name: ai-localbase-backend
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:${PORT:-8080}"
     depends_on:
       qdrant:
         condition: service_healthy
     environment:
       - PORT=${PORT:-8080}
       - UPLOAD_DIR=${UPLOAD_DIR:-/app/data/uploads}
+      - STAGING_DIR=${STAGING_DIR:-/app/data/staging}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-26214400}
       - STATE_FILE=${STATE_FILE:-/app/data/app-state.json}
       - CHAT_HISTORY_FILE=${CHAT_HISTORY_FILE:-/app/data/chat-history.db}
@@ -44,7 +45,7 @@ services:
       - QDRANT_DISTANCE=${QDRANT_DISTANCE:-Cosine}
       - QDRANT_TIMEOUT_SECONDS=${QDRANT_TIMEOUT_SECONDS:-5}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - ENABLE_AUTH=${ENABLE_AUTH:-false}
+      - ENABLE_AUTH=${ENABLE_AUTH:-true}
       - AUTH_USERNAME=${AUTH_USERNAME:-root}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_SETUP_TOKEN=${AUTH_SETUP_TOKEN:-}
@@ -79,7 +80,7 @@ services:
       retries: 3
 
   frontend:
-    image: ghcr.io/veyliss/ai-localbase-frontend:latest
+    image: ghcr.io/veyliss/ai-localbase-frontend:${AI_LOCALBASE_IMAGE_TAG:-latest}
     container_name: ai-localbase-frontend
     ports:
       - "${FRONTEND_PORT:-4173}:4173"
