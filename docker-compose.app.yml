@@ -66,7 +66,7 @@ services:
       MCP_REQUEST_TIMEOUT_SECONDS: ${MCP_REQUEST_TIMEOUT_SECONDS:-15}
       MCP_REQUESTS_PER_MINUTE: ${MCP_REQUESTS_PER_MINUTE:-120}
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:${PORT:-8080}"
     volumes:
       - ./backend/data:/app/data
 
