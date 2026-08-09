@@ -59,6 +59,7 @@ func TestCSRFMiddlewareAllowsForwardedSameOriginSessionWrite(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/config", nil)
 	req.Host = "backend:8080"
+	req.RemoteAddr = "127.0.0.1:4173"
 	req.Header.Set("Origin", "http://localhost:4173")
 	req.Header.Set("X-Forwarded-Host", "localhost:4173")
 	req.Header.Set("X-Forwarded-Proto", "http")
@@ -70,6 +71,31 @@ func TestCSRFMiddlewareAllowsForwardedSameOriginSessionWrite(t *testing.T) {
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestCSRFMiddlewareRejectsSpoofedForwardedOriginFromUntrustedPeer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(csrfMiddleware())
+	router.POST("/api/config", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config", nil)
+	req.Host = "backend:8080"
+	req.RemoteAddr = "198.51.100.8:4567"
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set(csrfHeaderName, "csrf-token")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "sess-token"})
+	req.AddCookie(&http.Cookie{Name: auth.CSRFCookieName, Value: "csrf-token"})
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected spoofed forwarded origin to be rejected, got %d, body=%s", resp.Code, resp.Body.String())
 	}
 }
 

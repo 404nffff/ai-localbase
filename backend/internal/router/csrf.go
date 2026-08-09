@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ai-localbase/internal/auth"
+	"ai-localbase/internal/util"
 
 	"github.com/gin-gonic/gin"
 )
@@ -81,10 +82,13 @@ func sameOriginRequest(c *gin.Context) bool {
 
 func requestOrigin(c *gin.Context) string {
 	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(firstForwardedValue(c.GetHeader("X-Forwarded-Proto")), "https") {
+	if c.Request.TLS != nil || (util.IsTrustedProxyRequest(c.Request) && strings.EqualFold(firstForwardedValue(c.GetHeader("X-Forwarded-Proto")), "https")) {
 		scheme = "https"
 	}
-	host := firstForwardedValue(c.GetHeader("X-Forwarded-Host"))
+	host := ""
+	if util.IsTrustedProxyRequest(c.Request) {
+		host = firstForwardedValue(c.GetHeader("X-Forwarded-Host"))
+	}
 	if host == "" {
 		host = strings.TrimSpace(c.Request.Host)
 	}

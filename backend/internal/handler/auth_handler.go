@@ -10,6 +10,7 @@ import (
 
 	"ai-localbase/internal/auth"
 	"ai-localbase/internal/service"
+	"ai-localbase/internal/util"
 
 	"github.com/gin-gonic/gin"
 )
@@ -338,7 +339,7 @@ func requestIsHTTPS(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
+	return util.IsTrustedProxyRequest(c.Request) && strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
 }
 
 func stringValue(value any) string {

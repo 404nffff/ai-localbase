@@ -187,6 +187,15 @@ func TestAuthBootstrapAndSetupFlow(t *testing.T) {
 	}
 }
 
+func TestRequestIsHTTPSIgnoresForwardedProtoFromUntrustedPeer(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "198.51.100.8:4567"
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if requestIsHTTPS(&gin.Context{Request: request}) {
+		t.Fatal("expected untrusted forwarded proto to be ignored")
+	}
+}
+
 func TestAuthSetupRateLimitsRepeatedFailures(t *testing.T) {
 	authHandler, _ := newAuthHandlerAndServiceWithConfigForTest(t, model.ServerConfig{
 		AuthUsername:   "root",

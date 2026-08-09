@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -20,6 +21,9 @@ import (
 
 func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHandler, authHandler *handler.AuthHandler, authService *service.AuthService, serverConfig model.ServerConfig, mcpServer *mcp.Server, frontendFS fs.FS) *gin.Engine {
 	r := gin.New()
+	if err := r.SetTrustedProxies(util.DefaultTrustedProxyCIDRs()); err != nil {
+		panic(fmt.Sprintf("configure trusted proxies: %v", err))
+	}
 	r.Use(requestIDMiddleware(), accessLogMiddleware(), gin.Recovery(), corsMiddleware(serverConfig.EnableAuth))
 	if serverConfig.EnableAuth {
 		r.Use(csrfMiddleware())
