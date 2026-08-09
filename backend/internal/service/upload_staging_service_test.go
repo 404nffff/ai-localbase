@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,5 +70,41 @@ func TestUploadStagingCleanupRemovesExpiredOrphanFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
 		t.Fatalf("expected expired orphan file to be removed, got %v", err)
+	}
+}
+
+func TestUploadStagingClaimAllowsOnlyOneConcurrentConsumer(t *testing.T) {
+	staging := NewUploadStagingService(t.TempDir(), time.Hour)
+	staged, err := staging.StageBytes("guide.md", []byte("staged content"), "test")
+	if err != nil {
+		t.Fatalf("stage upload: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, claimErr := staging.Claim(staged.ID)
+			results <- claimErr
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	for err := range results {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("expected one claim success and one failure, successes=%d failures=%d", successes, failures)
+	}
+	if err := staging.Release(staged.ID); err != nil {
+		t.Fatalf("release claimed upload: %v", err)
 	}
 }

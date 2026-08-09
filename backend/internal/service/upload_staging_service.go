@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	stagedUploadStatusStaged   = "staged"
-	stagedUploadStatusConsumed = "consumed"
-	stagedUploadStatusDeleted  = "deleted"
-	defaultStagedUploadTTL     = 30 * time.Minute
+	stagedUploadStatusStaged     = "staged"
+	stagedUploadStatusProcessing = "processing"
+	stagedUploadStatusConsumed   = "consumed"
+	stagedUploadStatusDeleted    = "deleted"
+	defaultStagedUploadTTL       = 30 * time.Minute
 )
 
 type UploadStagingService struct {
@@ -72,6 +73,10 @@ func (s *UploadStagingService) StageBytes(fileName string, content []byte, sourc
 }
 
 func (s *UploadStagingService) Get(uploadID string) (model.StagedUpload, error) {
+	return s.get(uploadID, false)
+}
+
+func (s *UploadStagingService) get(uploadID string, allowProcessing bool) (model.StagedUpload, error) {
 	if s == nil {
 		return model.StagedUpload{}, fmt.Errorf("upload staging service is nil")
 	}
@@ -89,10 +94,59 @@ func (s *UploadStagingService) Get(uploadID string) (model.StagedUpload, error) 
 	if isStagedUploadExpired(item) {
 		return model.StagedUpload{}, fmt.Errorf("staged upload expired")
 	}
-	if item.Status != stagedUploadStatusStaged {
+	if item.Status != stagedUploadStatusStaged && !(allowProcessing && item.Status == stagedUploadStatusProcessing) {
 		return model.StagedUpload{}, fmt.Errorf("staged upload is not available")
 	}
 	return item, nil
+}
+
+// Claim atomically reserves a staged upload for one indexing attempt.
+func (s *UploadStagingService) Claim(uploadID string) (model.StagedUpload, error) {
+	if s == nil {
+		return model.StagedUpload{}, fmt.Errorf("staged upload service is nil")
+	}
+	trimmedID := strings.TrimSpace(uploadID)
+	if trimmedID == "" {
+		return model.StagedUpload{}, fmt.Errorf("upload id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.items[trimmedID]
+	if !ok {
+		return model.StagedUpload{}, fmt.Errorf("staged upload not found")
+	}
+	if isStagedUploadExpired(item) {
+		return model.StagedUpload{}, fmt.Errorf("staged upload expired")
+	}
+	if item.Status != stagedUploadStatusStaged {
+		return model.StagedUpload{}, fmt.Errorf("staged upload is not available")
+	}
+	item.Status = stagedUploadStatusProcessing
+	s.items[trimmedID] = item
+	return item, nil
+}
+
+func (s *UploadStagingService) Release(uploadID string) error {
+	if s == nil {
+		return fmt.Errorf("staged upload service is nil")
+	}
+	trimmedID := strings.TrimSpace(uploadID)
+	if trimmedID == "" {
+		return fmt.Errorf("upload id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.items[trimmedID]
+	if !ok {
+		return fmt.Errorf("staged upload not found")
+	}
+	if item.Status == stagedUploadStatusProcessing {
+		item.Status = stagedUploadStatusStaged
+		s.items[trimmedID] = item
+	}
+	return nil
 }
 
 func (s *UploadStagingService) MarkConsumed(uploadID string) error {
@@ -148,7 +202,7 @@ func (s *UploadStagingService) CopyTo(uploadID, destinationDir string) (string, 
 	if s == nil {
 		return "", fmt.Errorf("upload staging service is nil")
 	}
-	staged, err := s.Get(uploadID)
+	staged, err := s.get(uploadID, true)
 	if err != nil {
 		return "", err
 	}

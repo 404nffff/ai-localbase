@@ -88,7 +88,7 @@ func (h *ConfigHandler) TestChatModel(c *gin.Context) {
 	}
 
 	// 调用聊天接口
-	apiKey := h.resolveChatAPIKey(req.APIKey)
+	apiKey := h.resolveChatAPIKey(req.APIKey, req.Provider, req.BaseURL)
 	response, err := llmService.Chat(model.ChatCompletionRequest{
 		Messages: testMessages,
 		Config: model.ChatModelConfig{
@@ -147,7 +147,7 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 	defer cancel()
 
 	// 调用嵌入接口
-	apiKey := h.resolveEmbeddingAPIKey(req.APIKey)
+	apiKey := h.resolveEmbeddingAPIKey(req.APIKey, req.Provider, req.BaseURL)
 	vectors, err := ragService.EmbedTexts(ctx, model.EmbeddingModelConfig{
 		Provider: req.Provider,
 		BaseURL:  req.BaseURL,
@@ -188,7 +188,7 @@ func (h *ConfigHandler) TestEmbeddingModel(c *gin.Context) {
 	})
 }
 
-func (h *ConfigHandler) resolveChatAPIKey(candidate string) string {
+func (h *ConfigHandler) resolveChatAPIKey(candidate, provider, baseURL string) string {
 	candidate = strings.TrimSpace(candidate)
 	if candidate != "" {
 		return candidate
@@ -196,10 +196,14 @@ func (h *ConfigHandler) resolveChatAPIKey(candidate string) string {
 	if h == nil || h.appService == nil {
 		return ""
 	}
-	return strings.TrimSpace(h.appService.GetConfig().Chat.APIKey)
+	config := h.appService.GetConfig()
+	if !sameModelEndpoint(provider, baseURL, config.Chat.Provider, config.Chat.BaseURL) {
+		return ""
+	}
+	return strings.TrimSpace(config.Chat.APIKey)
 }
 
-func (h *ConfigHandler) resolveEmbeddingAPIKey(candidate string) string {
+func (h *ConfigHandler) resolveEmbeddingAPIKey(candidate, provider, baseURL string) string {
 	candidate = strings.TrimSpace(candidate)
 	if candidate != "" {
 		return candidate
@@ -207,7 +211,16 @@ func (h *ConfigHandler) resolveEmbeddingAPIKey(candidate string) string {
 	if h == nil || h.appService == nil {
 		return ""
 	}
-	return strings.TrimSpace(h.appService.GetConfig().Embedding.APIKey)
+	config := h.appService.GetConfig()
+	if !sameModelEndpoint(provider, baseURL, config.Embedding.Provider, config.Embedding.BaseURL) {
+		return ""
+	}
+	return strings.TrimSpace(config.Embedding.APIKey)
+}
+
+func sameModelEndpoint(provider, baseURL, storedProvider, storedBaseURL string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), strings.TrimSpace(storedProvider)) &&
+		strings.TrimRight(strings.TrimSpace(baseURL), "/") == strings.TrimRight(strings.TrimSpace(storedBaseURL), "/")
 }
 
 func (h *ConfigHandler) expectedEmbeddingVectorSize() int {

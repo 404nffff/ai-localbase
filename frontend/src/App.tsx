@@ -343,6 +343,13 @@ const clampNumber = (value: unknown, fallback: number, min: number, max: number)
 
 const normalizeSecretValue = (
   incomingValue: unknown,
+) => {
+  const value = typeof incomingValue === 'string' ? incomingValue : ''
+  return value
+}
+
+const normalizeSecretValueWithFallback = (
+  incomingValue: unknown,
   configured: unknown,
   fallbackValue: string,
 ) => {
@@ -369,15 +376,11 @@ const normalizeAppConfig = (config: Partial<AppConfig>, fallback: AppConfig): Ap
   const mcpConfig: Partial<MCPConfig> = config.mcp ?? {}
   const chatApiKey = normalizeSecretValue(
     chatConfig.apiKey,
-    chatConfig.apiKeyConfigured,
-    fallback.chat.apiKey,
   )
   const embeddingApiKey = normalizeSecretValue(
     embeddingConfig.apiKey,
-    embeddingConfig.apiKeyConfigured,
-    fallback.embedding.apiKey,
   )
-  const mcpToken = normalizeSecretValue(
+  const mcpToken = normalizeSecretValueWithFallback(
     mcpConfig.token,
     mcpConfig.tokenConfigured,
     fallback.mcp.token,

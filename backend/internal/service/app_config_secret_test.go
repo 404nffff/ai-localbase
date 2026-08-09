@@ -116,3 +116,41 @@ func TestUpdateConfigClearsConfiguredSecretsWhenExplicitlyRequested(t *testing.T
 		t.Fatalf("expected embedding secret to be cleared, got %+v", internal.Embedding)
 	}
 }
+
+func TestRequestConfigUsesStoredSecretOnlyForConfiguredEndpoint(t *testing.T) {
+	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	cfg := service.GetConfig()
+	cfg.Chat.APIKey = "chat-secret"
+	cfg.Embedding.APIKey = "embedding-secret"
+	if _, err := service.UpdateConfig(model.ConfigUpdateRequest(cfg)); err != nil {
+		t.Fatalf("update config with secrets: %v", err)
+	}
+
+	request := model.ChatCompletionRequest{
+		Config: model.ChatModelConfig{
+			Provider: cfg.Chat.Provider,
+			BaseURL:  cfg.Chat.BaseURL,
+			Model:    "another-chat-model",
+		},
+		Embedding: model.EmbeddingModelConfig{
+			Provider: cfg.Embedding.Provider,
+			BaseURL:  cfg.Embedding.BaseURL,
+			Model:    "another-embedding-model",
+		},
+	}
+	if got := service.resolveChatConfig(request).APIKey; got != "chat-secret" {
+		t.Fatalf("expected stored chat secret for configured endpoint, got %q", got)
+	}
+	if got := service.resolveEmbeddingConfig(request).APIKey; got != "embedding-secret" {
+		t.Fatalf("expected stored embedding secret for configured endpoint, got %q", got)
+	}
+
+	request.Config.BaseURL = "https://untrusted.example/v1"
+	request.Embedding.BaseURL = "https://untrusted.example/v1"
+	if got := service.resolveChatConfig(request).APIKey; got != "" {
+		t.Fatalf("expected no chat secret for an alternate endpoint, got %q", got)
+	}
+	if got := service.resolveEmbeddingConfig(request).APIKey; got != "" {
+		t.Fatalf("expected no embedding secret for an alternate endpoint, got %q", got)
+	}
+}

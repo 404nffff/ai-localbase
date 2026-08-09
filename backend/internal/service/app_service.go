@@ -528,16 +528,17 @@ func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName st
 	if s == nil || s.staging == nil {
 		return model.Document{}, fmt.Errorf("upload staging service is not configured")
 	}
-	staged, err := s.staging.Get(uploadID)
+	resolvedKnowledgeBaseID, err := s.ResolveKnowledgeBaseID(knowledgeBaseID)
 	if err != nil {
 		return model.Document{}, err
 	}
-	resolvedKnowledgeBaseID, err := s.ResolveKnowledgeBaseID(knowledgeBaseID)
+	staged, err := s.staging.Claim(uploadID)
 	if err != nil {
 		return model.Document{}, err
 	}
 	permanentPath, err := s.staging.CopyTo(staged.ID, s.serverConfig.UploadDir)
 	if err != nil {
+		_ = s.staging.Release(staged.ID)
 		return model.Document{}, err
 	}
 	documentName := strings.TrimSpace(fileName)
@@ -558,6 +559,7 @@ func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName st
 	uploaded, err := s.IndexDocument(document)
 	if err != nil {
 		_ = os.Remove(permanentPath)
+		_ = s.staging.Release(staged.ID)
 		return model.Document{}, err
 	}
 	if err := s.staging.MarkConsumed(uploadID); err != nil {
@@ -2642,6 +2644,12 @@ func (s *AppService) resolveEmbeddingConfig(req model.ChatCompletionRequest) mod
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	if cfg.Provider != "" && cfg.BaseURL != "" && cfg.Model != "" {
+		if cfg.APIKey == "" {
+			stored := s.currentEmbeddingConfig()
+			if sameModelEndpoint(cfg.Provider, cfg.BaseURL, stored.Provider, stored.BaseURL) {
+				cfg.APIKey = stored.APIKey
+			}
+		}
 		return cfg
 	}
 	return s.currentEmbeddingConfig()
@@ -2654,12 +2662,23 @@ func (s *AppService) resolveChatConfig(req model.ChatCompletionRequest) model.Ch
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	if cfg.Provider != "" && cfg.BaseURL != "" && cfg.Model != "" {
+		if cfg.APIKey == "" {
+			stored := s.currentChatConfig()
+			if sameModelEndpoint(cfg.Provider, cfg.BaseURL, stored.Provider, stored.BaseURL) {
+				cfg.APIKey = stored.APIKey
+			}
+		}
 		if cfg.ContextMessageLimit <= 0 {
 			cfg.ContextMessageLimit = s.currentChatConfig().ContextMessageLimit
 		}
 		return cfg
 	}
 	return s.currentChatConfig()
+}
+
+func sameModelEndpoint(provider, baseURL, storedProvider, storedBaseURL string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), strings.TrimSpace(storedProvider)) &&
+		strings.TrimRight(strings.TrimSpace(baseURL), "/") == strings.TrimRight(strings.TrimSpace(storedBaseURL), "/")
 }
 
 func (s *AppService) ContextMessageLimit() int {
