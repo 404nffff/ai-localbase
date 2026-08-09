@@ -16,6 +16,7 @@ func LoadServerConfig() model.ServerConfig {
 		UploadDir:                      uploadDir,
 		StagingDir:                     getEnv("STAGING_DIR", filepath.Join(filepath.Dir(uploadDir), "staging")),
 		MaxUploadBytes:                 getEnvAsInt64("MAX_UPLOAD_BYTES", 25*1024*1024),
+		MaxJSONBodyBytes:               getEnvAsInt64("MAX_JSON_BODY_BYTES", 4*1024*1024),
 		StateFile:                      getEnv("STATE_FILE", "data/app-state.json"),
 		ChatHistoryFile:                getEnv("CHAT_HISTORY_FILE", "data/chat-history.db"),
 		QdrantURL:                      getEnv("QDRANT_URL", "http://localhost:6333"),

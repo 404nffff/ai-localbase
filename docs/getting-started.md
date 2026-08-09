@@ -94,6 +94,7 @@ docker compose up --build
 | `UPLOAD_DIR` | `data/uploads` | 上传文件目录 |
 | `STAGING_DIR` | `data/staging` | 上传暂存目录，生产 Docker 应位于 `/app/data` 持久化卷内 |
 | `MAX_UPLOAD_BYTES` | `26214400` | 单文件上传大小上限，默认 25 MiB |
+| `MAX_JSON_BODY_BYTES` | `4194304` | 非 multipart JSON 请求体上限，默认 4 MiB |
 | `NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Docker 前端代理请求体上限，应高于单文件上传上限 |
 | `STATE_FILE` | `data/app-state.json` | 应用状态文件 |
 | `CHAT_HISTORY_FILE` | `data/chat-history.db` | 聊天记录 SQLite 文件 |

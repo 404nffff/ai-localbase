@@ -24,7 +24,7 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 	if err := r.SetTrustedProxies(util.DefaultTrustedProxyCIDRs()); err != nil {
 		panic(fmt.Sprintf("configure trusted proxies: %v", err))
 	}
-	r.Use(requestIDMiddleware(), accessLogMiddleware(), gin.Recovery(), corsMiddleware(serverConfig.EnableAuth))
+	r.Use(requestIDMiddleware(), accessLogMiddleware(), gin.Recovery(), corsMiddleware(serverConfig.EnableAuth), requestBodyLimitMiddleware(serverConfig.MaxJSONBodyBytes))
 	if serverConfig.EnableAuth {
 		r.Use(csrfMiddleware())
 	}

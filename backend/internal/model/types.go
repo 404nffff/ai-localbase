@@ -7,6 +7,7 @@ type ServerConfig struct {
 	UploadDir                      string
 	StagingDir                     string
 	MaxUploadBytes                 int64
+	MaxJSONBodyBytes               int64
 	StateFile                      string
 	ChatHistoryFile                string
 	QdrantURL                      string

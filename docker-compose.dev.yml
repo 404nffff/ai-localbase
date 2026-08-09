@@ -35,6 +35,7 @@ services:
       UPLOAD_DIR: ${UPLOAD_DIR:-/app/data/uploads}
       STAGING_DIR: ${STAGING_DIR:-/app/data/staging}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
+      MAX_JSON_BODY_BYTES: ${MAX_JSON_BODY_BYTES:-4194304}
       STATE_FILE: ${STATE_FILE:-/app/data/app-state.json}
       CHAT_HISTORY_FILE: ${CHAT_HISTORY_FILE:-/app/data/chat-history.db}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
