@@ -15,10 +15,11 @@ import (
 )
 
 type AuthHandler struct {
-	authService *service.AuthService
-	enabled     bool
-	attemptsMu  sync.Mutex
-	attempts    map[string]loginAttemptRecord
+	authService   *service.AuthService
+	enabled       bool
+	attemptsMu    sync.Mutex
+	attempts      map[string]loginAttemptRecord
+	setupAttempts map[string]loginAttemptRecord
 }
 
 type loginAttemptRecord struct {
@@ -34,9 +35,10 @@ const (
 
 func NewAuthHandler(authService *service.AuthService, enabled bool) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
-		enabled:     enabled,
-		attempts:    make(map[string]loginAttemptRecord),
+		authService:   authService,
+		enabled:       enabled,
+		attempts:      make(map[string]loginAttemptRecord),
+		setupAttempts: make(map[string]loginAttemptRecord),
 	}
 }
 
@@ -75,6 +77,13 @@ func (h *AuthHandler) Bootstrap(c *gin.Context) {
 }
 
 func (h *AuthHandler) Setup(c *gin.Context) {
+	clientKey := strings.TrimSpace(c.ClientIP())
+	if remaining := h.setupBlockRemaining(clientKey, time.Now()); remaining > 0 {
+		c.Header("Retry-After", strconv.Itoa(int(remaining.Seconds())))
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many setup attempts, please try later"})
+		return
+	}
+
 	var req SetupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -83,10 +92,18 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 
 	result, err := h.authService.SetupRoot(req.Username, req.Password, req.SetupToken, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
+		if isSetupAttemptFailure(err) {
+			if remaining := h.recordSetupFailure(clientKey, time.Now()); remaining > 0 {
+				c.Header("Retry-After", strconv.Itoa(int(remaining.Seconds())))
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many setup attempts, please try later"})
+				return
+			}
+		}
 		h.writeAuthServiceError(c, err)
 		return
 	}
 
+	h.clearSetupAttempts(clientKey)
 	writeLoginResponse(c, result)
 }
 
@@ -385,6 +402,57 @@ func (h *AuthHandler) clearLoginAttempts(clientKey string) {
 	h.attemptsMu.Lock()
 	defer h.attemptsMu.Unlock()
 	delete(h.attempts, clientKey)
+}
+
+func (h *AuthHandler) setupBlockRemaining(clientKey string, now time.Time) time.Duration {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+
+	record, ok := h.setupAttempts[clientKey]
+	if !ok {
+		return 0
+	}
+	if record.blockedUntil.After(now) {
+		return record.blockedUntil.Sub(now)
+	}
+
+	record.blockedUntil = time.Time{}
+	record.failures = recentLoginFailures(record.failures, now)
+	if len(record.failures) == 0 {
+		delete(h.setupAttempts, clientKey)
+		return 0
+	}
+
+	h.setupAttempts[clientKey] = record
+	return 0
+}
+
+func (h *AuthHandler) recordSetupFailure(clientKey string, now time.Time) time.Duration {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+
+	record := h.setupAttempts[clientKey]
+	record.failures = append(recentLoginFailures(record.failures, now), now)
+	if len(record.failures) >= maxFailedLoginAttempts {
+		record.blockedUntil = now.Add(loginBlockDuration)
+		h.setupAttempts[clientKey] = record
+		return loginBlockDuration
+	}
+
+	h.setupAttempts[clientKey] = record
+	return 0
+}
+
+func (h *AuthHandler) clearSetupAttempts(clientKey string) {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+	delete(h.setupAttempts, clientKey)
+}
+
+func isSetupAttemptFailure(err error) bool {
+	return errors.Is(err, service.ErrInvalidSetupToken) ||
+		errors.Is(err, service.ErrSetupTokenRequired) ||
+		errors.Is(err, service.ErrInvalidPassword)
 }
 
 func recentLoginFailures(failures []time.Time, now time.Time) []time.Time {

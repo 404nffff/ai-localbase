@@ -187,6 +187,38 @@ func TestAuthBootstrapAndSetupFlow(t *testing.T) {
 	}
 }
 
+func TestAuthSetupRateLimitsRepeatedFailures(t *testing.T) {
+	authHandler, _ := newAuthHandlerAndServiceWithConfigForTest(t, model.ServerConfig{
+		AuthUsername:   "root",
+		AuthSetupToken: "setup-token",
+		EnableMCP:      false,
+	})
+	router := newAuthSetupTestRouter(authHandler)
+
+	for attempt := 0; attempt < maxFailedLoginAttempts-1; attempt++ {
+		response := performAuthJSONRequest(t, router, http.MethodPost, "/api/auth/setup", map[string]string{
+			"username":   "root",
+			"password":   "setup-password",
+			"setupToken": "wrong-token",
+		})
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("expected failed setup status 403 on attempt %d, got %d, body=%s", attempt+1, response.Code, response.Body.String())
+		}
+	}
+
+	blocked := performAuthJSONRequest(t, router, http.MethodPost, "/api/auth/setup", map[string]string{
+		"username":   "root",
+		"password":   "setup-password",
+		"setupToken": "wrong-token",
+	})
+	if blocked.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected setup rate limit status 429, got %d, body=%s", blocked.Code, blocked.Body.String())
+	}
+	if blocked.Header().Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header for setup rate limit")
+	}
+}
+
 func TestLoginRateLimitBlocksFifthFailedAttempt(t *testing.T) {
 	authHandler := newAuthHandlerForTest(t, "admin", "correct-password")
 	router := newAuthTestRouter(authHandler)
