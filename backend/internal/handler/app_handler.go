@@ -16,6 +16,7 @@ import (
 	"ai-localbase/internal/model"
 	"ai-localbase/internal/service"
 	"ai-localbase/internal/util"
+	"ai-localbase/internal/version"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +38,7 @@ func NewAppHandler(serverConfig model.ServerConfig, appService *service.AppServi
 func (h *AppHandler) Root(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"name":    "AI LocalBase Backend",
-		"version": "v0.3.0",
+		"version": version.Value,
 		"status":  "running",
 	})
 }

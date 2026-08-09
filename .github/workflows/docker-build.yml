@@ -106,6 +106,8 @@ jobs:
           context: ./backend
           file: ./docker/backend.Dockerfile
           push: true
+          build-args: |
+            APP_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

@@ -145,7 +145,7 @@ AUTH_PASSWORD=your-secure-password
 生产 Compose 默认将后端端口绑定到 `127.0.0.1`，并支持通过 `AI_LOCALBASE_IMAGE_TAG` 固定前后端镜像版本。生产环境建议使用具体版本启动：
 
 ```bash
-ENABLE_AUTH=true AUTH_PASSWORD=your-secure-password AI_LOCALBASE_IMAGE_TAG=v1.4.3 \
+ENABLE_AUTH=true AUTH_PASSWORD=your-secure-password AI_LOCALBASE_IMAGE_TAG=v1.4.4 \
   docker compose -f docker-compose.prod.yml up -d
 ```
 

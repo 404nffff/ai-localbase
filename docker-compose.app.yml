@@ -23,6 +23,8 @@ services:
     build:
       context: ./backend
       dockerfile: ../docker/backend.Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: ai-localbase-backend
     restart: unless-stopped
     depends_on:

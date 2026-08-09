@@ -22,6 +22,7 @@ import (
 	"ai-localbase/internal/mcp"
 	"ai-localbase/internal/model"
 	"ai-localbase/internal/service"
+	"ai-localbase/internal/version"
 )
 
 type qdrantCollectionState struct {
@@ -390,7 +391,7 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if infoResp.Code != http.StatusOK {
 		t.Fatalf("expected info status 200, got %d, body=%s", infoResp.Code, infoResp.Body.String())
 	}
-	if !strings.Contains(infoResp.Body.String(), `"version":"0.2.0"`) {
+	if !strings.Contains(infoResp.Body.String(), fmt.Sprintf(`"version":"%s"`, version.Value)) {
 		t.Fatalf("expected mcp version in info response, got %s", infoResp.Body.String())
 	}
 
@@ -411,7 +412,7 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 	if initResp.Code != http.StatusOK {
 		t.Fatalf("expected initialize status 200, got %d, body=%s", initResp.Code, initResp.Body.String())
 	}
-	if !strings.Contains(initResp.Body.String(), `"version":"0.2.0"`) {
+	if !strings.Contains(initResp.Body.String(), fmt.Sprintf(`"version":"%s"`, version.Value)) {
 		t.Fatalf("expected mcp version in initialize response, got %s", initResp.Body.String())
 	}
 
@@ -528,7 +529,7 @@ func TestMCPToolsListAndCreateKnowledgeBase(t *testing.T) {
 		t.Fatalf("expected capabilities status 200, got %d, body=%s", capabilitiesResp.Code, capabilitiesResp.Body.String())
 	}
 	if !strings.Contains(capabilitiesResp.Body.String(), `"toolCount":30`) ||
-		!strings.Contains(capabilitiesResp.Body.String(), `"version":"0.2.0"`) ||
+		!strings.Contains(capabilitiesResp.Body.String(), fmt.Sprintf(`"version":"%s"`, version.Value)) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"permissionCounts"`) ||
 		!strings.Contains(capabilitiesResp.Body.String(), `"resultContractVersion":"1.0"`) {
 		t.Fatalf("expected mcp capability summary, got %s", capabilitiesResp.Body.String())

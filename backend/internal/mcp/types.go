@@ -1,13 +1,18 @@
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"ai-localbase/internal/version"
+)
 
 const (
 	jsonRPCVersion  = "2.0"
 	protocolVersion = "2024-11-05"
 	serverName      = "ai-localbase-mcp"
-	serverVersion   = "0.2.0"
 )
+
+var serverVersion = version.Value
 
 type JSONRPCRequest struct {
 	JSONRPC string        `json:"jsonrpc"`

@@ -6,7 +6,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o main . && \
+ARG APP_VERSION=dev
+RUN go build -ldflags "-X ai-localbase/internal/version.Value=${APP_VERSION}" -o main . && \
     go build -o migrate-qdrant-vectors ./eval/cmd/migrate_qdrant_vectors
 
 FROM alpine:latest

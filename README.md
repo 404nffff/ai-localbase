@@ -114,7 +114,7 @@ Docker 自托管建议设置：
 如果不想本地编译，可直接使用预构建镜像：
 
 ```bash
-AI_LOCALBASE_IMAGE_TAG=v1.4.3 docker compose -f docker-compose.prod.yml up -d
+AI_LOCALBASE_IMAGE_TAG=v1.4.4 docker compose -f docker-compose.prod.yml up -d
 ```
 
 生产 Compose 在未提供 `ENABLE_AUTH` 时默认开启认证；如果使用 `.env.example`，请在启动前确认 `ENABLE_AUTH=true`，并设置 `AUTH_PASSWORD` 或 `AUTH_SETUP_TOKEN`。后端默认只绑定宿主机本机，浏览器通过前端 `4173` 端口访问；如确需直接访问后端，再显式设置 `BACKEND_BIND_ADDRESS=0.0.0.0`。
@@ -196,7 +196,7 @@ docker compose -f docker-compose.dev.yml up --build
 
 当前支持：
 
-- MCP Server 版本：**0.2.0**
+- MCP Server 版本：随应用发布版本注入，开发构建显示 `dev`
 - HTTP 形式 MCP 入口
 - 工具列表发现能力
 - 只读 / 写入 / 危险工具权限分级
