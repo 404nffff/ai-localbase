@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"ai-localbase/internal/model"
 )
@@ -19,6 +20,7 @@ type persistentAppState struct {
 
 type AppStateStore struct {
 	path string
+	mu   sync.Mutex
 }
 
 func NewAppStateStore(path string) *AppStateStore {
@@ -77,6 +79,8 @@ func (s *AppStateStore) Save(state persistentAppState) error {
 	if s == nil || s.path == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create app state directory: %w", err)
 	}

@@ -66,6 +66,7 @@ type AppService struct {
 	rag               *RagService
 	serverConfig      model.ServerConfig
 	staging           *UploadStagingService
+	stateSaveMu       sync.Mutex
 	reranker          SemanticReranker
 	queryRewriter     QueryRewriter
 	semanticCache     *SemanticCache
@@ -245,6 +246,9 @@ func (s *AppService) saveState() error {
 	if s == nil || s.store == nil {
 		return nil
 	}
+
+	s.stateSaveMu.Lock()
+	defer s.stateSaveMu.Unlock()
 
 	s.state.Mu.RLock()
 	state := persistentAppState{
@@ -1739,12 +1743,15 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
+		if err := s.replaceDocumentChunks(document.KnowledgeBaseID, document.ID, nil, nil); err != nil {
+			return model.Document{}, err
+		}
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
-		return s.AddDocument(document.KnowledgeBaseID, document), nil
+		return s.AddDocument(document.KnowledgeBaseID, document)
 	}
 
 	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
@@ -1761,7 +1768,7 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
-	return s.AddDocument(document.KnowledgeBaseID, document), nil
+	return s.AddDocument(document.KnowledgeBaseID, document)
 }
 
 func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.Document, error) {
@@ -1819,13 +1826,6 @@ func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Docum
 	config := s.state.Config
 	s.state.Mu.RUnlock()
 
-	if err := s.deleteKnowledgeBaseCollection(knowledgeBaseID); err != nil {
-		return nil, err
-	}
-	if err := s.ensureKnowledgeBaseCollection(knowledgeBaseID); err != nil {
-		return nil, err
-	}
-
 	reindexed := make([]model.Document, 0, len(originalDocs))
 	for _, document := range originalDocs {
 		doc := document
@@ -1877,7 +1877,7 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 		return model.Document{}, err
 	}
 
-	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+	if err := s.replaceDocumentChunks(document.KnowledgeBaseID, document.ID, chunks, vectors); err != nil {
 		return model.Document{}, err
 	}
 
@@ -1889,16 +1889,31 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 	return document, nil
 }
 
-func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) model.Document {
+func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) (model.Document, error) {
 	s.state.Mu.Lock()
-	kb := s.state.KnowledgeBases[knowledgeBaseID]
+	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		s.state.Mu.Unlock()
+		return model.Document{}, fmt.Errorf("knowledge base not found")
+	}
 	kb.Documents = append([]model.Document{document}, kb.Documents...)
 	s.state.KnowledgeBases[knowledgeBaseID] = kb
 	s.state.Mu.Unlock()
 	if err := s.saveState(); err != nil {
-		log.Printf("failed to persist document state: %v", err)
+		s.state.Mu.Lock()
+		currentKB := s.state.KnowledgeBases[knowledgeBaseID]
+		filtered := make([]model.Document, 0, len(currentKB.Documents))
+		for _, item := range currentKB.Documents {
+			if item.ID != document.ID {
+				filtered = append(filtered, item)
+			}
+		}
+		currentKB.Documents = filtered
+		s.state.KnowledgeBases[knowledgeBaseID] = currentKB
+		s.state.Mu.Unlock()
+		return model.Document{}, err
 	}
-	return document
+	return document, nil
 }
 
 func (s *AppService) updateDocument(knowledgeBaseID string, nextDocument model.Document) error {
@@ -3085,6 +3100,45 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 	defer cancel()
 	if err := s.qdrant.UpsertPoints(ctx, knowledgeBaseID, points); err != nil {
 		return fmt.Errorf("upsert qdrant points: %w", err)
+	}
+	return nil
+}
+
+func (s *AppService) replaceDocumentChunks(knowledgeBaseID, documentID string, chunks []DocumentChunk, vectors [][]float64) error {
+	if s == nil || s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return nil
+	}
+
+	if err := s.ensureKnowledgeBaseCollection(knowledgeBaseID); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	previousPoints, err := s.qdrant.ScrollPointPayloadsByFilter(ctx, knowledgeBaseID, documentFilter(documentID))
+	if err != nil {
+		return fmt.Errorf("inspect existing qdrant points for document %s: %w", documentID, err)
+	}
+
+	if len(chunks) > 0 {
+		if err := s.upsertDocumentChunks(knowledgeBaseID, chunks, vectors); err != nil {
+			return err
+		}
+	}
+
+	currentIDs := make(map[string]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		currentIDs[fmt.Sprint(qdrantPointID(chunk.ID))] = struct{}{}
+	}
+	staleIDs := make([]any, 0)
+	for _, point := range previousPoints {
+		pointID := fmt.Sprint(point.ID)
+		if _, exists := currentIDs[pointID]; !exists {
+			staleIDs = append(staleIDs, point.ID)
+		}
+	}
+	if err := s.qdrant.DeletePointsByIDs(ctx, knowledgeBaseID, staleIDs); err != nil {
+		return fmt.Errorf("delete stale qdrant points for document %s: %w", documentID, err)
 	}
 	return nil
 }

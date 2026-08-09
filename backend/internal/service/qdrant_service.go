@@ -92,10 +92,11 @@ type qdrantQueryRequest struct {
 }
 
 type qdrantScrollRequest struct {
-	Limit       int  `json:"limit"`
-	Offset      any  `json:"offset,omitempty"`
-	WithPayload bool `json:"with_payload"`
-	WithVector  bool `json:"with_vector"`
+	Limit       int            `json:"limit"`
+	Offset      any            `json:"offset,omitempty"`
+	Filter      map[string]any `json:"filter,omitempty"`
+	WithPayload bool           `json:"with_payload"`
+	WithVector  bool           `json:"with_vector"`
 }
 
 type qdrantScrollResponse struct {
@@ -259,6 +260,10 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 }
 
 func (s *QdrantService) ScrollPointPayloads(ctx context.Context, knowledgeBaseID string) ([]QdrantStoredPoint, error) {
+	return s.ScrollPointPayloadsByFilter(ctx, knowledgeBaseID, nil)
+}
+
+func (s *QdrantService) ScrollPointPayloadsByFilter(ctx context.Context, knowledgeBaseID string, filter map[string]any) ([]QdrantStoredPoint, error) {
 	if !s.IsEnabled() {
 		return nil, nil
 	}
@@ -274,6 +279,7 @@ func (s *QdrantService) ScrollPointPayloads(ctx context.Context, knowledgeBaseID
 		responseBody, err := s.doJSON(ctx, http.MethodPost, requestPath, qdrantScrollRequest{
 			Limit:       pageSize,
 			Offset:      offset,
+			Filter:      filter,
 			WithPayload: true,
 			WithVector:  false,
 		})
@@ -300,6 +306,22 @@ func (s *QdrantService) ScrollPointPayloads(ctx context.Context, knowledgeBaseID
 	}
 
 	return nil, fmt.Errorf("qdrant scroll exceeded %d pages", maxPages)
+}
+
+func (s *QdrantService) DeletePointsByIDs(ctx context.Context, knowledgeBaseID string, ids []any) error {
+	if s == nil || !s.IsEnabled() || len(ids) == 0 {
+		return nil
+	}
+	_, err := s.doJSON(
+		ctx,
+		http.MethodPost,
+		"/collections/"+url.PathEscape(s.CollectionName(knowledgeBaseID))+"/points/delete",
+		qdrantPointDeleteRequest{Filter: map[string]any{"has_id": ids}},
+	)
+	if err != nil && isQdrantNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (s *QdrantService) DeletePointsByFilter(ctx context.Context, knowledgeBaseID string, filter map[string]any) error {

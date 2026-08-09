@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"ai-localbase/internal/model"
@@ -77,6 +78,36 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.EvalDatasets["eval-1"].Count != 1 {
 		t.Fatalf("expected persisted eval dataset, got %#v", loaded.EvalDatasets["eval-1"])
+	}
+}
+
+func TestAppStateStoreSerializesConcurrentSaves(t *testing.T) {
+	store := NewAppStateStore(filepath.Join(t.TempDir(), "app-state.json"))
+	const writers = 12
+
+	var wg sync.WaitGroup
+	for index := 0; index < writers; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			state := persistentAppState{
+				KnowledgeBases: map[string]model.KnowledgeBase{
+					"kb": {ID: "kb", Name: "writer", Documents: []model.Document{{ID: string(rune('a' + index))}}},
+				},
+			}
+			if err := store.Save(state); err != nil {
+				t.Errorf("concurrent save %d failed: %v", index, err)
+			}
+		}(index)
+	}
+	wg.Wait()
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load state after concurrent saves: %v", err)
+	}
+	if loaded == nil || len(loaded.KnowledgeBases["kb"].Documents) != 1 {
+		t.Fatalf("expected a complete final state, got %#v", loaded)
 	}
 }
 

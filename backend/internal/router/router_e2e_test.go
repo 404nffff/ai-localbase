@@ -2337,8 +2337,72 @@ func (s *qdrantTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Points []service.QdrantPoint `json:"points"`
 		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		_ = decoder.Decode(&req)
+		for _, nextPoint := range req.Points {
+			replaced := false
+			for index, existingPoint := range collection.points {
+				if fmt.Sprint(existingPoint.ID) == fmt.Sprint(nextPoint.ID) {
+					collection.points[index] = nextPoint
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				collection.points = append(collection.points, nextPoint)
+			}
+		}
+		writeJSON(http.StatusOK, map[string]any{"result": map[string]any{"status": "acknowledged"}})
+		return
+	case r.Method == http.MethodPost && len(segments) == 4 && segments[2] == "points" && segments[3] == "scroll":
+		var req struct {
+			Filter map[string]any `json:"filter"`
+			Limit  int            `json:"limit"`
+		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		collection.points = append([]service.QdrantPoint(nil), req.Points...)
+		limit := req.Limit
+		if limit <= 0 {
+			limit = len(collection.points)
+		}
+		points := make([]map[string]any, 0, limit)
+		for _, point := range collection.points {
+			if !matchesFilter(point.Payload, req.Filter) {
+				continue
+			}
+			points = append(points, map[string]any{
+				"id":      point.ID,
+				"payload": point.Payload,
+			})
+			if len(points) >= limit {
+				break
+			}
+		}
+		writeJSON(http.StatusOK, map[string]any{"result": map[string]any{
+			"points":           points,
+			"next_page_offset": nil,
+		}})
+		return
+	case r.Method == http.MethodPost && len(segments) == 4 && segments[2] == "points" && segments[3] == "delete":
+		var req struct {
+			Filter map[string]any `json:"filter"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		_ = decoder.Decode(&req)
+		if ids, ok := req.Filter["has_id"].([]any); ok {
+			allowed := make(map[string]struct{}, len(ids))
+			for _, id := range ids {
+				allowed[fmt.Sprint(id)] = struct{}{}
+			}
+			remaining := make([]service.QdrantPoint, 0, len(collection.points))
+			for _, point := range collection.points {
+				if _, remove := allowed[fmt.Sprint(point.ID)]; !remove {
+					remaining = append(remaining, point)
+				}
+			}
+			collection.points = remaining
+		}
 		writeJSON(http.StatusOK, map[string]any{"result": map[string]any{"status": "acknowledged"}})
 		return
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[2] == "points" && segments[3] == "search":
