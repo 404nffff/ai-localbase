@@ -12,7 +12,7 @@ RUN go build -ldflags "-X ai-localbase/internal/version.Value=${APP_VERSION}" -o
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates curl
 WORKDIR /root/
 
 COPY --from=builder /app/main .
