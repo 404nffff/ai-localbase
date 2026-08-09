@@ -94,7 +94,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 						"createdAt":     kb.CreatedAt,
 					})
 				}
-				return NewTextResult(fmt.Sprintf("当前共有 %d 个知识库。", len(items)), map[string]any{"items": items}), nil
+				return NewTextResult(formatKnowledgeBaseListText(knowledgeBases), map[string]any{"items": items}), nil
 			},
 		},
 		{
@@ -125,7 +125,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 						"contentPreview":  document.ContentPreview,
 					})
 				}
-				return NewTextResult(fmt.Sprintf("知识库 %s 下共有 %d 份文档。", knowledgeBaseID, len(items)), map[string]any{"items": items}), nil
+				return NewTextResult(formatDocumentListText(knowledgeBaseID, documents), map[string]any{"items": items}), nil
 			},
 		},
 		{
@@ -173,7 +173,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				return NewTextResult(fmt.Sprintf("当前共有 %d 个会话。", len(items)), map[string]any{"items": items}), nil
+				return NewTextResult(formatConversationListText(items), map[string]any{"items": items}), nil
 			},
 		},
 		{
@@ -1161,13 +1161,79 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
 				_ = ctx
 				jobs := appService.ListRecentMCPJobs(optionalIntArg(args, "limit"))
-				return NewTextResult(
-					fmt.Sprintf("最近共有 %d 个 MCP 任务。", len(jobs)),
-					map[string]any{"jobs": jobs},
-				), nil
+				return NewTextResult(formatMCPJobListText(jobs), map[string]any{"jobs": jobs}), nil
 			},
 		},
 	}
+}
+
+func formatKnowledgeBaseListText(items []model.KnowledgeBase) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "当前共有 %d 个知识库。", len(items))
+	for _, item := range items {
+		fmt.Fprintf(
+			&builder,
+			"\n- %s\n  ID: %s\n  文档: %d 篇",
+			mcpListLabel(item.Name, "未命名知识库"),
+			item.ID,
+			len(item.Documents),
+		)
+	}
+	return builder.String()
+}
+
+func formatDocumentListText(knowledgeBaseID string, items []model.Document) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "知识库 %s 下共有 %d 份文档。", knowledgeBaseID, len(items))
+	for _, item := range items {
+		fmt.Fprintf(
+			&builder,
+			"\n- %s\n  ID: %s\n  状态: %s",
+			mcpListLabel(item.Name, "未命名文档"),
+			item.ID,
+			mcpListLabel(item.Status, "未知"),
+		)
+	}
+	return builder.String()
+}
+
+func formatConversationListText(items []model.ConversationListItem) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "当前共有 %d 个会话。", len(items))
+	for _, item := range items {
+		fmt.Fprintf(
+			&builder,
+			"\n- %s\n  ID: %s\n  消息: %d 条",
+			mcpListLabel(item.Title, "未命名会话"),
+			item.ID,
+			item.MessageCount,
+		)
+	}
+	return builder.String()
+}
+
+func formatMCPJobListText(items []model.MCPJob) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "最近共有 %d 个 MCP 任务。", len(items))
+	for _, item := range items {
+		fmt.Fprintf(
+			&builder,
+			"\n- %s\n  ID: %s\n  状态: %s\n  进度: %d%%",
+			mcpListLabel(item.Summary, item.Type),
+			item.ID,
+			mcpListLabel(item.Status, "未知"),
+			item.Progress,
+		)
+	}
+	return builder.String()
+}
+
+func mcpListLabel(value, fallback string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func DefaultRegistry(appService *service.AppService) *ToolRegistry {
