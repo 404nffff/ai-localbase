@@ -18,6 +18,121 @@ type persistentAppState struct {
 	Auth           model.AuthState                         `json:"auth,omitempty"`
 }
 
+type persistedAppStateJSON struct {
+	Config         model.AppConfig                         `json:"config"`
+	KnowledgeBases map[string]persistedKnowledgeBase       `json:"knowledgeBases"`
+	EvalDatasets   map[string]model.EvalDataset            `json:"evalDatasets,omitempty"`
+	EvalRuns       map[string]model.RunEvalDatasetResponse `json:"evalRuns,omitempty"`
+	Auth           model.AuthState                         `json:"auth,omitempty"`
+}
+
+type persistedKnowledgeBase struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Documents   []persistedDocument `json:"documents"`
+	CreatedAt   string              `json:"createdAt"`
+}
+
+type persistedDocument struct {
+	ID              string `json:"id"`
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	Name            string `json:"name"`
+	Size            int64  `json:"size"`
+	SizeLabel       string `json:"sizeLabel"`
+	UploadedAt      string `json:"uploadedAt"`
+	Status          string `json:"status"`
+	Path            string `json:"path"`
+	ContentPreview  string `json:"contentPreview"`
+	ChunkCount      int    `json:"chunkCount,omitempty"`
+	IndexedAt       string `json:"indexedAt,omitempty"`
+	IndexError      string `json:"indexError,omitempty"`
+}
+
+func (s persistentAppState) MarshalJSON() ([]byte, error) {
+	knowledgeBases := make(map[string]persistedKnowledgeBase, len(s.KnowledgeBases))
+	for id, knowledgeBase := range s.KnowledgeBases {
+		documents := make([]persistedDocument, len(knowledgeBase.Documents))
+		for index, document := range knowledgeBase.Documents {
+			documents[index] = persistedDocumentFromModel(document)
+		}
+		knowledgeBases[id] = persistedKnowledgeBase{
+			ID:          knowledgeBase.ID,
+			Name:        knowledgeBase.Name,
+			Description: knowledgeBase.Description,
+			Documents:   documents,
+			CreatedAt:   knowledgeBase.CreatedAt,
+		}
+	}
+	return json.Marshal(persistedAppStateJSON{
+		Config:         s.Config,
+		KnowledgeBases: knowledgeBases,
+		EvalDatasets:   s.EvalDatasets,
+		EvalRuns:       s.EvalRuns,
+		Auth:           s.Auth,
+	})
+}
+
+func (s *persistentAppState) UnmarshalJSON(data []byte) error {
+	var raw persistedAppStateJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.Config = raw.Config
+	s.KnowledgeBases = make(map[string]model.KnowledgeBase, len(raw.KnowledgeBases))
+	for id, knowledgeBase := range raw.KnowledgeBases {
+		documents := make([]model.Document, len(knowledgeBase.Documents))
+		for index, document := range knowledgeBase.Documents {
+			documents[index] = documentToModel(document)
+		}
+		s.KnowledgeBases[id] = model.KnowledgeBase{
+			ID:          knowledgeBase.ID,
+			Name:        knowledgeBase.Name,
+			Description: knowledgeBase.Description,
+			Documents:   documents,
+			CreatedAt:   knowledgeBase.CreatedAt,
+		}
+	}
+	s.EvalDatasets = raw.EvalDatasets
+	s.EvalRuns = raw.EvalRuns
+	s.Auth = raw.Auth
+	return nil
+}
+
+func persistedDocumentFromModel(document model.Document) persistedDocument {
+	return persistedDocument{
+		ID:              document.ID,
+		KnowledgeBaseID: document.KnowledgeBaseID,
+		Name:            document.Name,
+		Size:            document.Size,
+		SizeLabel:       document.SizeLabel,
+		UploadedAt:      document.UploadedAt,
+		Status:          document.Status,
+		Path:            document.Path,
+		ContentPreview:  document.ContentPreview,
+		ChunkCount:      document.ChunkCount,
+		IndexedAt:       document.IndexedAt,
+		IndexError:      document.IndexError,
+	}
+}
+
+func documentToModel(document persistedDocument) model.Document {
+	return model.Document{
+		ID:              document.ID,
+		KnowledgeBaseID: document.KnowledgeBaseID,
+		Name:            document.Name,
+		Size:            document.Size,
+		SizeLabel:       document.SizeLabel,
+		UploadedAt:      document.UploadedAt,
+		Status:          document.Status,
+		Path:            document.Path,
+		ContentPreview:  document.ContentPreview,
+		ChunkCount:      document.ChunkCount,
+		IndexedAt:       document.IndexedAt,
+		IndexError:      document.IndexError,
+	}
+}
+
 type AppStateStore struct {
 	path string
 	mu   sync.Mutex

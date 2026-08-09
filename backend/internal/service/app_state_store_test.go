@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -36,6 +38,7 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 				Documents: []model.Document{{
 					ID:   "doc-1",
 					Name: "demo.md",
+					Path: "/srv/ai-localbase/uploads/doc-1_demo.md",
 				}},
 			},
 		},
@@ -75,6 +78,16 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	}
 	if len(loaded.KnowledgeBases["kb-1"].Documents) != 1 {
 		t.Fatalf("expected persisted documents, got %d", len(loaded.KnowledgeBases["kb-1"].Documents))
+	}
+	if got := loaded.KnowledgeBases["kb-1"].Documents[0].Path; got != "/srv/ai-localbase/uploads/doc-1_demo.md" {
+		t.Fatalf("expected persisted document path, got %q", got)
+	}
+	publicJSON, err := json.Marshal(loaded.KnowledgeBases["kb-1"].Documents[0])
+	if err != nil {
+		t.Fatalf("marshal public document: %v", err)
+	}
+	if strings.Contains(string(publicJSON), "doc-1_demo.md") {
+		t.Fatalf("document path must not be exposed in public JSON: %s", publicJSON)
 	}
 	if loaded.EvalDatasets["eval-1"].Count != 1 {
 		t.Fatalf("expected persisted eval dataset, got %#v", loaded.EvalDatasets["eval-1"])

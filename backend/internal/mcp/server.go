@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -44,8 +45,12 @@ type Server struct {
 	requestTimeout              time.Duration
 	requestsPerMin              int
 	rateMu                      sync.Mutex
-	rateWindowStart             time.Time
-	rateCount                   int
+	rateBuckets                 map[string]mcpRateBucket
+}
+
+type mcpRateBucket struct {
+	windowStart time.Time
+	count       int
 }
 
 type authContext struct {
@@ -85,6 +90,7 @@ func NewServer(registry *ToolRegistry, tokenProvider TokenProvider, apiKeyValida
 		serverConfig:                serverConfig,
 		requestTimeout:              timeout,
 		requestsPerMin:              requestsPerMin,
+		rateBuckets:                 map[string]mcpRateBucket{},
 	}
 }
 
@@ -103,7 +109,7 @@ func (s *Server) handleInfo(c *gin.Context) {
 	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
 	}
-	if !s.allowRequest(c) {
+	if !s.allowRequest(c, authCtx) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -122,7 +128,7 @@ func (s *Server) handleListTools(c *gin.Context) {
 	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
 	}
-	if !s.allowRequest(c) {
+	if !s.allowRequest(c, authCtx) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -135,7 +141,7 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !s.allowRequest(c) {
+	if !s.allowRequest(c, authCtx) {
 		return
 	}
 
@@ -381,12 +387,8 @@ func summarizeToolArgumentValue(key string, value any) any {
 	case string:
 		length := len(typed)
 		switch lowerKey {
-		case "contentbase64":
-			return map[string]any{"type": "string", "chars": length, "preview": "<base64 omitted>"}
-		case "content":
-			return map[string]any{"type": "string", "chars": length, "preview": previewLogString(typed, 120)}
 		default:
-			return map[string]any{"type": "string", "chars": length, "preview": previewLogString(typed, 80)}
+			return map[string]any{"type": "string", "chars": length, "preview": "<omitted>"}
 		}
 	case []any:
 		return map[string]any{"type": "array", "len": len(typed)}
@@ -649,27 +651,64 @@ func hasMCPScopes(grantedScopes []string, requiredScopes ...string) bool {
 	return true
 }
 
-func (s *Server) allowRequest(c *gin.Context) bool {
+func (s *Server) allowRequest(c *gin.Context, authCtx authContext) bool {
 	if s == nil || s.requestsPerMin <= 0 {
 		return true
 	}
 
 	now := time.Now()
 	windowStart := now.Truncate(time.Minute)
+	key := mcpRateKey(c, authCtx)
 
 	s.rateMu.Lock()
 	defer s.rateMu.Unlock()
 
-	if s.rateWindowStart.IsZero() || !s.rateWindowStart.Equal(windowStart) {
-		s.rateWindowStart = windowStart
-		s.rateCount = 0
+	if s.rateBuckets == nil {
+		s.rateBuckets = map[string]mcpRateBucket{}
 	}
-
-	if s.rateCount >= s.requestsPerMin {
+	for bucketKey, bucket := range s.rateBuckets {
+		if !bucket.windowStart.Equal(windowStart) {
+			delete(s.rateBuckets, bucketKey)
+		}
+	}
+	bucket := s.rateBuckets[key]
+	if bucket.windowStart.IsZero() || !bucket.windowStart.Equal(windowStart) {
+		bucket = mcpRateBucket{windowStart: windowStart}
+	}
+	if bucket.count >= s.requestsPerMin {
+		retryAfter := maxInt(1, int(time.Until(windowStart.Add(time.Minute)).Seconds()))
+		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "mcp rate limit exceeded"})
 		return false
 	}
 
-	s.rateCount += 1
+	bucket.count++
+	s.rateBuckets[key] = bucket
 	return true
+}
+
+func mcpRateKey(c *gin.Context, authCtx authContext) string {
+	if apiKeyID := strings.TrimSpace(authCtx.Principal.APIKeyID); apiKeyID != "" {
+		return "api-key:" + apiKeyID
+	}
+	if userID := strings.TrimSpace(authCtx.Principal.UserID); userID != "" {
+		return "user:" + userID
+	}
+	if c != nil && c.Request != nil {
+		remote := strings.TrimSpace(c.Request.RemoteAddr)
+		if host, _, err := net.SplitHostPort(remote); err == nil {
+			remote = host
+		}
+		if remote != "" {
+			return "remote:" + remote
+		}
+	}
+	return "remote:unknown"
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }

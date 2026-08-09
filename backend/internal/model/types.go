@@ -218,7 +218,7 @@ type Document struct {
 	SizeLabel       string `json:"sizeLabel"`
 	UploadedAt      string `json:"uploadedAt"`
 	Status          string `json:"status"`
-	Path            string `json:"path"`
+	Path            string `json:"-"`
 	ContentPreview  string `json:"contentPreview"`
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
@@ -303,7 +303,7 @@ type UploadResponse struct {
 type StagedUpload struct {
 	ID         string `json:"id"`
 	FileName   string `json:"fileName"`
-	Path       string `json:"path"`
+	Path       string `json:"-"`
 	Size       int64  `json:"size"`
 	SizeLabel  string `json:"sizeLabel"`
 	SHA256     string `json:"sha256"`
