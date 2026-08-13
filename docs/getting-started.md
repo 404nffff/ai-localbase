@@ -151,6 +151,8 @@ ENABLE_AUTH=true AUTH_PASSWORD=your-secure-password AI_LOCALBASE_IMAGE_TAG=v1.4.
   docker compose -f docker-compose.prod.yml up -d
 ```
 
+生产 Compose 默认使用已发布的固定镜像 `v1.4.4`；需要升级或回滚时显式设置 `AI_LOCALBASE_IMAGE_TAG`。本地源码修改请使用开发或本地构建编排验证。应用层按单实例运行，SQLite 聊天记录、应用状态文件和内存中的 MCP Job 不支持多个后端副本共享写入，请勿扩展 `backend` 副本数。
+
 首次启动时，如果设置了 `AUTH_PASSWORD`，后端会自动创建 root 用户并保存密码哈希。如果未设置 `AUTH_PASSWORD`，Web 页面会进入首次初始化向导。公网部署时建议至少设置 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占；如果两者都未设置，当前版本默认只允许本机回环地址完成首次初始化。
 
 更多认证接口、API Key 和密码重置说明见 [`docs/AUTH.md`](./AUTH.md)。

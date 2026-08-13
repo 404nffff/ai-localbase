@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"ai-localbase/internal/config"
@@ -17,18 +21,24 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	serverConfig := config.LoadServerConfig()
 
 	if err := validateAuthConfig(serverConfig); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("invalid authentication configuration: %w", err)
 	}
 
 	if err := os.MkdirAll(serverConfig.UploadDir, 0o755); err != nil {
-		log.Fatalf("failed to create upload directory: %v", err)
+		return fmt.Errorf("failed to create upload directory: %w", err)
 	}
 	if strings.TrimSpace(serverConfig.StagingDir) != "" {
 		if err := os.MkdirAll(serverConfig.StagingDir, 0o755); err != nil {
-			log.Fatalf("failed to create staging directory: %v", err)
+			return fmt.Errorf("failed to create staging directory: %w", err)
 		}
 	}
 
@@ -44,7 +54,7 @@ func main() {
 	stateStore := service.NewAppStateStore(serverConfig.StateFile)
 	chatHistoryStore, err := service.NewSQLiteChatHistoryStore(serverConfig.ChatHistoryFile)
 	if err != nil {
-		log.Fatalf("failed to initialize sqlite chat history store: %v", err)
+		return fmt.Errorf("failed to initialize sqlite chat history store: %w", err)
 	}
 	defer func() {
 		if closeErr := chatHistoryStore.Close(); closeErr != nil {
@@ -53,10 +63,11 @@ func main() {
 	}()
 
 	appService := service.NewAppService(qdrantService, stateStore, chatHistoryStore, serverConfig)
-	startUploadStagingCleanup(appService)
+	stopUploadStagingCleanup := startUploadStagingCleanup(appService)
+	defer stopUploadStagingCleanup()
 	authService, err := service.NewAuthService(appService, serverConfig)
 	if err != nil {
-		log.Fatalf("failed to initialize auth service: %v", err)
+		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
 	if serverConfig.EnableAuth {
 		bootstrap := authService.Bootstrap()
@@ -74,10 +85,44 @@ func main() {
 	mcpServer := mcp.NewServer(mcpRegistry, appService, authService, serverConfig)
 	r := router.NewRouter(appHandler, configHandler, authHandler, authService, serverConfig, mcpServer, frontendFS())
 
-	log.Printf("backend server listening on :%s", serverConfig.Port)
-	if err := r.Run(":" + serverConfig.Port); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+	server := &http.Server{
+		Addr:              ":" + serverConfig.Port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("backend server listening on :%s", serverConfig.Port)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var listenErr error
+	select {
+	case err := <-serverErr:
+		listenErr = err
+	case sig := <-signals:
+		log.Printf("received %s, shutting down", sig)
+	}
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("failed to gracefully shut down HTTP server: %v", err)
+	}
+	if err := appService.ShutdownJobs(shutdownCtx); err != nil {
+		log.Printf("failed to gracefully shut down MCP jobs: %v", err)
+	}
+	if listenErr != nil {
+		return fmt.Errorf("failed to start server: %w", listenErr)
+	}
+	return nil
 }
 
 func validateAuthConfig(serverConfig model.ServerConfig) error {
@@ -98,21 +143,38 @@ func validateAuthConfig(serverConfig model.ServerConfig) error {
 	return nil
 }
 
-func startUploadStagingCleanup(appService *service.AppService) {
+func startUploadStagingCleanup(appService *service.AppService) func() {
 	if appService == nil {
-		return
+		return func() {}
 	}
 	if err := appService.CleanupUploadStaging(); err != nil {
 		log.Printf("failed to clean upload staging directory at startup: %v", err)
 	}
 
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := appService.CleanupUploadStaging(); err != nil {
-				log.Printf("failed to clean upload staging directory: %v", err)
+		for {
+			select {
+			case <-ticker.C:
+				if err := appService.CleanupUploadStaging(); err != nil {
+					log.Printf("failed to clean upload staging directory: %v", err)
+				}
+			case <-stop:
+				return
 			}
 		}
 	}()
+
+	return func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+		<-done
+	}
 }

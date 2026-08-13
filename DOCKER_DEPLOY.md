@@ -71,6 +71,7 @@ docker compose -f docker-compose.prod.yml up -d
 - `QDRANT_API_KEY`：Qdrant API 密钥，可选
 - `QDRANT_BIND_ADDRESS`：Qdrant 暴露端口绑定地址，默认 `127.0.0.1`；改为非回环地址时必须同时设置 `QDRANT_API_KEY`，否则容器拒绝启动
 - `AI_LOCALBASE_IMAGE_TAG`：预构建镜像版本，生产环境建议使用具体 tag，例如 `v1.4.4`，不要依赖 `latest`
+- 生产 Compose 默认使用已发布的固定 `v1.4.4` 镜像；升级或回滚时通过 `AI_LOCALBASE_IMAGE_TAG` 显式切换。本地源码修改请使用开发或本地构建编排验证。
 - `BACKEND_BIND_ADDRESS`：后端端口绑定地址，默认 `127.0.0.1`；前端容器通过内部网络访问后端
 - `TRUST_EXTERNAL_PROXY_HEADERS`：是否信任外层代理的 `X-Forwarded-Proto` / `X-Forwarded-Host`，默认 `false`；只有前端端口不直接暴露且前置代理受控时才设为 `true`
 - `ENABLE_AUTH`：生产 Compose 在变量未提供时默认 `true`；使用 `.env.example` 时也必须显式确认其为 `true`
@@ -82,6 +83,8 @@ docker compose -f docker-compose.prod.yml up -d
 - `BACKEND_MEMORY_LIMIT` / `BACKEND_CPU_LIMIT`：后端容器资源上限，默认 `1g` / `2.0`
 - `FRONTEND_MEMORY_LIMIT` / `FRONTEND_CPU_LIMIT`：前端容器资源上限，默认 `256m` / `1.0`
 - 后端业务进程以固定 UID `10001` 的非 root 用户运行。首次启动时会将 `/app/data` 的现有文件权限迁移到该用户，并写入权限迁移标记，以兼容升级前由 root 创建的数据目录且避免每次重启重复扫描。
+
+应用层按单实例运行。SQLite 聊天记录、应用状态文件和内存中的 MCP Job 不支持多个后端副本共享写入，请勿使用 `docker compose scale backend=2`；如未来需要水平扩展，应先替换为共享状态存储和持久化 Job 队列。
 
 ### 验证连接
 

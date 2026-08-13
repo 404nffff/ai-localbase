@@ -26,6 +26,21 @@ type SQLiteChatHistoryStore struct {
 	db *sql.DB
 }
 
+const sqliteBusyTimeoutMilliseconds = 5000
+
+func sqliteDSN(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return fmt.Sprintf(
+		"%s%s_pragma=busy_timeout%%3d%d&_pragma=foreign_keys%%3dON&_pragma=journal_mode%%3dWAL",
+		path,
+		separator,
+		sqliteBusyTimeoutMilliseconds,
+	)
+}
+
 func NewSQLiteChatHistoryStore(path string) (*SQLiteChatHistoryStore, error) {
 	trimmedPath := strings.TrimSpace(path)
 	if trimmedPath == "" {
@@ -36,10 +51,12 @@ func NewSQLiteChatHistoryStore(path string) (*SQLiteChatHistoryStore, error) {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", trimmedPath)
+	db, err := sql.Open("sqlite", sqliteDSN(trimmedPath))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	store := &SQLiteChatHistoryStore{db: db}
 	if err := store.init(); err != nil {

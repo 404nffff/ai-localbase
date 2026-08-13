@@ -17,6 +17,7 @@
 - `STATE_FILE`：默认本地为 `data/app-state.json`，Docker 中通常是 `/app/data/app-state.json`。
 - `CHAT_HISTORY_FILE`：默认本地为 `data/chat-history.db`，Docker 中通常是 `/app/data/chat-history.db`。
 - `UPLOAD_DIR`：默认本地为 `data/uploads`，Docker 中通常是 `/app/data/uploads`。
+- `STAGING_DIR`：上传暂存目录，通常不需要长期备份；如果停机前存在未完成导入，可一并保留，恢复后由暂存清理流程处理。
 - Docker 默认挂载：`./backend/data:/app/data`，因此通常需要备份项目根目录下的 `backend/data`。
 
 ### Qdrant 数据
@@ -73,7 +74,7 @@ docker compose up -d backend frontend
 
 - `.env` 不应提交到仓库；真实密码、Token、API Key 应放在服务器环境或密码管理器里。
 - `STATE_FILE` 会保存认证用户、session、API Key 哈希和知识库状态。API Key 明文只会在创建时展示一次，备份不会恢复明文 Token。
-- `CHAT_HISTORY_FILE` 是 SQLite 文件，备份时最好暂停写入。
+- `CHAT_HISTORY_FILE` 是 SQLite 文件，必须先停止后端再备份；如果旁边存在同名的 `-wal` 或 `-shm` 文件，应与主数据库一起处理，不能只复制主数据库文件后继续使用旧的 WAL 文件。
 - `UPLOAD_DIR` 存放用户上传原始文件，可能包含敏感内容。
 - Qdrant 数据包含文档向量和 payload，迁移时应按同等敏感级别处理。
 

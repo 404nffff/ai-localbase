@@ -77,3 +77,32 @@ func TestSQLiteChatHistoryStoreMigratesConversationScopeVersion(t *testing.T) {
 		t.Fatalf("expected scope version %d, got %#v", conversationScopeVersion, scoped)
 	}
 }
+
+func TestSQLiteChatHistoryStoreUsesReliablePragmas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat-history.db")
+	store, err := NewSQLiteChatHistoryStore(path)
+	if err != nil {
+		t.Fatalf("create chat history store: %v", err)
+	}
+	defer store.Close()
+
+	var journalMode string
+	if err := store.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("read journal mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("expected WAL journal mode, got %q", journalMode)
+	}
+
+	var busyTimeout int
+	if err := store.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("read busy timeout: %v", err)
+	}
+	if busyTimeout != sqliteBusyTimeoutMilliseconds {
+		t.Fatalf("expected busy timeout %d, got %d", sqliteBusyTimeoutMilliseconds, busyTimeout)
+	}
+
+	if got := store.db.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("expected one SQLite connection, got %d", got)
+	}
+}

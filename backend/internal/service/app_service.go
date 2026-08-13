@@ -76,6 +76,9 @@ type AppService struct {
 	mcpJobMu          sync.Mutex
 	mcpJobs           map[string]model.MCPJob
 	mcpJobCancels     map[string]context.CancelFunc
+	mcpJobLifecycleMu sync.Mutex
+	mcpJobWG          sync.WaitGroup
+	mcpJobsShutdown   bool
 }
 
 type mcpDangerConfirmationRecord struct {
@@ -904,19 +907,15 @@ func (s *AppService) StartBatchIndexJob(knowledgeBaseID string, uploadIDs []stri
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	s.mcpJobMu.Lock()
-	if s.mcpJobs == nil {
-		s.mcpJobs = map[string]model.MCPJob{}
+	if !s.registerMCPJob(job, cancel) {
+		cancel()
+		return model.MCPJob{}, fmt.Errorf("mcp jobs are shutting down")
 	}
-	if s.mcpJobCancels == nil {
-		s.mcpJobCancels = map[string]context.CancelFunc{}
-	}
-	s.mcpJobs[job.ID] = job
-	s.mcpJobCancels[job.ID] = cancel
-	s.pruneMCPJobsLocked()
-	s.mcpJobMu.Unlock()
 
-	go s.runBatchIndexJob(ctx, job.ID, knowledgeBaseID, ids, concurrency)
+	go func() {
+		defer s.mcpJobWG.Done()
+		s.runBatchIndexJob(ctx, job.ID, knowledgeBaseID, ids, concurrency)
+	}()
 	return job, nil
 }
 
@@ -1021,7 +1020,35 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
+	if !s.registerMCPJob(job, cancel) {
+		cancel()
+		return model.MCPJob{}, fmt.Errorf("mcp jobs are shutting down")
+	}
+
+	go func() {
+		defer s.mcpJobWG.Done()
+		s.runMCPImportJob(ctx, job.ID, model.MCPStartImportJobRequest{
+			KnowledgeBaseID: knowledgeBaseID,
+			FileName:        fileName,
+			Content:         req.Content,
+		})
+	}()
+
+	return job, nil
+}
+
+func (s *AppService) registerMCPJob(job model.MCPJob, cancel context.CancelFunc) bool {
+	if s == nil {
+		return false
+	}
+	s.mcpJobLifecycleMu.Lock()
+	defer s.mcpJobLifecycleMu.Unlock()
+	if s.mcpJobsShutdown {
+		return false
+	}
+
 	s.mcpJobMu.Lock()
+	defer s.mcpJobMu.Unlock()
 	if s.mcpJobs == nil {
 		s.mcpJobs = map[string]model.MCPJob{}
 	}
@@ -1031,15 +1058,45 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 	s.mcpJobs[job.ID] = job
 	s.mcpJobCancels[job.ID] = cancel
 	s.pruneMCPJobsLocked()
+	s.mcpJobWG.Add(1)
+	return true
+}
+
+// ShutdownJobs cancels all in-memory MCP jobs and waits for their workers to exit.
+func (s *AppService) ShutdownJobs(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mcpJobLifecycleMu.Lock()
+	s.mcpJobsShutdown = true
+	s.mcpJobLifecycleMu.Unlock()
+
+	s.mcpJobMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.mcpJobCancels))
+	for _, cancel := range s.mcpJobCancels {
+		if cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+	}
 	s.mcpJobMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 
-	go s.runMCPImportJob(ctx, job.ID, model.MCPStartImportJobRequest{
-		KnowledgeBaseID: knowledgeBaseID,
-		FileName:        fileName,
-		Content:         req.Content,
-	})
-
-	return job, nil
+	done := make(chan struct{})
+	go func() {
+		s.mcpJobWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req model.MCPStartImportJobRequest) {
@@ -1239,14 +1296,20 @@ func (s *AppService) pruneMCPJobsLocked() {
 	if len(s.mcpJobs) <= 50 {
 		return
 	}
-	items := make([]model.MCPJob, 0, len(s.mcpJobs))
+	terminal := make([]model.MCPJob, 0, len(s.mcpJobs))
 	for _, job := range s.mcpJobs {
-		items = append(items, job)
+		if isMCPJobTerminalStatus(job.Status) {
+			terminal = append(terminal, job)
+		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].UpdatedAt > items[j].UpdatedAt
+	sort.Slice(terminal, func(i, j int) bool {
+		return terminal[i].UpdatedAt < terminal[j].UpdatedAt
 	})
-	for _, job := range items[50:] {
+	removeCount := len(s.mcpJobs) - 50
+	if removeCount > len(terminal) {
+		removeCount = len(terminal)
+	}
+	for _, job := range terminal[:removeCount] {
 		delete(s.mcpJobs, job.ID)
 		delete(s.mcpJobCancels, job.ID)
 	}
