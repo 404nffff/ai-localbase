@@ -8,10 +8,20 @@ services:
       - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
     environment:
       AI_LOCALBASE_QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      AI_LOCALBASE_QDRANT_BIND_ADDRESS: ${QDRANT_BIND_ADDRESS:-127.0.0.1}
     entrypoint:
       - /bin/sh
       - -c
       - |
+        case "$$AI_LOCALBASE_QDRANT_BIND_ADDRESS" in
+          127.0.0.1|::1|localhost) ;;
+          *)
+            if [ -z "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
+              echo "QDRANT_API_KEY must be set when QDRANT_BIND_ADDRESS is not loopback" >&2
+              exit 1
+            fi
+            ;;
+        esac
         if [ -n "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
           export QDRANT__SERVICE__API_KEY="$$AI_LOCALBASE_QDRANT_API_KEY"
         fi

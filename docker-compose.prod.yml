@@ -9,10 +9,20 @@ services:
       - qdrant_storage:/qdrant/storage
     environment:
       - AI_LOCALBASE_QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - AI_LOCALBASE_QDRANT_BIND_ADDRESS=${QDRANT_BIND_ADDRESS:-127.0.0.1}
     entrypoint:
       - /bin/sh
       - -c
       - |
+        case "$$AI_LOCALBASE_QDRANT_BIND_ADDRESS" in
+          127.0.0.1|::1|localhost) ;;
+          *)
+            if [ -z "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
+              echo "QDRANT_API_KEY must be set when QDRANT_BIND_ADDRESS is not loopback" >&2
+              exit 1
+            fi
+            ;;
+        esac
         if [ -n "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
           export QDRANT__SERVICE__API_KEY="$$AI_LOCALBASE_QDRANT_API_KEY"
         fi
@@ -89,7 +99,7 @@ services:
       backend:
         condition: service_healthy
     environment:
-      - BACKEND_URL=http://backend:${PORT:-8080}
+      - BACKEND_PORT=${PORT:-8080}
       - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8080}
       - NGINX_CLIENT_MAX_BODY_SIZE=${NGINX_CLIENT_MAX_BODY_SIZE:-32m}
     extra_hosts:

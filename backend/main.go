@@ -84,10 +84,16 @@ func validateAuthConfig(serverConfig model.ServerConfig) error {
 	if !serverConfig.EnableAuth {
 		return nil
 	}
+	if password := strings.TrimSpace(serverConfig.AuthPassword); password != "" && len([]rune(password)) < 8 {
+		return fmt.Errorf("AUTH_PASSWORD must be at least 8 characters when ENABLE_AUTH=true")
+	}
 	hasResetToken := strings.TrimSpace(serverConfig.AuthResetToken) != ""
 	hasResetPassword := strings.TrimSpace(serverConfig.AuthResetPassword) != ""
 	if hasResetToken != hasResetPassword {
 		return fmt.Errorf("AUTH_RESET_TOKEN and AUTH_RESET_PASSWORD must be set together")
+	}
+	if password := strings.TrimSpace(serverConfig.AuthResetPassword); password != "" && len([]rune(password)) < 8 {
+		return fmt.Errorf("AUTH_RESET_PASSWORD must be at least 8 characters when ENABLE_AUTH=true")
 	}
 	return nil
 }

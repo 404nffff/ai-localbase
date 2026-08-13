@@ -8,10 +8,20 @@ services:
       - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
     environment:
       AI_LOCALBASE_QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      AI_LOCALBASE_QDRANT_BIND_ADDRESS: ${QDRANT_BIND_ADDRESS:-127.0.0.1}
     entrypoint:
       - /bin/sh
       - -c
       - |
+        case "$$AI_LOCALBASE_QDRANT_BIND_ADDRESS" in
+          127.0.0.1|::1|localhost) ;;
+          *)
+            if [ -z "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
+              echo "QDRANT_API_KEY must be set when QDRANT_BIND_ADDRESS is not loopback" >&2
+              exit 1
+            fi
+            ;;
+        esac
         if [ -n "$$AI_LOCALBASE_QDRANT_API_KEY" ]; then
           export QDRANT__SERVICE__API_KEY="$$AI_LOCALBASE_QDRANT_API_KEY"
         fi
@@ -44,7 +54,7 @@ services:
       QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
       QDRANT_TIMEOUT_SECONDS: ${QDRANT_TIMEOUT_SECONDS:-5}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      ENABLE_AUTH: ${ENABLE_AUTH:-false}
+      ENABLE_AUTH: ${ENABLE_AUTH:-true}
       AUTH_USERNAME: ${AUTH_USERNAME:-root}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       AUTH_SETUP_TOKEN: ${AUTH_SETUP_TOKEN:-}
@@ -85,6 +95,7 @@ services:
       - backend
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+      BACKEND_PORT: ${PORT:-8080}
       NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-32m}
     ports:
       - "${FRONTEND_PORT:-4173}:4173"

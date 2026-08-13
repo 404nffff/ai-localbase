@@ -80,7 +80,7 @@ docker compose -f docker-compose.qdrant.yml up -d
 docker compose up --build
 ```
 
-如果开启认证，推荐在启动前复制 `.env.example` 为 `.env`，并设置 `ENABLE_AUTH=true` 与 `AUTH_PASSWORD`。如果不预置 `AUTH_PASSWORD`，至少应设置 `AUTH_SETUP_TOKEN`；否则首次初始化只允许本机回环地址完成。
+普通和生产 Docker Compose 默认启用认证。推荐在启动前复制 `.env.example` 为 `.env`，并设置 `AUTH_PASSWORD`；如果不预置 `AUTH_PASSWORD`，至少应设置 `AUTH_SETUP_TOKEN`。开发 Compose 如需免登录调试，请显式设置 `ENABLE_AUTH=false`；否则首次初始化只允许本机回环地址完成。
 
 ---
 
@@ -98,7 +98,7 @@ docker compose up --build
 | `NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Docker 前端代理请求体上限，应高于单文件上传上限 |
 | `STATE_FILE` | `data/app-state.json` | 应用状态文件 |
 | `CHAT_HISTORY_FILE` | `data/chat-history.db` | 聊天记录 SQLite 文件 |
-| `ENABLE_AUTH` | `false` | 是否启用 Web 登录和 API Key 鉴权 |
+| `ENABLE_AUTH` | `true`（普通/生产 Compose） | 是否启用 Web 登录和 API Key 鉴权；开发 Compose 可显式设为 `false` |
 | `AUTH_USERNAME` | `root` | root 登录用户名 |
 | `AUTH_PASSWORD` | 空 | 首次启动自动创建 root 用户的密码 |
 | `AUTH_SETUP_TOKEN` | 空 | 首次初始化向导保护 Token |
@@ -125,7 +125,7 @@ docker compose up --build
 
 > 注意：`QDRANT_VECTOR_SIZE` 必须与嵌入模型输出维度一致。切换嵌入模型时，如果维度变化，旧 Qdrant 集合不能直接复用；请清理旧集合、使用新的 `QDRANT_COLLECTION_PREFIX`，或重新创建知识库后重建索引。
 
-Docker Compose 默认只把 Qdrant 端口绑定到 `127.0.0.1`。服务器部署时不要直接开放 `6333/6334` 到公网；如确需开放，请设置 `QDRANT_API_KEY` 并配合防火墙白名单。
+Docker Compose 默认只把 Qdrant 端口绑定到 `127.0.0.1`。服务器部署时不要直接开放 `6333/6334` 到公网；如确需绑定到非回环地址，必须设置 `QDRANT_API_KEY` 并配合防火墙白名单，否则 Qdrant 容器会拒绝启动。
 
 ### 认证初始化
 

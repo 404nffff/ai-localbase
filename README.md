@@ -96,7 +96,7 @@ Docker 自托管建议设置：
 - `MAX_UPLOAD_BYTES=26214400`：默认单文件上传上限为 25 MiB，可按资源情况调大。
 - `NGINX_CLIENT_MAX_BODY_SIZE=32m`：Docker 前端代理请求体上限，需要高于单文件上传上限以容纳 multipart 开销。
 
-如果 `ENABLE_AUTH=true` 且未设置 `AUTH_PASSWORD`，首次访问 Web 页面会进入初始化向导。公网部署时请优先设置 `AUTH_PASSWORD` 或 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占。
+普通和生产 Docker Compose 默认启用认证；如果 `ENABLE_AUTH=true` 且未设置 `AUTH_PASSWORD`，首次访问 Web 页面会进入初始化向导。服务器部署请优先设置 `AUTH_PASSWORD` 或 `AUTH_SETUP_TOKEN`，避免初始化窗口被他人抢占。开发 Compose 如需免登录调试，请显式设置 `ENABLE_AUTH=false`。
 
 默认服务地址：
 
@@ -105,7 +105,7 @@ Docker 自托管建议设置：
 - Qdrant HTTP API：`http://localhost:6333`
 - Qdrant gRPC：`localhost:6334`
 
-默认情况下 Qdrant 端口只绑定在 `127.0.0.1`。如果需要让其他机器直接访问 Qdrant，请显式设置 `QDRANT_BIND_ADDRESS=0.0.0.0`，并同时配置 `QDRANT_API_KEY` 与服务器防火墙。
+默认情况下 Qdrant 端口只绑定在 `127.0.0.1`。如果需要让其他机器直接访问 Qdrant，请显式设置 `QDRANT_BIND_ADDRESS=0.0.0.0`，同时配置 `QDRANT_API_KEY` 与服务器防火墙；非回环地址没有 API Key 时，Qdrant 容器会拒绝启动。
 
 默认数据目录由 `.env` 控制，主要包括上传文件、应用状态、聊天 SQLite 数据库和 Qdrant 持久化目录。升级或迁移前建议先备份这些路径，详见 [`docs/backup-restore.md`](docs/backup-restore.md)。
 

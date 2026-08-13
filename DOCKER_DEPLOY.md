@@ -69,7 +69,7 @@ docker compose -f docker-compose.prod.yml up -d
 - `QDRANT_COLLECTION_PREFIX`：Qdrant 集合名前缀，切换向量维度时可改前缀避免复用旧集合
 - `ENABLE_HYBRID_SEARCH`：开启 dense + sparse 混合检索。开启前建议切换新的 `QDRANT_COLLECTION_PREFIX` 并重建索引，让 Qdrant collection 使用 named dense/sparse vectors。
 - `QDRANT_API_KEY`：Qdrant API 密钥，可选
-- `QDRANT_BIND_ADDRESS`：Qdrant 暴露端口绑定地址，默认 `127.0.0.1`，服务器部署不建议改成公网地址
+- `QDRANT_BIND_ADDRESS`：Qdrant 暴露端口绑定地址，默认 `127.0.0.1`；改为非回环地址时必须同时设置 `QDRANT_API_KEY`，否则容器拒绝启动
 - `AI_LOCALBASE_IMAGE_TAG`：预构建镜像版本，生产环境建议使用具体 tag，例如 `v1.4.4`，不要依赖 `latest`
 - `BACKEND_BIND_ADDRESS`：后端端口绑定地址，默认 `127.0.0.1`；前端容器通过内部网络访问后端
 - `ENABLE_AUTH`：生产 Compose 在变量未提供时默认 `true`；使用 `.env.example` 时也必须显式确认其为 `true`

@@ -16,7 +16,7 @@
 ## 环境变量配置
 
 ```bash
-# 启用认证（默认 false）
+# 启用认证（普通/生产 Docker Compose 默认 true；开发 Compose 可设为 false）
 ENABLE_AUTH=true
 
 # root 用户名，默认 root

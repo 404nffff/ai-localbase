@@ -28,16 +28,26 @@ func TestValidateAuthConfig(t *testing.T) {
 			name: "auth enabled accepts password without jwt secret",
 			config: model.ServerConfig{
 				EnableAuth:   true,
-				AuthPassword: "password",
+				AuthPassword: "password123",
 			},
 		},
 		{
 			name: "legacy jwt secret is optional",
 			config: model.ServerConfig{
 				EnableAuth:   true,
-				AuthPassword: "password",
+				AuthPassword: "password123",
 				JWTSecret:    "short",
 			},
+		},
+		{
+			name:    "auth enabled rejects weak bootstrap password",
+			config:  model.ServerConfig{EnableAuth: true, AuthPassword: "1234567"},
+			wantErr: "AUTH_PASSWORD must be at least 8 characters when ENABLE_AUTH=true",
+		},
+		{
+			name:    "auth enabled rejects weak reset password",
+			config:  model.ServerConfig{EnableAuth: true, AuthResetToken: "reset-token", AuthResetPassword: "1234567"},
+			wantErr: "AUTH_RESET_PASSWORD must be at least 8 characters when ENABLE_AUTH=true",
 		},
 	}
 
