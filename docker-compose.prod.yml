@@ -2,6 +2,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.13.4
     container_name: qdrant
+    restart: unless-stopped
     ports:
       - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
       - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
@@ -32,10 +33,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILE:-3}
+    mem_limit: ${QDRANT_MEMORY_LIMIT:-1g}
+    cpus: ${QDRANT_CPU_LIMIT:-2.0}
+    pids_limit: ${QDRANT_PIDS_LIMIT:-512}
 
   backend:
     image: ghcr.io/veyliss/ai-localbase-backend:${AI_LOCALBASE_IMAGE_TAG:-latest}
     container_name: ai-localbase-backend
+    restart: unless-stopped
     ports:
       - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:${PORT:-8080}"
     depends_on:
@@ -89,21 +99,43 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILE:-3}
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-1g}
+    cpus: ${BACKEND_CPU_LIMIT:-2.0}
+    pids_limit: ${BACKEND_PIDS_LIMIT:-256}
 
   frontend:
     image: ghcr.io/veyliss/ai-localbase-frontend:${AI_LOCALBASE_IMAGE_TAG:-latest}
     container_name: ai-localbase-frontend
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-4173}:4173"
     depends_on:
       backend:
         condition: service_healthy
     environment:
-      - BACKEND_PORT=${PORT:-8080}
+      - NGINX_BACKEND_PORT=${PORT:-8080}
       - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8080}
+      - NGINX_TRUST_EXTERNAL_PROXY_HEADERS=${TRUST_EXTERNAL_PROXY_HEADERS:-false}
       - NGINX_CLIENT_MAX_BODY_SIZE=${NGINX_CLIENT_MAX_BODY_SIZE:-32m}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILE:-3}
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${FRONTEND_CPU_LIMIT:-1.0}
+    pids_limit: ${FRONTEND_PIDS_LIMIT:-128}
 
 volumes:
   qdrant_storage:

@@ -12,10 +12,16 @@ RUN go build -ldflags "-X ai-localbase/internal/version.Value=${APP_VERSION}" -o
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates curl
-WORKDIR /root/
+RUN apk --no-cache add ca-certificates curl su-exec \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
 
-COPY --from=builder /app/main .
-COPY --from=builder /app/migrate-qdrant-vectors .
+WORKDIR /app
 
+COPY --from=builder --chown=app:app /app/main .
+COPY --from=builder --chown=app:app /app/migrate-qdrant-vectors .
+
+ENTRYPOINT ["sh", "-c", "if [ ! -e /app/data/.ai-localbase-ownership-v1 ]; then chown -R app:app /app/data && touch /app/data/.ai-localbase-ownership-v1 && chown app:app /app/data/.ai-localbase-ownership-v1; fi && exec su-exec app:app \"$@\"", "--"]
 CMD ["./main"]

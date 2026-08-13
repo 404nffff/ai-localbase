@@ -72,10 +72,16 @@ docker compose -f docker-compose.prod.yml up -d
 - `QDRANT_BIND_ADDRESS`：Qdrant 暴露端口绑定地址，默认 `127.0.0.1`；改为非回环地址时必须同时设置 `QDRANT_API_KEY`，否则容器拒绝启动
 - `AI_LOCALBASE_IMAGE_TAG`：预构建镜像版本，生产环境建议使用具体 tag，例如 `v1.4.4`，不要依赖 `latest`
 - `BACKEND_BIND_ADDRESS`：后端端口绑定地址，默认 `127.0.0.1`；前端容器通过内部网络访问后端
+- `TRUST_EXTERNAL_PROXY_HEADERS`：是否信任外层代理的 `X-Forwarded-Proto` / `X-Forwarded-Host`，默认 `false`；只有前端端口不直接暴露且前置代理受控时才设为 `true`
 - `ENABLE_AUTH`：生产 Compose 在变量未提供时默认 `true`；使用 `.env.example` 时也必须显式确认其为 `true`
 - `STAGING_DIR`：上传暂存目录，默认 `/app/data/staging`，必须与应用数据卷保持一致
 - `MAX_UPLOAD_BYTES`：单文件上传大小上限，默认 `26214400`，即 25 MiB
 - `MAX_JSON_BODY_BYTES`：登录、Chat、配置和 MCP 等非 multipart 请求体上限，默认 `4194304`，即 4 MiB
+- `LOG_MAX_SIZE` / `LOG_MAX_FILE`：Docker JSON 日志轮转参数，默认每个日志文件 10 MiB、保留 3 个文件
+- `QDRANT_MEMORY_LIMIT` / `QDRANT_CPU_LIMIT`：Qdrant 容器资源上限，默认 `1g` / `2.0`
+- `BACKEND_MEMORY_LIMIT` / `BACKEND_CPU_LIMIT`：后端容器资源上限，默认 `1g` / `2.0`
+- `FRONTEND_MEMORY_LIMIT` / `FRONTEND_CPU_LIMIT`：前端容器资源上限，默认 `256m` / `1.0`
+- 后端业务进程以固定 UID `10001` 的非 root 用户运行。首次启动时会将 `/app/data` 的现有文件权限迁移到该用户，并写入权限迁移标记，以兼容升级前由 root 创建的数据目录且避免每次重启重复扫描。
 
 ### 验证连接
 

@@ -16,7 +16,8 @@ RUN npm run build
 FROM nginx:alpine
 
 ENV NGINX_CLIENT_MAX_BODY_SIZE=32m
-ENV BACKEND_PORT=8080
+ENV NGINX_BACKEND_PORT=8080
+ENV NGINX_TRUST_EXTERNAL_PROXY_HEADERS=false
 
 RUN rm /etc/nginx/conf.d/default.conf && mkdir -p /etc/nginx/templates
 

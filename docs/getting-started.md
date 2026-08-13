@@ -96,6 +96,7 @@ docker compose up --build
 | `MAX_UPLOAD_BYTES` | `26214400` | 单文件上传大小上限，默认 25 MiB |
 | `MAX_JSON_BODY_BYTES` | `4194304` | 非 multipart JSON 请求体上限，默认 4 MiB |
 | `NGINX_CLIENT_MAX_BODY_SIZE` | `32m` | Docker 前端代理请求体上限，应高于单文件上传上限 |
+| `TRUST_EXTERNAL_PROXY_HEADERS` | `false` | 是否信任受控外层代理传入的 `X-Forwarded-Proto` / `X-Forwarded-Host` |
 | `STATE_FILE` | `data/app-state.json` | 应用状态文件 |
 | `CHAT_HISTORY_FILE` | `data/chat-history.db` | 聊天记录 SQLite 文件 |
 | `ENABLE_AUTH` | `true`（普通/生产 Compose） | 是否启用 Web 登录和 API Key 鉴权；开发 Compose 可显式设为 `false` |

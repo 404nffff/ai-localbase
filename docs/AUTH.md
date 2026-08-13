@@ -237,7 +237,7 @@ curl http://localhost:8080/v1/chat/completions \
 5. API Key 只显示一次，创建后应立即复制保存。
 6. API Key 泄露后应立即在设置页撤销。
 7. 修改 root 密码会吊销所有已登录 Web 会话。
-8. 反向代理部署 HTTPS 时，需要转发 `X-Forwarded-Proto: https`，这样 Cookie 会带上 `Secure`。
+8. 反向代理部署 HTTPS 时，需要设置 `TRUST_EXTERNAL_PROXY_HEADERS=true`，并保留转发 `X-Forwarded-Proto: https` 与 `X-Forwarded-Host`；Docker 前端 Nginx 才会继续传递外层代理的协议和 Host，这样 Cookie 会带上 `Secure`。前端端口直接暴露时保持默认值 `false`。
 9. Web 管理接口依赖同源 Cookie；当前已对基于 session 的写请求启用 CSRF Token 校验。
 10. 如果将前后端拆到不同域名，仍需要额外设计明确的 CORS 白名单，并验证你的客户端能正确携带 CSRF header。
 
