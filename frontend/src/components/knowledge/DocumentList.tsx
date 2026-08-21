@@ -169,9 +169,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
   return (
     <section className="kb-docs-panel">
       <div className="kb-panel-section-head">
-        <div>
-          <h3>文档</h3>
-          <p>{documents.length} 份文档 · 管理资料、索引状态和检索范围</p>
+        <div className="kb-panel-section-heading">
+          <span className="kb-panel-section-icon" aria-hidden="true">
+            <AppIcon name="file" size={16} />
+          </span>
+          <div>
+            <h3>文档</h3>
+            <p>{documents.length} 份文档 · 管理资料、索引状态和检索范围</p>
+          </div>
         </div>
       </div>
 

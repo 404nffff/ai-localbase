@@ -1,6 +1,7 @@
 import React from 'react'
 import type { KnowledgeBase } from '../../App'
 import type { KnowledgeBaseHealthResponse } from '../../services/api'
+import AppIcon from '../common/AppIcon'
 import { healthStatusLabel } from './knowledgeLabels'
 import KnowledgeIcon from './KnowledgeIcon'
 
@@ -27,9 +28,14 @@ const KnowledgeBaseRail: React.FC<KnowledgeBaseRailProps> = ({
 }) => (
   <aside className="kb-rail">
     <div className="kb-rail-head">
-      <div>
-        <h3>知识库</h3>
-        <p>{knowledgeBases.length} 个空间</p>
+      <div className="kb-rail-heading">
+        <span className="kb-rail-heading-icon" aria-hidden="true">
+          <AppIcon name="book" size={17} />
+        </span>
+        <div>
+          <h3>知识库</h3>
+          <p>{knowledgeBases.length} 个空间</p>
+        </div>
       </div>
       <button className="kb-rail-create" onClick={onCreate} title="新建知识库" aria-label="新建知识库">
         <KnowledgeIcon name="plus" />
@@ -47,14 +53,19 @@ const KnowledgeBaseRail: React.FC<KnowledgeBaseRailProps> = ({
             className={`kb-rail-item${isSelected ? ' kb-rail-item--active' : ''}`}
           >
             <button className="kb-rail-main" onClick={() => onSelectKnowledgeBase(knowledgeBase.id)}>
-              <span className="kb-rail-name">{knowledgeBase.name}</span>
-              <span className="kb-rail-meta">
-                {knowledgeBase.documents.length} 份文档
-                {badge && (
-                  <span className="kb-rail-health" style={{ color: badge.color, background: badge.bg }}>
-                    {badge.text}
-                  </span>
-                )}
+              <span className="kb-rail-item-icon" aria-hidden="true">
+                <AppIcon name="database" size={15} />
+              </span>
+              <span className="kb-rail-copy">
+                <span className="kb-rail-name">{knowledgeBase.name}</span>
+                <span className="kb-rail-meta">
+                  {knowledgeBase.documents.length} 份文档
+                  {badge && (
+                    <span className="kb-rail-health" style={{ color: badge.color, background: badge.bg }}>
+                      {badge.text}
+                    </span>
+                  )}
+                </span>
               </span>
             </button>
             {deleteConfirmId === knowledgeBase.id ? (

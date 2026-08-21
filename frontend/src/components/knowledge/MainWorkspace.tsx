@@ -5,6 +5,7 @@ import type {
   RetrievalDebugResponse,
   RetrievalSearchMode,
 } from '../../services/api'
+import AppIcon, { type AppIconName } from '../common/AppIcon'
 import DirectoryUploadTaskPanel from './DirectoryUploadTaskPanel'
 import KnowledgeHealthPanel from './KnowledgeHealthPanel'
 import RetrievalDebugPanel from './RetrievalDebugPanel'
@@ -58,19 +59,19 @@ interface MainWorkspaceProps {
 }
 
 const INSPECTION_VIEW_OPTIONS = [
-  { value: 'retrieval', label: '检索调试' },
-  { value: 'health', label: '索引健康' },
+  { value: 'retrieval', label: '检索调试', icon: 'search' },
+  { value: 'health', label: '索引健康', icon: 'shield' },
 ] as const
 
 const WORKSPACE_VIEW_OPTIONS = [
-  { value: 'documents', label: '文档' },
-  { value: 'retrieval', label: '检索测试' },
-  { value: 'evaluation', label: '质量评估' },
+  { value: 'documents', label: '文档', icon: 'file' },
+  { value: 'retrieval', label: '检索测试', icon: 'search' },
+  { value: 'evaluation', label: '质量评估', icon: 'sparkles' },
 ] as const
 
 const EVALUATION_VIEW_OPTIONS = [
-  { value: 'datasets', label: '评估集' },
-  { value: 'trend', label: '质量趋势' },
+  { value: 'datasets', label: '评估集', icon: 'database' },
+  { value: 'trend', label: '质量趋势', icon: 'sliders' },
 ] as const
 
 interface WorkspaceViewTabsProps<T extends string> {
@@ -78,7 +79,7 @@ interface WorkspaceViewTabsProps<T extends string> {
   ariaLabel: string
   idPrefix: string
   onChange: (view: T) => void
-  options: ReadonlyArray<{ value: T; label: string }>
+  options: ReadonlyArray<{ value: T; label: string; icon?: AppIconName }>
   panelId: string
 }
 
@@ -130,6 +131,7 @@ function WorkspaceViewTabs<T extends string>({
             tabIndex={isActive ? 0 : -1}
             type="button"
           >
+            {option.icon && <AppIcon name={option.icon} size={15} />}
             {option.label}
           </button>
         )

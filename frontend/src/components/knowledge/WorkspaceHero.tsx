@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { KnowledgeBase } from '../../App'
 import type { KnowledgeBaseHealthResponse } from '../../services/api'
+import AppIcon, { type AppIconName } from '../common/AppIcon'
 import { healthStatusLabel } from './knowledgeLabels'
 import KnowledgeIcon from './KnowledgeIcon'
 
@@ -28,6 +29,12 @@ const WorkspaceHero: React.FC<WorkspaceHeroProps> = ({
   const healthBadge = health ? healthStatusLabel(health.status) : null
   const metrics = health?.metrics
   const indexedCount = metrics?.indexedCount ?? knowledgeBase.documents.filter(d => d.status === 'indexed').length ?? 0
+  const overviewMetrics: Array<{ icon: AppIconName; label: string; value: React.ReactNode }> = [
+    { icon: 'file', label: '文档', value: metrics?.documentCount ?? knowledgeBase.documents.length },
+    { icon: 'check', label: '已索引', value: indexedCount },
+    { icon: 'database', label: '片段', value: metrics?.chunkCount ?? '-' },
+    { icon: 'search', label: '检索范围', value: selectedScopeLabel },
+  ]
 
   useEffect(() => {
     if (!uploadMenuOpen) return
@@ -74,22 +81,17 @@ const WorkspaceHero: React.FC<WorkspaceHeroProps> = ({
           <p>{knowledgeBase.description || '未填写描述'}</p>
         </div>
         <div className="kb-workspace-metrics" aria-label="知识库索引概览">
-          <div>
-            <span>文档</span>
-            <strong>{metrics?.documentCount ?? knowledgeBase.documents.length}</strong>
-          </div>
-          <div>
-            <span>已索引</span>
-            <strong>{indexedCount}</strong>
-          </div>
-          <div>
-            <span>Chunks</span>
-            <strong>{metrics?.chunkCount ?? '-'}</strong>
-          </div>
-          <div>
-            <span>范围</span>
-            <strong>{selectedScopeLabel}</strong>
-          </div>
+          {overviewMetrics.map((item) => (
+            <div key={item.label}>
+              <span className="kb-workspace-metric-icon" aria-hidden="true">
+                <AppIcon name={item.icon} size={15} />
+              </span>
+              <span className="kb-workspace-metric-copy">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </span>
+            </div>
+          ))}
         </div>
       </div>
       <div className="kb-workspace-actions" ref={uploadMenuRef}>
