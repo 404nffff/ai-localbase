@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
+	"ai-localbase/internal/auth"
 	"ai-localbase/internal/model"
+	"ai-localbase/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -57,7 +60,7 @@ func (h *AppHandler) BatchIndexDocuments(c *gin.Context) {
 		return
 	}
 	if req.Async {
-		job, err := h.appService.StartBatchIndexJob(knowledgeBaseID, req.UploadIDs, req.Concurrency)
+		job, err := h.appService.StartBatchIndexJobAs(knowledgeBaseID, req.UploadIDs, req.Concurrency, auth.PrincipalFromContext(c))
 		if err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())
 			return
@@ -78,7 +81,7 @@ func (h *AppHandler) BatchIndexDocuments(c *gin.Context) {
 	start := time.Now()
 
 	// 批量索引
-	results := h.batchIndexFromStaged(knowledgeBaseID, req.UploadIDs, concurrency)
+	results := h.batchIndexFromStaged(knowledgeBaseID, req.UploadIDs, concurrency, auth.PrincipalFromContext(c))
 
 	// 统计结果
 	successful := 0
@@ -103,7 +106,7 @@ func (h *AppHandler) BatchIndexDocuments(c *gin.Context) {
 }
 
 // batchIndexFromStaged 从暂存文件批量索引
-func (h *AppHandler) batchIndexFromStaged(knowledgeBaseID string, uploadIDs []string, concurrency int) []IndexResult {
+func (h *AppHandler) batchIndexFromStaged(knowledgeBaseID string, uploadIDs []string, concurrency int, owner service.AuthPrincipal) []IndexResult {
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	resultChan := make(chan IndexResult, len(uploadIDs))
@@ -118,7 +121,7 @@ func (h *AppHandler) batchIndexFromStaged(knowledgeBaseID string, uploadIDs []st
 			defer func() { <-sem }()
 
 			// 索引单个文档
-			result := h.indexSingleStaged(knowledgeBaseID, uid)
+			result := h.indexSingleStaged(knowledgeBaseID, uid, owner)
 			resultChan <- result
 		}(uploadID)
 	}
@@ -137,9 +140,9 @@ func (h *AppHandler) batchIndexFromStaged(knowledgeBaseID string, uploadIDs []st
 }
 
 // indexSingleStaged 索引单个暂存文件
-func (h *AppHandler) indexSingleStaged(knowledgeBaseID, uploadID string) IndexResult {
+func (h *AppHandler) indexSingleStaged(knowledgeBaseID, uploadID string, owner service.AuthPrincipal) IndexResult {
 	// 使用现有的 RegisterStagedUpload 方法
-	document, err := h.appService.RegisterStagedUpload(uploadID, knowledgeBaseID, "")
+	document, err := h.appService.RegisterStagedUploadAs(context.Background(), uploadID, knowledgeBaseID, "", owner)
 
 	if err != nil {
 		return IndexResult{

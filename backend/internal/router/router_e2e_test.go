@@ -174,6 +174,85 @@ func TestMCPAuxiliaryRoutesRespectMCPState(t *testing.T) {
 	}
 }
 
+func TestHTTPStageUploadQuotaReturnsRetryableStatus(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	for index := 0; index < 8; index++ {
+		resp := performMultipartUploadWithHeaders(
+			t,
+			engine,
+			http.MethodPost,
+			"/api/uploads",
+			fmt.Sprintf("quota-%d.md", index),
+			"# quota test",
+			sessionHeaders,
+		)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("expected staging upload %d to succeed, got %d, body=%s", index+1, resp.Code, resp.Body.String())
+		}
+	}
+
+	resp := performMultipartUploadWithHeaders(t, engine, http.MethodPost, "/api/uploads", "quota-overflow.md", "# quota test", sessionHeaders)
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected quota response 429, got %d, body=%s", resp.Code, resp.Body.String())
+	}
+	if resp.Header().Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header on staging quota response")
+	}
+	if !strings.Contains(resp.Body.String(), "rate_limited") {
+		t.Fatalf("expected rate_limited error code, got %s", resp.Body.String())
+	}
+}
+
+func TestMCPStagedUploadIsBoundToAPIKey(t *testing.T) {
+	engine, _, sessionHeaders, cleanup := newAuthenticatedTestRouter(t)
+	defer cleanup()
+
+	ownerHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-upload-owner", []string{"mcp:upload"})
+	otherHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-upload-other", []string{"mcp:upload"})
+	stageResp := performMultipartUploadWithHeaders(t, engine, http.MethodPost, "/api/uploads", "principal-bound.md", "# principal bound", ownerHeaders)
+	if stageResp.Code != http.StatusOK {
+		t.Fatalf("expected owner staging upload to succeed, got %d, body=%s", stageResp.Code, stageResp.Body.String())
+	}
+	var staged model.StageUploadResponse
+	decodeJSONResponse(t, stageResp.Body.Bytes(), &staged)
+	if strings.TrimSpace(staged.UploadID) == "" {
+		t.Fatalf("expected staged upload id, got %+v", staged)
+	}
+
+	kbListResp := performRequestWithHeaders(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "", sessionHeaders)
+	if kbListResp.Code != http.StatusOK {
+		t.Fatalf("expected knowledge base list status 200, got %d, body=%s", kbListResp.Code, kbListResp.Body.String())
+	}
+	var kbList struct {
+		Items []model.KnowledgeBase `json:"items"`
+	}
+	decodeJSONResponse(t, kbListResp.Body.Bytes(), &kbList)
+	if len(kbList.Items) == 0 {
+		t.Fatal("expected default knowledge base")
+	}
+
+	otherResp := performMCPToolCall(t, engine, otherHeaders, 801, "register_staged_upload", map[string]any{
+		"uploadId":        staged.UploadID,
+		"knowledgeBaseId": kbList.Items[0].ID,
+	})
+	if otherResp.Code != http.StatusOK {
+		t.Fatalf("expected MCP JSON-RPC response status 200, got %d, body=%s", otherResp.Code, otherResp.Body.String())
+	}
+	if !strings.Contains(otherResp.Body.String(), "not owned by this principal") {
+		t.Fatalf("expected cross-principal staging rejection, got %s", otherResp.Body.String())
+	}
+
+	ownerResp := performMCPToolCall(t, engine, ownerHeaders, 802, "register_staged_upload", map[string]any{
+		"uploadId":        staged.UploadID,
+		"knowledgeBaseId": kbList.Items[0].ID,
+	})
+	if ownerResp.Code != http.StatusOK || !strings.Contains(ownerResp.Body.String(), "已注册") {
+		t.Fatalf("expected owning API key to register staged upload, got %d, body=%s", ownerResp.Code, ownerResp.Body.String())
+	}
+}
+
 func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	engine, _, cleanup := newTestRouterWithServerConfig(t, func(serverConfig *model.ServerConfig) {
 		serverConfig.EnableMCP = true

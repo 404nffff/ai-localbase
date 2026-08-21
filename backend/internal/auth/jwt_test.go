@@ -73,4 +73,10 @@ func TestHasRequiredScopes(t *testing.T) {
 	if !hasRequiredScopes([]string{"mcp:tools"}, nil) {
 		t.Fatal("expected empty required scopes to be accepted")
 	}
+	if !hasRequiredScopes([]string{"mcp:admin"}, []string{"mcp:upload", "mcp:danger"}) {
+		t.Fatal("expected mcp:admin to satisfy MCP scopes")
+	}
+	if hasRequiredScopes([]string{"mcp:admin"}, []string{"openai:chat"}) {
+		t.Fatal("expected mcp:admin not to satisfy non-MCP scopes")
+	}
 }

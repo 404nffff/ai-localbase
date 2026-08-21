@@ -118,8 +118,13 @@ func hasRequiredScopes(grantedScopes, requiredScopes []string) bool {
 			granted[scope] = struct{}{}
 		}
 	}
+	_, hasMCPAdmin := granted["mcp:admin"]
 	for _, scope := range requiredScopes {
-		if _, ok := granted[strings.ToLower(strings.TrimSpace(scope))]; !ok {
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		if hasMCPAdmin && strings.HasPrefix(scope, "mcp:") {
+			continue
+		}
+		if _, ok := granted[scope]; !ok {
 			return false
 		}
 	}
@@ -166,4 +171,35 @@ func setPrincipal(c *gin.Context, principal service.AuthPrincipal) {
 	if !principal.ExpiresAt.IsZero() {
 		c.Set("expires_at", principal.ExpiresAt.Unix())
 	}
+}
+
+// PrincipalFromContext returns the authenticated principal installed by one of
+// the session or API key middleware handlers.
+func PrincipalFromContext(c *gin.Context) service.AuthPrincipal {
+	if c == nil {
+		return service.AuthPrincipal{}
+	}
+	principal := service.AuthPrincipal{}
+	if value, ok := c.Get("auth_type"); ok {
+		principal.AuthType, _ = value.(string)
+	}
+	if value, ok := c.Get("user_id"); ok {
+		principal.UserID, _ = value.(string)
+	}
+	if value, ok := c.Get("username"); ok {
+		principal.Username, _ = value.(string)
+	}
+	if value, ok := c.Get("role"); ok {
+		principal.Role, _ = value.(string)
+	}
+	if value, ok := c.Get("session_id"); ok {
+		principal.SessionID, _ = value.(string)
+	}
+	if value, ok := c.Get("api_key_id"); ok {
+		principal.APIKeyID, _ = value.(string)
+	}
+	if value, ok := c.Get("scopes"); ok {
+		principal.Scopes, _ = value.([]string)
+	}
+	return principal
 }

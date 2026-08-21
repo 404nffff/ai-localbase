@@ -54,7 +54,7 @@ func (h *AppHandler) Health(c *gin.Context) {
 
 func (h *AppHandler) GetJobStatus(c *gin.Context) {
 	jobID := c.Param("jobId")
-	job, err := h.appService.GetMCPJobStatus(jobID)
+	job, err := h.appService.GetMCPJobStatusAs(jobID, auth.PrincipalFromContext(c))
 	if err != nil {
 		writeError(c, http.StatusNotFound, err.Error())
 		return
@@ -64,7 +64,7 @@ func (h *AppHandler) GetJobStatus(c *gin.Context) {
 
 func (h *AppHandler) CancelJob(c *gin.Context) {
 	jobID := c.Param("jobId")
-	job, err := h.appService.CancelMCPJob(jobID)
+	job, err := h.appService.CancelMCPJobAs(jobID, auth.PrincipalFromContext(c))
 	if err != nil {
 		writeError(c, http.StatusNotFound, err.Error())
 		return
@@ -510,8 +510,13 @@ func (h *AppHandler) StageUpload(c *gin.Context) {
 		writeUploadValidationError(c, err)
 		return
 	}
-	staged, err := h.appService.StageUpload(file, "http")
+	staged, err := h.appService.StageUploadAs(file, "http", auth.PrincipalFromContext(c))
 	if err != nil {
+		if errors.Is(err, service.ErrUploadStagingQuotaExceeded) {
+			c.Header("Retry-After", "60")
+			writeError(c, http.StatusTooManyRequests, "upload staging quota exceeded; retry after cleanup or expiration")
+			return
+		}
 		writeError(c, http.StatusBadGateway, err.Error())
 		return
 	}
