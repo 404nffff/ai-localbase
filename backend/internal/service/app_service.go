@@ -80,6 +80,7 @@ type AppService struct {
 	contextCompressor ContextCompressor
 	mcpDangerMu       sync.Mutex
 	mcpDangerConfirms map[string]mcpDangerConfirmationRecord
+	mcpDangerRates    map[string][]time.Time
 	mcpJobMu          sync.Mutex
 	mcpJobs           map[string]model.MCPJob
 	mcpJobCancels     map[string]context.CancelFunc
@@ -97,7 +98,11 @@ type mcpDangerConfirmationRecord struct {
 	OwnerAPIKeyID string
 }
 
-const mcpDangerConfirmationDefaultTTL = 5 * time.Minute
+const (
+	mcpDangerConfirmationDefaultTTL = 5 * time.Minute
+	mcpDangerConfirmationRateWindow = time.Minute
+	mcpDangerConfirmationRateLimit  = 10
+)
 
 // ContextCompressor 上下文压缩器接口
 // Compress 将多个 chunks 压缩为简洁的上下文文本
@@ -175,6 +180,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		serverConfig:      serverConfig,
 		staging:           NewUploadStagingService(stagingDir, 30*time.Minute),
 		mcpDangerConfirms: map[string]mcpDangerConfirmationRecord{},
+		mcpDangerRates:    map[string][]time.Time{},
 		mcpJobs:           map[string]model.MCPJob{},
 		mcpJobCancels:     map[string]context.CancelFunc{},
 	}
@@ -800,7 +806,12 @@ func (s *AppService) CreateMCPDangerConfirmationAs(req model.MCPDangerConfirmati
 	if s.mcpDangerConfirms == nil {
 		s.mcpDangerConfirms = map[string]mcpDangerConfirmationRecord{}
 	}
-	s.pruneExpiredMCPDangerConfirmationsLocked(time.Now().UTC())
+	now := time.Now().UTC()
+	s.pruneExpiredMCPDangerConfirmationsLocked(now)
+	if err := s.checkMCPDangerConfirmationRateLocked(mcpDangerPrincipalKey(owner), now); err != nil {
+		s.mcpDangerMu.Unlock()
+		return model.MCPDangerConfirmationResponse{}, err
+	}
 	s.mcpDangerConfirms[nonce] = mcpDangerConfirmationRecord{
 		Nonce:         nonce,
 		ToolName:      toolName,
@@ -817,6 +828,47 @@ func (s *AppService) CreateMCPDangerConfirmationAs(req model.MCPDangerConfirmati
 		ToolName:     toolName,
 		ParamHash:    paramHash,
 	}, nil
+}
+
+func (s *AppService) checkMCPDangerConfirmationRateLocked(principalKey string, now time.Time) error {
+	if s.mcpDangerRates == nil {
+		s.mcpDangerRates = map[string][]time.Time{}
+	}
+	cutoff := now.Add(-mcpDangerConfirmationRateWindow)
+	for key, attempts := range s.mcpDangerRates {
+		active := attempts[:0]
+		for _, attempt := range attempts {
+			if attempt.After(cutoff) {
+				active = append(active, attempt)
+			}
+		}
+		if len(active) == 0 {
+			delete(s.mcpDangerRates, key)
+			continue
+		}
+		s.mcpDangerRates[key] = active
+	}
+	attempts := s.mcpDangerRates[principalKey]
+	active := attempts
+	if len(active) >= mcpDangerConfirmationRateLimit {
+		s.mcpDangerRates[principalKey] = active
+		return fmt.Errorf("danger confirmation rate limit exceeded: maximum %d confirmations per minute", mcpDangerConfirmationRateLimit)
+	}
+	s.mcpDangerRates[principalKey] = append(active, now)
+	return nil
+}
+
+func mcpDangerPrincipalKey(owner AuthPrincipal) string {
+	if apiKeyID := strings.TrimSpace(owner.APIKeyID); apiKeyID != "" {
+		return "api-key:" + apiKeyID
+	}
+	if userID := strings.TrimSpace(owner.UserID); userID != "" {
+		return "user:" + userID
+	}
+	if authType := strings.TrimSpace(owner.AuthType); authType != "" {
+		return "auth:" + authType
+	}
+	return "anonymous"
 }
 
 func (s *AppService) ConsumeMCPDangerConfirmation(toolName string, args map[string]any, nonce string) error {

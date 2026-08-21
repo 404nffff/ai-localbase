@@ -1,7 +1,9 @@
 package service
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"ai-localbase/internal/model"
 )
@@ -28,5 +30,35 @@ func TestMCPDangerConfirmationCannotCrossAPIKeyEvenForAdmin(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected another API key to be denied even with mcp:admin")
+	}
+}
+
+func TestMCPDangerConfirmationRateLimitIsScopedToPrincipal(t *testing.T) {
+	appService := &AppService{
+		mcpDangerConfirms: map[string]mcpDangerConfirmationRecord{},
+		mcpDangerRates:    map[string][]time.Time{},
+	}
+	ownerA := AuthPrincipal{AuthType: "api_key", APIKeyID: "key-a"}
+	ownerB := AuthPrincipal{AuthType: "api_key", APIKeyID: "key-b"}
+
+	for index := 0; index < mcpDangerConfirmationRateLimit; index++ {
+		if _, err := appService.CreateMCPDangerConfirmationAs(model.MCPDangerConfirmationRequest{
+			ToolName:  "delete_conversation",
+			Arguments: map[string]any{"id": "conversation-a"},
+		}, ownerA); err != nil {
+			t.Fatalf("create confirmation %d: %v", index, err)
+		}
+	}
+	if _, err := appService.CreateMCPDangerConfirmationAs(model.MCPDangerConfirmationRequest{
+		ToolName:  "delete_conversation",
+		Arguments: map[string]any{"id": "conversation-a"},
+	}, ownerA); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("expected owner A to be rate limited, got %v", err)
+	}
+	if _, err := appService.CreateMCPDangerConfirmationAs(model.MCPDangerConfirmationRequest{
+		ToolName:  "delete_conversation",
+		Arguments: map[string]any{"id": "conversation-b"},
+	}, ownerB); err != nil {
+		t.Fatalf("expected owner B to have an independent rate limit: %v", err)
 	}
 }

@@ -2,11 +2,30 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"ai-localbase/internal/model"
 )
+
+type sensitiveMCPAppService struct {
+	listToolsAppService
+	detail model.DocumentDetailResponse
+	health model.KnowledgeBaseHealthResponse
+}
+
+func (s sensitiveMCPAppService) GetDocumentDetail(string, string, string) (model.DocumentDetailResponse, error) {
+	return s.detail, nil
+}
+
+func (s sensitiveMCPAppService) GetKnowledgeBaseHealth(string) (model.KnowledgeBaseHealthResponse, error) {
+	return s.health, nil
+}
+
+func (s sensitiveMCPAppService) ListEvalRuns(string, string) []model.EvalRunSummary {
+	return nil
+}
 
 type listToolsAppService struct {
 	AppServiceReader
@@ -165,4 +184,99 @@ func TestStartImportJobSchemaSupportsAllLongTaskTypes(t *testing.T) {
 	if got := jobType["enum"]; got == nil {
 		t.Fatalf("expected jobType enum, got %#v", jobType)
 	}
+}
+
+func TestMCPDocumentResultsDoNotExposeInternalFields(t *testing.T) {
+	appService := sensitiveMCPAppService{
+		detail: model.DocumentDetailResponse{
+			KnowledgeBaseID: "kb-safe",
+			Document: model.Document{
+				ID:              "doc-safe",
+				KnowledgeBaseID: "kb-safe",
+				Name:            "部署文档",
+				Path:            "/app/data/uploads/private.pdf",
+				IndexError:      "qdrant request failed at http://qdrant:6333/collections/private",
+				Status:          "failed",
+			},
+			Diagnostics: model.DocumentIndexDiagnostics{ChunkCount: 2},
+			RawContent:  "文档内容",
+			Summary:     "文档摘要",
+		},
+		health: model.KnowledgeBaseHealthResponse{
+			KnowledgeBaseID: "kb-safe",
+			Name:            "知识库",
+			Status:          "attention",
+			Documents: []model.KnowledgeBaseDocumentHealth{{
+				DocumentID:     "doc-safe",
+				DocumentName:   "部署文档",
+				IndexError:     "open /var/lib/ai-localbase/uploads/private.pdf: permission denied",
+				Recommendation: "建议重建索引。",
+			}},
+		},
+	}
+
+	for _, name := range []string{"get_document_detail", "summarize_document"} {
+		definition := findToolDefinition(t, NewReadOnlyTools(appService), name)
+		result, err := definition.Handler(context.Background(), map[string]any{
+			"knowledgeBaseId": "kb-safe",
+			"documentId":      "doc-safe",
+		})
+		if err != nil {
+			t.Fatalf("call %s: %v", name, err)
+		}
+		encoded, err := json.Marshal(result.Data)
+		if err != nil {
+			t.Fatalf("encode %s result: %v", name, err)
+		}
+		payload := string(encoded)
+		for _, forbidden := range []string{"indexError", "qdrant request failed", "/app/data", "/var/lib", "http://qdrant"} {
+			if strings.Contains(payload, forbidden) {
+				t.Errorf("%s result exposed internal value %q: %s", name, forbidden, payload)
+			}
+		}
+	}
+
+	quality := findToolDefinition(t, NewReadOnlyTools(appService), "inspect_knowledge_base_quality")
+	result, err := quality.Handler(context.Background(), map[string]any{"knowledgeBaseId": "kb-safe"})
+	if err != nil {
+		t.Fatalf("call inspect_knowledge_base_quality: %v", err)
+	}
+	encoded, err := json.Marshal(result.Data)
+	if err != nil {
+		t.Fatalf("encode quality result: %v", err)
+	}
+	payload := string(encoded)
+	for _, forbidden := range []string{"indexError", "permission denied", "/var/lib"} {
+		if strings.Contains(payload, forbidden) {
+			t.Errorf("quality result exposed internal value %q: %s", forbidden, payload)
+		}
+	}
+
+	job := sanitizeMCPJob(model.MCPJob{Result: map[string]any{
+		"document": model.Document{
+			Path:       "/app/data/uploads/private.pdf",
+			IndexError: "open /app/data/uploads/private.pdf: permission denied",
+		},
+	}})
+	encoded, err = json.Marshal(job.Result)
+	if err != nil {
+		t.Fatalf("encode job result: %v", err)
+	}
+	payload = string(encoded)
+	for _, forbidden := range []string{"indexError", "/app/data", "permission denied"} {
+		if strings.Contains(payload, forbidden) {
+			t.Errorf("job result exposed internal value %q: %s", forbidden, payload)
+		}
+	}
+}
+
+func findToolDefinition(t *testing.T, definitions []ToolDefinition, name string) ToolDefinition {
+	t.Helper()
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return definition
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return ToolDefinition{}
 }

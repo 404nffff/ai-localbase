@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -18,22 +19,48 @@ import (
 )
 
 const (
-	stagedUploadStatusStaged     = "staged"
-	stagedUploadStatusProcessing = "processing"
-	stagedUploadStatusConsumed   = "consumed"
-	stagedUploadStatusDeleted    = "deleted"
-	defaultStagedUploadTTL       = 30 * time.Minute
+	stagedUploadStatusStaged      = "staged"
+	stagedUploadStatusProcessing  = "processing"
+	stagedUploadStatusConsumed    = "consumed"
+	stagedUploadStatusDeleted     = "deleted"
+	defaultStagedUploadTTL        = 30 * time.Minute
+	defaultStagedMaxFiles         = 8
+	defaultStagedMaxBytesPerOwner = 256 * 1024 * 1024
+	defaultStagedMaxBytes         = 1024 * 1024 * 1024
 )
+
+var ErrUploadStagingQuotaExceeded = errors.New("upload staging quota exceeded")
+
+type UploadStagingLimits struct {
+	MaxFilesPerPrincipal int
+	MaxBytesPerPrincipal int64
+	MaxBytes             int64
+}
+
+type stagingQuotaReservation struct {
+	principalKey string
+	size         int64
+}
 
 type UploadStagingService struct {
 	rootDir string
 	ttl     time.Duration
+	limits  UploadStagingLimits
 
-	mu    sync.RWMutex
-	items map[string]model.StagedUpload
+	mu           sync.RWMutex
+	items        map[string]model.StagedUpload
+	reservations map[string]stagingQuotaReservation
 }
 
 func NewUploadStagingService(rootDir string, ttl time.Duration) *UploadStagingService {
+	return NewUploadStagingServiceWithLimits(rootDir, ttl, UploadStagingLimits{
+		MaxFilesPerPrincipal: defaultStagedMaxFiles,
+		MaxBytesPerPrincipal: defaultStagedMaxBytesPerOwner,
+		MaxBytes:             defaultStagedMaxBytes,
+	})
+}
+
+func NewUploadStagingServiceWithLimits(rootDir string, ttl time.Duration, limits UploadStagingLimits) *UploadStagingService {
 	trimmedRoot := strings.TrimSpace(rootDir)
 	if trimmedRoot == "" {
 		trimmedRoot = filepath.Join("data", "staging")
@@ -42,9 +69,11 @@ func NewUploadStagingService(rootDir string, ttl time.Duration) *UploadStagingSe
 		ttl = defaultStagedUploadTTL
 	}
 	return &UploadStagingService{
-		rootDir: trimmedRoot,
-		ttl:     ttl,
-		items:   map[string]model.StagedUpload{},
+		rootDir:      trimmedRoot,
+		ttl:          ttl,
+		limits:       limits,
+		items:        map[string]model.StagedUpload{},
+		reservations: map[string]stagingQuotaReservation{},
 	}
 }
 
@@ -347,27 +376,52 @@ func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, 
 	if err != nil {
 		return model.StagedUpload{}, err
 	}
-	storedName := fmt.Sprintf("%s_%s", uploadID, util.SanitizeFilename(trimmedName))
-	destination := filepath.Join(s.rootDir, storedName)
-
-	file, err := os.Create(destination)
-	if err != nil {
-		return model.StagedUpload{}, fmt.Errorf("create staged file: %w", err)
+	principalKey := stagedUploadPrincipalKey(owner)
+	reservedSize := sizeHint
+	if reservedSize < 0 {
+		reservedSize = 0
 	}
+	s.mu.Lock()
+	if err := s.checkQuotaLocked(principalKey, reservedSize); err != nil {
+		s.mu.Unlock()
+		return model.StagedUpload{}, err
+	}
+	if s.reservations == nil {
+		s.reservations = map[string]stagingQuotaReservation{}
+	}
+	s.reservations[uploadID] = stagingQuotaReservation{principalKey: principalKey, size: reservedSize}
+	s.mu.Unlock()
+	reservationActive := true
+	defer func() {
+		if !reservationActive {
+			return
+		}
+		s.mu.Lock()
+		delete(s.reservations, uploadID)
+		s.mu.Unlock()
+	}()
+	temporary, err := os.CreateTemp(s.rootDir, ".staged-upload-*")
+	if err != nil {
+		return model.StagedUpload{}, fmt.Errorf("create temporary staged file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	cleanupTemporary := true
+	defer func() {
+		if cleanupTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
 
 	hasher := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(file, hasher), reader)
-	closeErr := file.Close()
+	written, copyErr := io.Copy(io.MultiWriter(temporary, hasher), reader)
+	closeErr := temporary.Close()
 	if copyErr != nil {
-		_ = os.Remove(destination)
 		return model.StagedUpload{}, fmt.Errorf("write staged file: %w", copyErr)
 	}
 	if closeErr != nil {
-		_ = os.Remove(destination)
 		return model.StagedUpload{}, fmt.Errorf("close staged file: %w", closeErr)
 	}
 	if written == 0 && sizeHint == 0 {
-		_ = os.Remove(destination)
 		return model.StagedUpload{}, fmt.Errorf("staged file is empty")
 	}
 
@@ -375,7 +429,6 @@ func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, 
 	staged := model.StagedUpload{
 		ID:            uploadID,
 		FileName:      trimmedName,
-		Path:          destination,
 		Size:          written,
 		SizeLabel:     util.FormatFileSize(written),
 		SHA256:        hex.EncodeToString(hasher.Sum(nil)),
@@ -388,10 +441,90 @@ func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, 
 	}
 
 	s.mu.Lock()
+	delete(s.reservations, uploadID)
+	reservationActive = false
+	if err := s.checkQuotaLocked(principalKey, written); err != nil {
+		s.mu.Unlock()
+		return model.StagedUpload{}, err
+	}
+	storedName := fmt.Sprintf("%s_%s", uploadID, util.SanitizeFilename(trimmedName))
+	destination := filepath.Join(s.rootDir, storedName)
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		s.mu.Unlock()
+		return model.StagedUpload{}, fmt.Errorf("commit staged file: %w", err)
+	}
+	cleanupTemporary = false
+	staged.Path = destination
 	s.items[staged.ID] = staged
 	s.mu.Unlock()
 
 	return staged, nil
+}
+
+func (s *UploadStagingService) checkQuotaLocked(principalKey string, size int64) error {
+	if s == nil {
+		return fmt.Errorf("upload staging service is nil")
+	}
+	activeFiles := 0
+	activeBytes := int64(0)
+	totalBytes := int64(0)
+	now := time.Now().UTC()
+	for _, item := range s.items {
+		if item.Status != stagedUploadStatusStaged && item.Status != stagedUploadStatusProcessing {
+			continue
+		}
+		if expiresAt, err := time.Parse(time.RFC3339, item.ExpiresAt); err == nil && !expiresAt.After(now) {
+			continue
+		}
+		totalBytes += item.Size
+		if stagedUploadPrincipalKeyFromItem(item) != principalKey {
+			continue
+		}
+		activeFiles++
+		activeBytes += item.Size
+	}
+	for _, reservation := range s.reservations {
+		totalBytes += reservation.size
+		if reservation.principalKey != principalKey {
+			continue
+		}
+		activeFiles++
+		activeBytes += reservation.size
+	}
+
+	if s.limits.MaxFilesPerPrincipal > 0 && activeFiles >= s.limits.MaxFilesPerPrincipal {
+		return fmt.Errorf("%w: principal file limit reached (%d)", ErrUploadStagingQuotaExceeded, s.limits.MaxFilesPerPrincipal)
+	}
+	if s.limits.MaxBytesPerPrincipal > 0 && activeBytes > s.limits.MaxBytesPerPrincipal-size {
+		return fmt.Errorf("%w: principal byte limit reached (%s)", ErrUploadStagingQuotaExceeded, util.FormatFileSize(s.limits.MaxBytesPerPrincipal))
+	}
+	if s.limits.MaxBytes > 0 && totalBytes > s.limits.MaxBytes-size {
+		return fmt.Errorf("%w: global byte limit reached (%s)", ErrUploadStagingQuotaExceeded, util.FormatFileSize(s.limits.MaxBytes))
+	}
+	return nil
+}
+
+func stagedUploadPrincipalKey(owner AuthPrincipal) string {
+	if apiKeyID := strings.TrimSpace(owner.APIKeyID); apiKeyID != "" {
+		return "api-key:" + apiKeyID
+	}
+	if userID := strings.TrimSpace(owner.UserID); userID != "" {
+		return "user:" + userID
+	}
+	if authType := strings.TrimSpace(owner.AuthType); authType != "" {
+		return "auth:" + authType
+	}
+	return "anonymous"
+}
+
+func stagedUploadPrincipalKeyFromItem(item model.StagedUpload) string {
+	if apiKeyID := strings.TrimSpace(item.OwnerAPIKeyID); apiKeyID != "" {
+		return "api-key:" + apiKeyID
+	}
+	if userID := strings.TrimSpace(item.OwnerUserID); userID != "" {
+		return "user:" + userID
+	}
+	return "anonymous"
 }
 
 func stagedUploadOwnerMatches(item model.StagedUpload, owner AuthPrincipal) bool {

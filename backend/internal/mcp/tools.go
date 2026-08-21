@@ -239,7 +239,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 						detail.Diagnostics.ChunkCount,
 						detail.Diagnostics.StructuredRowCount,
 					),
-					map[string]any{"detail": detail},
+					map[string]any{"detail": buildSafeMCPDocumentDetail(detail)},
 				), nil
 			},
 		},
@@ -575,7 +575,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					Summary: fmt.Sprintf("知识库《%s》健康分 %d，状态 %s，最近评估 %d 次。", health.Name, health.Score, health.Status, len(evalRuns)),
 					Content: []ToolContent{{Type: "text", Text: strings.Join(insights, "\n")}},
 					Data: map[string]any{
-						"health":        health,
+						"health":        buildSafeMCPKnowledgeBaseHealth(health),
 						"latestEvalRun": latestEvalRun,
 						"evalRuns":      evalRuns,
 						"insights":      insights,
@@ -756,8 +756,8 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					Content: []ToolContent{{Type: "text", Text: summary}},
 					Data: map[string]any{
 						"knowledgeBaseId": knowledgeBaseID,
-						"document":        detail.Document,
-						"diagnostics":     detail.Diagnostics,
+						"document":        buildSafeMCPDocument(detail.Document),
+						"diagnostics":     buildSafeMCPDocumentDiagnostics(detail.Diagnostics),
 						"summary":         summary,
 						"chunks":          previewDocumentChunks(detail.Chunks, 5),
 					},
@@ -883,7 +883,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 				return NewTextResult(
 					fmt.Sprintf("文档《%s》已删除。", removedDocument.Name),
-					map[string]any{"document": removedDocument},
+					map[string]any{"document": buildSafeMCPDocument(removedDocument)},
 				), nil
 			},
 		},
@@ -911,7 +911,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 				return NewTextResult(
 					fmt.Sprintf("文档《%s》已完成重建索引，当前状态为 %s。", document.Name, document.Status),
-					map[string]any{"document": document, "knowledgeBaseId": knowledgeBaseID},
+					map[string]any{"document": buildSafeMCPDocument(document), "knowledgeBaseId": knowledgeBaseID},
 				), nil
 			},
 		},
@@ -1054,7 +1054,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 				return NewTextResult(
 					fmt.Sprintf("文本文档《%s》上传成功。", uploaded.Name),
-					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
+					map[string]any{"uploaded": buildSafeMCPDocument(uploaded), "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
 				), nil
 			},
 		},
@@ -1108,7 +1108,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 				return NewTextResult(
 					fmt.Sprintf("文档《%s》上传成功。", uploaded.Name),
-					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
+					map[string]any{"uploaded": buildSafeMCPDocument(uploaded), "knowledgeBaseId": uploaded.KnowledgeBaseID, "stagedUploadId": staged.ID},
 				), nil
 			},
 		},
@@ -1142,7 +1142,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				}
 				return NewTextResult(
 					fmt.Sprintf("暂存文件《%s》已注册到知识库。", uploaded.Name),
-					map[string]any{"uploaded": uploaded, "knowledgeBaseId": uploaded.KnowledgeBaseID, "uploadId": uploadID},
+					map[string]any{"uploaded": buildSafeMCPDocument(uploaded), "knowledgeBaseId": uploaded.KnowledgeBaseID, "uploadId": uploadID},
 				), nil
 			},
 		},
@@ -1304,6 +1304,8 @@ func sanitizeMCPJobMap(values map[string]any) map[string]any {
 
 func sanitizeMCPJobValue(key string, value any) any {
 	switch typed := value.(type) {
+	case model.Document:
+		return buildSafeMCPDocument(typed)
 	case string:
 		lowerKey := strings.ToLower(strings.TrimSpace(key))
 		if strings.Contains(lowerKey, "error") || strings.Contains(lowerKey, "warning") {
@@ -1726,6 +1728,92 @@ func buildSafeConfigSummary(cfg model.AppConfig) map[string]any {
 			"enabled":  cfg.MCP.Enabled,
 			"basePath": cfg.MCP.BasePath,
 		},
+	}
+}
+
+// MCP success payloads use explicit DTOs instead of returning service models.
+// Service models may gain operational fields such as local paths or parser
+// errors that are useful internally but should not cross the MCP boundary.
+func buildSafeMCPDocumentDetail(detail model.DocumentDetailResponse) map[string]any {
+	return map[string]any{
+		"knowledgeBaseId": detail.KnowledgeBaseID,
+		"document":        buildSafeMCPDocument(detail.Document),
+		"diagnostics":     buildSafeMCPDocumentDiagnostics(detail.Diagnostics),
+		"rawContent":      detail.RawContent,
+		"summary":         detail.Summary,
+		"chunks":          previewDocumentChunks(detail.Chunks, len(detail.Chunks)),
+	}
+}
+
+func buildSafeMCPDocument(document model.Document) map[string]any {
+	return map[string]any{
+		"id":              document.ID,
+		"knowledgeBaseId": document.KnowledgeBaseID,
+		"name":            document.Name,
+		"size":            document.Size,
+		"sizeLabel":       document.SizeLabel,
+		"uploadedAt":      document.UploadedAt,
+		"status":          document.Status,
+		"contentPreview":  document.ContentPreview,
+		"chunkCount":      document.ChunkCount,
+		"indexedAt":       document.IndexedAt,
+	}
+}
+
+func buildSafeMCPDocumentDiagnostics(diagnostics model.DocumentIndexDiagnostics) map[string]any {
+	return map[string]any{
+		"rawContentChars":       diagnostics.RawContentChars,
+		"chunkCount":            diagnostics.ChunkCount,
+		"vectorCount":           diagnostics.VectorCount,
+		"summaryChunkCount":     diagnostics.SummaryChunkCount,
+		"structuredRowCount":    diagnostics.StructuredRowCount,
+		"rawContentAvailable":   diagnostics.RawContentAvailable,
+		"qdrantEnabled":         diagnostics.QdrantEnabled,
+		"rawContentTruncated":   diagnostics.RawContentTruncated,
+		"chunkPreviewTruncated": diagnostics.ChunkPreviewTruncated,
+	}
+}
+
+func buildSafeMCPKnowledgeBaseHealth(health model.KnowledgeBaseHealthResponse) map[string]any {
+	documents := make([]map[string]any, 0, len(health.Documents))
+	for _, document := range health.Documents {
+		documents = append(documents, map[string]any{
+			"documentId":          document.DocumentID,
+			"documentName":        document.DocumentName,
+			"status":              document.Status,
+			"indexedAt":           document.IndexedAt,
+			"chunkCount":          document.ChunkCount,
+			"vectorCount":         document.VectorCount,
+			"summaryChunkCount":   document.SummaryChunkCount,
+			"structuredRowCount":  document.StructuredRowCount,
+			"rawContentChars":     document.RawContentChars,
+			"rawContentAvailable": document.RawContentAvailable,
+			"needsReindex":        document.NeedsReindex,
+			"recommendation":      document.Recommendation,
+		})
+	}
+
+	return map[string]any{
+		"knowledgeBaseId": health.KnowledgeBaseID,
+		"name":            health.Name,
+		"status":          health.Status,
+		"score":           health.Score,
+		"metrics": map[string]any{
+			"documentCount":      health.Metrics.DocumentCount,
+			"indexedCount":       health.Metrics.IndexedCount,
+			"processingCount":    health.Metrics.ProcessingCount,
+			"failedCount":        health.Metrics.FailedCount,
+			"emptyContentCount":  health.Metrics.EmptyContentCount,
+			"chunkCount":         health.Metrics.ChunkCount,
+			"vectorCount":        health.Metrics.VectorCount,
+			"summaryChunkCount":  health.Metrics.SummaryChunkCount,
+			"structuredRowCount": health.Metrics.StructuredRowCount,
+			"rawContentChars":    health.Metrics.RawContentChars,
+			"qdrantEnabled":      health.Metrics.QdrantEnabled,
+			"lastIndexedAt":      health.Metrics.LastIndexedAt,
+		},
+		"recommendations": health.Recommendations,
+		"documents":       documents,
 	}
 }
 

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +11,24 @@ import (
 
 	"ai-localbase/internal/model"
 )
+
+type blockingUploadReader struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	read    bool
+}
+
+func (r *blockingUploadReader) Read(buffer []byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	if !r.read {
+		<-r.release
+		r.read = true
+		copy(buffer, "content")
+		return len("content"), nil
+	}
+	return 0, io.EOF
+}
 
 func TestNewAppServiceDerivesStagingDirectoryFromUploadDirectory(t *testing.T) {
 	uploadDir := filepath.Join(t.TempDir(), "uploads")
@@ -106,5 +126,67 @@ func TestUploadStagingClaimAllowsOnlyOneConcurrentConsumer(t *testing.T) {
 	}
 	if err := staging.Release(staged.ID); err != nil {
 		t.Fatalf("release claimed upload: %v", err)
+	}
+}
+
+func TestUploadStagingEnforcesPrincipalAndGlobalQuotas(t *testing.T) {
+	staging := NewUploadStagingServiceWithLimits(t.TempDir(), time.Hour, UploadStagingLimits{
+		MaxFilesPerPrincipal: 2,
+		MaxBytesPerPrincipal: 10,
+		MaxBytes:             15,
+	})
+	ownerA := AuthPrincipal{AuthType: "api_key", APIKeyID: "key-a"}
+	ownerB := AuthPrincipal{AuthType: "api_key", APIKeyID: "key-b"}
+
+	if _, err := staging.StageBytesAs("first.md", []byte("123456"), "test", ownerA); err != nil {
+		t.Fatalf("stage first upload: %v", err)
+	}
+	if _, err := staging.StageBytesAs("second.md", []byte("12345"), "test", ownerA); err == nil {
+		t.Fatal("expected principal byte quota to reject the second upload")
+	} else if !errors.Is(err, ErrUploadStagingQuotaExceeded) {
+		t.Fatalf("expected staging quota error, got %v", err)
+	}
+
+	if _, err := staging.StageBytesAs("other.md", []byte("123456"), "test", ownerB); err != nil {
+		t.Fatalf("stage upload for another principal: %v", err)
+	}
+	if _, err := staging.StageBytesAs("global.md", []byte("1234"), "test", ownerB); err == nil {
+		t.Fatal("expected global byte quota to reject the upload")
+	}
+}
+
+func TestUploadStagingEnforcesPrincipalFileLimitAtomically(t *testing.T) {
+	staging := NewUploadStagingServiceWithLimits(t.TempDir(), time.Hour, UploadStagingLimits{
+		MaxFilesPerPrincipal: 1,
+	})
+	owner := AuthPrincipal{AuthType: "session", UserID: "user-a"}
+
+	if _, err := staging.StageBytesAs("first.md", []byte("content"), "test", owner); err != nil {
+		t.Fatalf("stage first upload: %v", err)
+	}
+	if _, err := staging.StageBytesAs("second.md", []byte("content"), "test", owner); err == nil {
+		t.Fatal("expected principal file quota to reject the second active upload")
+	}
+}
+
+func TestUploadStagingReservesConcurrentUploadsBeforeReading(t *testing.T) {
+	staging := NewUploadStagingServiceWithLimits(t.TempDir(), time.Hour, UploadStagingLimits{
+		MaxFilesPerPrincipal: 1,
+	})
+	owner := AuthPrincipal{AuthType: "api_key", APIKeyID: "key-a"}
+	reader := &blockingUploadReader{started: make(chan struct{}), release: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := staging.stageFromReader("first.md", int64(len("content")), reader, "test", owner)
+		result <- err
+	}()
+	<-reader.started
+
+	if _, err := staging.StageBytesAs("second.md", []byte("content"), "test", owner); err == nil {
+		t.Fatal("expected in-flight upload to consume the principal file quota")
+	}
+	close(reader.release)
+	if err := <-result; err != nil {
+		t.Fatalf("complete first upload: %v", err)
 	}
 }
