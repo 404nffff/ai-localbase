@@ -95,6 +95,16 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 		api.DELETE("/knowledge-bases/:id/documents/:documentId", appHandler.DeleteDocument)
 	}
 
+	// Staging is also an MCP upload transport. Session clients keep the normal
+	// CSRF protection, while API keys need the dedicated mcp:upload scope.
+	if serverConfig.EnableAuth {
+		r.POST("/api/uploads", auth.SessionOrAPIKeyMiddleware(authService, "mcp:upload"), appHandler.StageUpload)
+		r.POST("/api/config/mcp/danger-confirmations", auth.SessionOrAPIKeyMiddleware(authService, "mcp:danger"), appHandler.CreateMCPDangerConfirmation)
+	} else {
+		r.POST("/api/uploads", appHandler.StageUpload)
+		r.POST("/api/config/mcp/danger-confirmations", appHandler.CreateMCPDangerConfirmation)
+	}
+
 	// Upload endpoint (protected if auth enabled)
 	if serverConfig.EnableAuth {
 		r.POST("/upload", auth.SessionMiddleware(authService), appHandler.Upload)

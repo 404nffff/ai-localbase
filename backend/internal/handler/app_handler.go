@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"ai-localbase/internal/auth"
 	"ai-localbase/internal/model"
 	"ai-localbase/internal/service"
 	"ai-localbase/internal/util"
@@ -96,7 +97,7 @@ func (h *AppHandler) CreateMCPDangerConfirmation(c *gin.Context) {
 		return
 	}
 
-	confirmation, err := h.appService.CreateMCPDangerConfirmation(req)
+	confirmation, err := h.appService.CreateMCPDangerConfirmationAs(req, auth.PrincipalFromContext(c))
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

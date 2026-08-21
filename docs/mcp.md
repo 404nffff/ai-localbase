@@ -727,11 +727,11 @@ curl -X POST http://localhost:8080/api/config/mcp/danger-confirmations \
 }
 ```
 
-调用危险工具时，把 `confirmNonce` 放入工具 `arguments`。nonce 会绑定工具名和参数 hash，过期或使用后立即失效。
+调用危险工具时，把 `confirmNonce` 放入工具 `arguments`。nonce 会绑定工具名、业务参数 hash 和创建主体，过期或使用后立即失效。使用 API Key 创建的 nonce 只能由同一个 API Key 使用；使用 Web Session 创建的 nonce 按用户绑定，可供该用户自己的 API Key 使用。
 
 旧版 `X-MCP-Confirm` 和 `?confirm_token=` 已完全停用；即使 `ENABLE_MCP_LEGACY_TOKEN=true` 也不能再作为危险操作确认方式。新客户端必须先通过 `POST /api/config/mcp/danger-confirmations` 获取 nonce，再把 `confirmNonce` 放进危险工具 `arguments`。
 
-如果未提供 nonce、nonce 错误、重复使用或已过期，服务将返回 `403`。
+如果未提供 nonce、nonce 错误、主体不匹配、重复使用或已过期，服务将返回 `403`。
 
 ---
 

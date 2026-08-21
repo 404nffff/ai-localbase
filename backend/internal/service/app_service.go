@@ -82,10 +82,12 @@ type AppService struct {
 }
 
 type mcpDangerConfirmationRecord struct {
-	Nonce     string
-	ToolName  string
-	ParamHash string
-	ExpiresAt time.Time
+	Nonce         string
+	ToolName      string
+	ParamHash     string
+	ExpiresAt     time.Time
+	OwnerUserID   string
+	OwnerAPIKeyID string
 }
 
 const mcpDangerConfirmationDefaultTTL = 5 * time.Minute
@@ -732,6 +734,10 @@ func GenerateCSRFToken() (string, error) {
 }
 
 func (s *AppService) CreateMCPDangerConfirmation(req model.MCPDangerConfirmationRequest) (model.MCPDangerConfirmationResponse, error) {
+	return s.CreateMCPDangerConfirmationAs(req, AuthPrincipal{})
+}
+
+func (s *AppService) CreateMCPDangerConfirmationAs(req model.MCPDangerConfirmationRequest, owner AuthPrincipal) (model.MCPDangerConfirmationResponse, error) {
 	if s == nil {
 		return model.MCPDangerConfirmationResponse{}, fmt.Errorf("app service is nil")
 	}
@@ -756,6 +762,7 @@ func (s *AppService) CreateMCPDangerConfirmation(req model.MCPDangerConfirmation
 	}
 	nonce := generateMCPConfirmNonce()
 	expiresAt := time.Now().UTC().Add(ttl)
+	ownerAPIKeyID := strings.TrimSpace(owner.APIKeyID)
 
 	s.mcpDangerMu.Lock()
 	if s.mcpDangerConfirms == nil {
@@ -763,10 +770,12 @@ func (s *AppService) CreateMCPDangerConfirmation(req model.MCPDangerConfirmation
 	}
 	s.pruneExpiredMCPDangerConfirmationsLocked(time.Now().UTC())
 	s.mcpDangerConfirms[nonce] = mcpDangerConfirmationRecord{
-		Nonce:     nonce,
-		ToolName:  toolName,
-		ParamHash: paramHash,
-		ExpiresAt: expiresAt,
+		Nonce:         nonce,
+		ToolName:      toolName,
+		ParamHash:     paramHash,
+		ExpiresAt:     expiresAt,
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: ownerAPIKeyID,
 	}
 	s.mcpDangerMu.Unlock()
 
@@ -779,6 +788,10 @@ func (s *AppService) CreateMCPDangerConfirmation(req model.MCPDangerConfirmation
 }
 
 func (s *AppService) ConsumeMCPDangerConfirmation(toolName string, args map[string]any, nonce string) error {
+	return s.ConsumeMCPDangerConfirmationAs(toolName, args, nonce, AuthPrincipal{})
+}
+
+func (s *AppService) ConsumeMCPDangerConfirmationAs(toolName string, args map[string]any, nonce string, owner AuthPrincipal) error {
 	if s == nil {
 		return fmt.Errorf("app service is nil")
 	}
@@ -811,8 +824,22 @@ func (s *AppService) ConsumeMCPDangerConfirmation(toolName string, args map[stri
 		s.pruneExpiredMCPDangerConfirmationsLocked(now)
 		return fmt.Errorf("invalid danger confirmation nonce")
 	}
+	if !mcpDangerOwnerMatches(record, owner) {
+		s.pruneExpiredMCPDangerConfirmationsLocked(now)
+		return fmt.Errorf("danger confirmation belongs to another principal")
+	}
 	s.pruneExpiredMCPDangerConfirmationsLocked(now)
 	return nil
+}
+
+func mcpDangerOwnerMatches(record mcpDangerConfirmationRecord, owner AuthPrincipal) bool {
+	if record.OwnerAPIKeyID != "" {
+		return strings.TrimSpace(owner.APIKeyID) == record.OwnerAPIKeyID
+	}
+	if record.OwnerUserID != "" {
+		return strings.TrimSpace(owner.UserID) == record.OwnerUserID
+	}
+	return strings.TrimSpace(owner.AuthType) == ""
 }
 
 func (s *AppService) pruneExpiredMCPDangerConfirmationsLocked(now time.Time) {
@@ -832,7 +859,16 @@ func generateMCPConfirmNonce() string {
 }
 
 func hashMCPDangerArguments(args map[string]any) (string, error) {
-	sanitized := sanitizeMCPDangerValue(args)
+	// The nonce is a transport-level proof and must not change the hash of the
+	// business arguments it confirms.
+	arguments := make(map[string]any, len(args))
+	for key, value := range args {
+		if strings.EqualFold(strings.TrimSpace(key), "confirmNonce") {
+			continue
+		}
+		arguments[key] = value
+	}
+	sanitized := sanitizeMCPDangerValue(arguments)
 	encoded, err := json.Marshal(sanitized)
 	if err != nil {
 		return "", fmt.Errorf("hash danger confirmation arguments: %w", err)

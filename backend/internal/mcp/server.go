@@ -28,7 +28,7 @@ type APIKeyValidator interface {
 }
 
 type DangerConfirmationValidator interface {
-	ConsumeMCPDangerConfirmation(toolName string, args map[string]any, nonce string) error
+	ConsumeMCPDangerConfirmationAs(toolName string, args map[string]any, nonce string, owner service.AuthPrincipal) error
 }
 
 type SecurityEventRecorder interface {
@@ -526,7 +526,7 @@ func (s *Server) authorizeDangerousTool(c *gin.Context, toolName string, args ma
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "mcp danger confirmation validator is unavailable"})
 			return false
 		}
-		if err := s.dangerConfirmationValidator.ConsumeMCPDangerConfirmation(toolName, args, confirmNonce); err != nil {
+		if err := s.dangerConfirmationValidator.ConsumeMCPDangerConfirmationAs(toolName, args, confirmNonce, authCtx.Principal); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return false
 		}
