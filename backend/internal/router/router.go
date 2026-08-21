@@ -57,7 +57,6 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 		api.GET("/config", appHandler.GetConfig)
 		api.PUT("/config", appHandler.UpdateConfig)
 		api.POST("/config/mcp/reset-token", appHandler.ResetMCPToken)
-		api.POST("/config/mcp/danger-confirmations", appHandler.CreateMCPDangerConfirmation)
 		api.POST("/config/test-chat-model", configHandler.TestChatModel)
 		api.POST("/config/test-embedding-model", configHandler.TestEmbeddingModel)
 		api.GET("/config/health-summary", configHandler.HealthSummary)
@@ -83,7 +82,6 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 		api.PUT("/eval/datasets/:datasetId/items/:itemId", appHandler.UpdateEvalDatasetItem)
 		api.DELETE("/eval/datasets/:datasetId/items/:itemId", appHandler.DeleteEvalDatasetItem)
 		api.DELETE("/eval/datasets/:datasetId", appHandler.DeleteEvalDataset)
-		api.POST("/uploads", appHandler.StageUpload)
 		api.GET("/jobs/:jobId", appHandler.GetJobStatus)
 		api.POST("/jobs/:jobId/cancel", appHandler.CancelJob)
 		api.GET("/knowledge-bases/:id/documents", appHandler.ListDocuments)
@@ -96,13 +94,20 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 	}
 
 	// Staging is also an MCP upload transport. Session clients keep the normal
-	// CSRF protection, while API keys need the dedicated mcp:upload scope.
-	if serverConfig.EnableAuth {
+	// upload path, while API keys only gain access when MCP is enabled.
+	if serverConfig.EnableAuth && serverConfig.EnableMCP {
 		r.POST("/api/uploads", auth.SessionOrAPIKeyMiddleware(authService, "mcp:upload"), appHandler.StageUpload)
-		r.POST("/api/config/mcp/danger-confirmations", auth.SessionOrAPIKeyMiddleware(authService, "mcp:danger"), appHandler.CreateMCPDangerConfirmation)
+	} else if serverConfig.EnableAuth {
+		r.POST("/api/uploads", auth.SessionMiddleware(authService), appHandler.StageUpload)
 	} else {
 		r.POST("/api/uploads", appHandler.StageUpload)
-		r.POST("/api/config/mcp/danger-confirmations", appHandler.CreateMCPDangerConfirmation)
+	}
+	if serverConfig.EnableAuth && serverConfig.EnableMCP {
+		r.POST("/api/config/mcp/danger-confirmations", auth.SessionOrAPIKeyMiddleware(authService, "mcp:danger"), appHandler.CreateMCPDangerConfirmation)
+	} else {
+		r.POST("/api/config/mcp/danger-confirmations", func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "mcp danger confirmations require ENABLE_MCP=true and ENABLE_AUTH=true"})
+		})
 	}
 
 	// Upload endpoint (protected if auth enabled)

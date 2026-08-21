@@ -139,6 +139,41 @@ func TestMCPDisabledReturnsExplicitStatus(t *testing.T) {
 	}
 }
 
+func TestMCPAuxiliaryRoutesRespectMCPState(t *testing.T) {
+	engine, _, cleanup := newTestRouterWithServerConfig(t, func(serverConfig *model.ServerConfig) {
+		serverConfig.EnableAuth = true
+		serverConfig.AuthUsername = "root"
+		serverConfig.AuthPassword = "correct-password"
+		serverConfig.EnableMCP = false
+	})
+	defer cleanup()
+
+	sessionHeaders := loginTestSessionHeaders(t, engine)
+	stageResp := performMultipartUploadWithHeaders(t, engine, http.MethodPost, "/api/uploads", "session-upload.md", "# Session upload", sessionHeaders)
+	if stageResp.Code != http.StatusOK {
+		t.Fatalf("expected session upload to remain available, got %d, body=%s", stageResp.Code, stageResp.Body.String())
+	}
+
+	apiKeyHeaders := createTestAPIKeyHeaders(t, engine, sessionHeaders, "mcp-disabled-upload", []string{"mcp:upload"})
+	apiKeyStageResp := performMultipartUploadWithHeaders(t, engine, http.MethodPost, "/api/uploads", "api-key-upload.md", "# API key upload", apiKeyHeaders)
+	if apiKeyStageResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected API key upload to be rejected while MCP is disabled, got %d, body=%s", apiKeyStageResp.Code, apiKeyStageResp.Body.String())
+	}
+
+	dangerResp := performRequestWithHeaders(
+		t,
+		engine,
+		http.MethodPost,
+		"/api/config/mcp/danger-confirmations",
+		bytes.NewReader(mustMarshalJSON(t, map[string]any{"toolName": "delete_conversation", "arguments": map[string]any{"id": "conversation-1"}})),
+		"application/json",
+		sessionHeaders,
+	)
+	if dangerResp.Code != http.StatusForbidden {
+		t.Fatalf("expected danger confirmation to be rejected while MCP is disabled, got %d, body=%s", dangerResp.Code, dangerResp.Body.String())
+	}
+}
+
 func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	engine, _, cleanup := newTestRouterWithServerConfig(t, func(serverConfig *model.ServerConfig) {
 		serverConfig.EnableMCP = true
@@ -161,6 +196,14 @@ func TestMCPRejectsWhenAuthDisabled(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "ENABLE_AUTH=true") {
 		t.Fatalf("expected auth required error, got %s", resp.Body.String())
+	}
+
+	dangerResp := performRequest(t, engine, http.MethodPost, "/api/config/mcp/danger-confirmations", bytes.NewReader(mustMarshalJSON(t, map[string]any{
+		"toolName":  "delete_conversation",
+		"arguments": map[string]any{"id": "conversation-1"},
+	})), "application/json")
+	if dangerResp.Code != http.StatusForbidden {
+		t.Fatalf("expected danger confirmation to require auth, got %d, body=%s", dangerResp.Code, dangerResp.Body.String())
 	}
 }
 
