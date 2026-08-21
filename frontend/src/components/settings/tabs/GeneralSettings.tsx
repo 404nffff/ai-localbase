@@ -12,6 +12,7 @@ interface PreferenceRow {
   title: string
   description: string
   value: string
+  icon: AppIconName
   meta?: string
   status?: 'enabled' | 'disabled' | 'neutral'
 }
@@ -60,24 +61,28 @@ const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config, thinkModel })
       title: '聊天模型',
       description: `${chatProviderLabel} · ${config.chat.baseUrl || '未配置 Base URL'}`,
       value: config.chat.model || '未配置',
+      icon: 'message',
       status: config.chat.model ? 'neutral' : 'disabled',
     },
     {
       title: '生成与推理',
       description: `普通聊天温度 ${config.chat.temperature.toFixed(1)} · 知识库温度 ${config.chat.knowledgeTemperature.toFixed(1)}`,
       value: thinkModel || config.chat.model || '跟随聊天模型',
+      icon: 'brain',
       meta: `思考模型 · 上下文 ${config.chat.contextMessageLimit} 条`,
     },
     {
       title: 'Embedding 模型',
       description: `${embeddingProviderLabel} · ${config.embedding.baseUrl || '未配置 Base URL'}`,
       value: config.embedding.model || '未配置',
+      icon: 'database',
       status: config.embedding.model ? 'neutral' : 'disabled',
     },
     {
       title: '检索策略',
       description: `${rerankLabel} · ${config.retrieval.enableQueryRewrite ? `${config.retrieval.queryRewriteMaxVariants} 路问题改写` : '不改写问题'}`,
       value: searchModeLabel,
+      icon: 'sliders',
       meta: config.retrieval.enableLowConfidenceBoost ? '低置信补强已启用' : '低置信补强未启用',
       status: config.retrieval.hybridSearchEnabled ? 'enabled' : 'neutral',
     },
@@ -85,12 +90,14 @@ const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config, thinkModel })
       title: '召回规模',
       description: `文档 ${config.retrieval.topKDocument}/${config.retrieval.candidateTopKDocument} · 知识库 ${config.retrieval.topKKnowledgeBase}/${config.retrieval.candidateTopKAllDocs}`,
       value: config.retrieval.maxContextChars.toLocaleString(),
+      icon: 'search',
       meta: `上下文字符 · 每文档 ${config.retrieval.maxChunksPerDocument} 个片段`,
     },
     {
       title: 'MCP 接入',
       description: `${config.mcp.basePath || '未配置路径'} · ${config.mcp.recommendedAuthMode || 'API Key Scope'}`,
       value: config.mcp.enabled ? '已启用' : '未启用',
+      icon: 'key',
       meta: `危险操作：${config.mcp.dangerConfirmationMode || 'confirmNonce'}`,
       status: config.mcp.enabled ? 'enabled' : 'disabled',
     },
@@ -132,7 +139,10 @@ const GeneralSettings: React.FC<GeneralSettingsProps> = ({ config, thinkModel })
         <div className="settings-overview-config-list">
           {preferenceRows.map((row) => (
             <div className="settings-overview-config-row" key={row.title}>
-              <div>
+              <span className="settings-overview-config-icon" aria-hidden="true">
+                <AppIcon name={row.icon} size={16} />
+              </span>
+              <div className="settings-overview-config-copy">
                 <strong>{row.title}</strong>
                 <p>{row.description}</p>
               </div>

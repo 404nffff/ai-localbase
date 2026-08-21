@@ -423,8 +423,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             >
               <AppIcon name="chevronLeft" size={18} />
             </button>
+            <span className="settings-main-header-icon" aria-hidden="true">
+              <AppIcon name={activeNavItem.icon} size={18} />
+            </span>
             <div>
               <h3>{activeNavItem.label}</h3>
+              <p className="settings-main-visible-description">{activeNavItem.description}</p>
             </div>
           </header>
 
