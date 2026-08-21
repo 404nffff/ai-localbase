@@ -49,6 +49,10 @@ func NewUploadStagingService(rootDir string, ttl time.Duration) *UploadStagingSe
 }
 
 func (s *UploadStagingService) StageMultipartFile(file *multipart.FileHeader, source string) (model.StagedUpload, error) {
+	return s.StageMultipartFileAs(file, source, AuthPrincipal{})
+}
+
+func (s *UploadStagingService) StageMultipartFileAs(file *multipart.FileHeader, source string, owner AuthPrincipal) (model.StagedUpload, error) {
 	if s == nil {
 		return model.StagedUpload{}, fmt.Errorf("upload staging service is nil")
 	}
@@ -62,14 +66,18 @@ func (s *UploadStagingService) StageMultipartFile(file *multipart.FileHeader, so
 	}
 	defer opened.Close()
 
-	return s.stageFromReader(file.Filename, file.Size, opened, source)
+	return s.stageFromReader(file.Filename, file.Size, opened, source, owner)
 }
 
 func (s *UploadStagingService) StageBytes(fileName string, content []byte, source string) (model.StagedUpload, error) {
+	return s.StageBytesAs(fileName, content, source, AuthPrincipal{})
+}
+
+func (s *UploadStagingService) StageBytesAs(fileName string, content []byte, source string, owner AuthPrincipal) (model.StagedUpload, error) {
 	if s == nil {
 		return model.StagedUpload{}, fmt.Errorf("upload staging service is nil")
 	}
-	return s.stageFromReader(fileName, int64(len(content)), strings.NewReader(string(content)), source)
+	return s.stageFromReader(fileName, int64(len(content)), strings.NewReader(string(content)), source, owner)
 }
 
 func (s *UploadStagingService) Get(uploadID string) (model.StagedUpload, error) {
@@ -102,6 +110,10 @@ func (s *UploadStagingService) get(uploadID string, allowProcessing bool) (model
 
 // Claim atomically reserves a staged upload for one indexing attempt.
 func (s *UploadStagingService) Claim(uploadID string) (model.StagedUpload, error) {
+	return s.ClaimAs(uploadID, AuthPrincipal{})
+}
+
+func (s *UploadStagingService) ClaimAs(uploadID string, owner AuthPrincipal) (model.StagedUpload, error) {
 	if s == nil {
 		return model.StagedUpload{}, fmt.Errorf("staged upload service is nil")
 	}
@@ -121,6 +133,9 @@ func (s *UploadStagingService) Claim(uploadID string) (model.StagedUpload, error
 	}
 	if item.Status != stagedUploadStatusStaged {
 		return model.StagedUpload{}, fmt.Errorf("staged upload is not available")
+	}
+	if !stagedUploadOwnerMatches(item, owner) {
+		return model.StagedUpload{}, fmt.Errorf("staged upload is not owned by this principal")
 	}
 	item.Status = stagedUploadStatusProcessing
 	s.items[trimmedID] = item
@@ -319,7 +334,7 @@ func (s *UploadStagingService) CleanupExpired() error {
 	return nil
 }
 
-func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, reader io.Reader, source string) (model.StagedUpload, error) {
+func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, reader io.Reader, source string, owner AuthPrincipal) (model.StagedUpload, error) {
 	trimmedName := strings.TrimSpace(fileName)
 	if trimmedName == "" {
 		return model.StagedUpload{}, fmt.Errorf("file name is required")
@@ -358,16 +373,18 @@ func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, 
 
 	createdAt := time.Now().UTC()
 	staged := model.StagedUpload{
-		ID:        uploadID,
-		FileName:  trimmedName,
-		Path:      destination,
-		Size:      written,
-		SizeLabel: util.FormatFileSize(written),
-		SHA256:    hex.EncodeToString(hasher.Sum(nil)),
-		CreatedAt: createdAt.Format(time.RFC3339),
-		ExpiresAt: createdAt.Add(s.ttl).Format(time.RFC3339),
-		Status:    stagedUploadStatusStaged,
-		Source:    strings.TrimSpace(source),
+		ID:            uploadID,
+		FileName:      trimmedName,
+		Path:          destination,
+		Size:          written,
+		SizeLabel:     util.FormatFileSize(written),
+		SHA256:        hex.EncodeToString(hasher.Sum(nil)),
+		CreatedAt:     createdAt.Format(time.RFC3339),
+		ExpiresAt:     createdAt.Add(s.ttl).Format(time.RFC3339),
+		Status:        stagedUploadStatusStaged,
+		Source:        strings.TrimSpace(source),
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: strings.TrimSpace(owner.APIKeyID),
 	}
 
 	s.mu.Lock()
@@ -375,6 +392,29 @@ func (s *UploadStagingService) stageFromReader(fileName string, sizeHint int64, 
 	s.mu.Unlock()
 
 	return staged, nil
+}
+
+func stagedUploadOwnerMatches(item model.StagedUpload, owner AuthPrincipal) bool {
+	if strings.TrimSpace(owner.AuthType) == "" {
+		return true
+	}
+	if hasScope(owner.Scopes, "mcp:admin") {
+		return true
+	}
+	if strings.TrimSpace(owner.APIKeyID) != "" {
+		return strings.TrimSpace(item.OwnerAPIKeyID) == strings.TrimSpace(owner.APIKeyID)
+	}
+	return strings.TrimSpace(item.OwnerAPIKeyID) == "" && strings.TrimSpace(item.OwnerUserID) == strings.TrimSpace(owner.UserID)
+}
+
+func hasScope(scopes []string, required string) bool {
+	required = strings.ToLower(strings.TrimSpace(required))
+	for _, scope := range scopes {
+		if strings.ToLower(strings.TrimSpace(scope)) == required {
+			return true
+		}
+	}
+	return false
 }
 
 func isStagedUploadExpired(item model.StagedUpload) bool {

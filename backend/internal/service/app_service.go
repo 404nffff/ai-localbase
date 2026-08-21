@@ -58,6 +58,13 @@ var (
 	ErrConversationScopeUpgradeNeeded = errors.New("legacy conversation scope is not trusted")
 )
 
+func normalizeServiceContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 type AppService struct {
 	state             *model.AppState
 	store             *AppStateStore
@@ -509,17 +516,25 @@ func (s *AppService) AuthDeploymentWarnings() []string {
 }
 
 func (s *AppService) StageUpload(file *multipart.FileHeader, source string) (model.StagedUpload, error) {
+	return s.StageUploadAs(file, source, AuthPrincipal{})
+}
+
+func (s *AppService) StageUploadAs(file *multipart.FileHeader, source string, owner AuthPrincipal) (model.StagedUpload, error) {
 	if s == nil || s.staging == nil {
 		return model.StagedUpload{}, fmt.Errorf("upload staging service is not configured")
 	}
-	return s.staging.StageMultipartFile(file, source)
+	return s.staging.StageMultipartFileAs(file, source, owner)
 }
 
 func (s *AppService) StageInlineUpload(fileName string, content []byte, source string) (model.StagedUpload, error) {
+	return s.StageInlineUploadAs(fileName, content, source, AuthPrincipal{})
+}
+
+func (s *AppService) StageInlineUploadAs(fileName string, content []byte, source string, owner AuthPrincipal) (model.StagedUpload, error) {
 	if s == nil || s.staging == nil {
 		return model.StagedUpload{}, fmt.Errorf("upload staging service is not configured")
 	}
-	return s.staging.StageBytes(fileName, content, source)
+	return s.staging.StageBytesAs(fileName, content, source, owner)
 }
 
 func (s *AppService) CleanupUploadStaging() error {
@@ -530,15 +545,27 @@ func (s *AppService) CleanupUploadStaging() error {
 }
 
 func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName string) (model.Document, error) {
+	return s.RegisterStagedUploadAs(context.Background(), uploadID, knowledgeBaseID, fileName, AuthPrincipal{})
+}
+
+func (s *AppService) RegisterStagedUploadAs(ctx context.Context, uploadID, knowledgeBaseID, fileName string, owner AuthPrincipal) (model.Document, error) {
 	if s == nil || s.staging == nil {
 		return model.Document{}, fmt.Errorf("upload staging service is not configured")
+	}
+	ctx = normalizeServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return model.Document{}, err
 	}
 	resolvedKnowledgeBaseID, err := s.ResolveKnowledgeBaseID(knowledgeBaseID)
 	if err != nil {
 		return model.Document{}, err
 	}
-	staged, err := s.staging.Claim(uploadID)
+	staged, err := s.staging.ClaimAs(uploadID, owner)
 	if err != nil {
+		return model.Document{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = s.staging.Release(staged.ID)
 		return model.Document{}, err
 	}
 	permanentPath, err := s.staging.CopyTo(staged.ID, s.serverConfig.UploadDir)
@@ -561,7 +588,12 @@ func (s *AppService) RegisterStagedUpload(uploadID, knowledgeBaseID, fileName st
 		Path:            permanentPath,
 		ContentPreview:  util.ExtractContentPreview(permanentPath),
 	}
-	uploaded, err := s.IndexDocument(document)
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(permanentPath)
+		_ = s.staging.Release(staged.ID)
+		return model.Document{}, err
+	}
+	uploaded, err := s.IndexDocumentWithContext(ctx, document)
 	if err != nil {
 		_ = os.Remove(permanentPath)
 		_ = s.staging.Release(staged.ID)
@@ -900,6 +932,10 @@ func sanitizeMCPDangerValue(value any) any {
 }
 
 func (s *AppService) StartBatchIndexJob(knowledgeBaseID string, uploadIDs []string, concurrency int) (model.MCPJob, error) {
+	return s.StartBatchIndexJobAs(knowledgeBaseID, uploadIDs, concurrency, AuthPrincipal{})
+}
+
+func (s *AppService) StartBatchIndexJobAs(knowledgeBaseID string, uploadIDs []string, concurrency int, owner AuthPrincipal) (model.MCPJob, error) {
 	if s == nil {
 		return model.MCPJob{}, fmt.Errorf("app service is nil")
 	}
@@ -933,13 +969,15 @@ func (s *AppService) StartBatchIndexJob(knowledgeBaseID string, uploadIDs []stri
 
 	now := util.NowRFC3339()
 	job := model.MCPJob{
-		ID:        util.NextID("job"),
-		Type:      "batch-index",
-		Status:    "queued",
-		Progress:  0,
-		Summary:   fmt.Sprintf("准备索引 %d 个文档。", len(ids)),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            util.NextID("job"),
+		Type:          "batch-index",
+		Status:        "queued",
+		Progress:      0,
+		Summary:       fmt.Sprintf("准备索引 %d 个文档。", len(ids)),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: strings.TrimSpace(owner.APIKeyID),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -950,12 +988,12 @@ func (s *AppService) StartBatchIndexJob(knowledgeBaseID string, uploadIDs []stri
 
 	go func() {
 		defer s.mcpJobWG.Done()
-		s.runBatchIndexJob(ctx, job.ID, knowledgeBaseID, ids, concurrency)
+		s.runBatchIndexJob(ctx, job.ID, knowledgeBaseID, ids, concurrency, owner)
 	}()
 	return job, nil
 }
 
-func (s *AppService) runBatchIndexJob(ctx context.Context, jobID, knowledgeBaseID string, uploadIDs []string, concurrency int) {
+func (s *AppService) runBatchIndexJob(ctx context.Context, jobID, knowledgeBaseID string, uploadIDs []string, concurrency int, owner AuthPrincipal) {
 	s.updateMCPJob(jobID, func(job *model.MCPJob) {
 		job.Status = "running"
 		job.Progress = 5
@@ -978,7 +1016,7 @@ func (s *AppService) runBatchIndexJob(ctx context.Context, jobID, knowledgeBaseI
 				results <- result{value: map[string]any{"uploadId": id, "success": false, "error": "job cancelled"}}
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-				document, err := s.RegisterStagedUpload(id, knowledgeBaseID, "")
+				document, err := s.RegisterStagedUploadAs(ctx, id, knowledgeBaseID, "", owner)
 				if err != nil {
 					results <- result{value: map[string]any{"uploadId": id, "success": false, "error": err.Error()}}
 					return
@@ -1029,8 +1067,24 @@ func (s *AppService) runBatchIndexJob(ctx context.Context, jobID, knowledgeBaseI
 }
 
 func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (model.MCPJob, error) {
+	return s.StartMCPImportJobAs(req, AuthPrincipal{})
+}
+
+func (s *AppService) StartMCPImportJobAs(req model.MCPStartImportJobRequest, owner AuthPrincipal) (model.MCPJob, error) {
 	if s == nil {
 		return model.MCPJob{}, fmt.Errorf("app service is nil")
+	}
+	switch strings.ToLower(strings.TrimSpace(req.JobType)) {
+	case "", "import":
+		// Preserve the original text import contract.
+	case "reindex":
+		return s.startMCPReindexJob(req, owner)
+	case "eval_dataset":
+		return s.startMCPEvalDatasetJob(req, owner)
+	case "batch_index":
+		return s.StartBatchIndexJobAs(req.KnowledgeBaseID, req.UploadIDs, req.Concurrency, owner)
+	default:
+		return model.MCPJob{}, fmt.Errorf("unsupported MCP job type: %s", req.JobType)
 	}
 	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
 	fileName := strings.TrimSpace(req.FileName)
@@ -1046,13 +1100,15 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 
 	now := util.NowRFC3339()
 	job := model.MCPJob{
-		ID:        util.NextID("job"),
-		Type:      "import",
-		Status:    "queued",
-		Progress:  0,
-		Summary:   fmt.Sprintf("准备导入《%s》。", fileName),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            util.NextID("job"),
+		Type:          "import",
+		Status:        "queued",
+		Progress:      0,
+		Summary:       fmt.Sprintf("准备导入《%s》。", fileName),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: strings.TrimSpace(owner.APIKeyID),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1067,10 +1123,120 @@ func (s *AppService) StartMCPImportJob(req model.MCPStartImportJobRequest) (mode
 			KnowledgeBaseID: knowledgeBaseID,
 			FileName:        fileName,
 			Content:         req.Content,
-		})
+		}, owner)
 	}()
 
 	return job, nil
+}
+
+func (s *AppService) startMCPReindexJob(req model.MCPStartImportJobRequest, owner AuthPrincipal) (model.MCPJob, error) {
+	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	documentID := strings.TrimSpace(req.DocumentID)
+	if knowledgeBaseID == "" {
+		return model.MCPJob{}, fmt.Errorf("knowledgeBaseId is required")
+	}
+	if documentID == "" {
+		return model.MCPJob{}, fmt.Errorf("documentId is required")
+	}
+	if _, err := s.ResolveKnowledgeBaseID(knowledgeBaseID); err != nil {
+		return model.MCPJob{}, err
+	}
+
+	now := util.NowRFC3339()
+	job := model.MCPJob{
+		ID:            util.NextID("job"),
+		Type:          "reindex",
+		Status:        "queued",
+		Summary:       fmt.Sprintf("准备重建文档 %s 的索引。", documentID),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: strings.TrimSpace(owner.APIKeyID),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if !s.registerMCPJob(job, cancel) {
+		cancel()
+		return model.MCPJob{}, fmt.Errorf("mcp jobs are shutting down")
+	}
+	go func() {
+		defer s.mcpJobWG.Done()
+		s.runMCPReindexJob(ctx, job.ID, knowledgeBaseID, documentID)
+	}()
+	return job, nil
+}
+
+func (s *AppService) runMCPReindexJob(ctx context.Context, jobID, knowledgeBaseID, documentID string) {
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Status = "running"
+		job.Progress = 10
+		job.Summary = fmt.Sprintf("正在重建文档 %s 的索引。", documentID)
+	})
+	if err := ctx.Err(); err != nil {
+		s.completeMCPJob(jobID, "cancelled", 0, "重建索引任务已取消。", nil, "")
+		return
+	}
+	document, err := s.ReindexDocumentWithContext(ctx, knowledgeBaseID, documentID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			s.completeMCPJob(jobID, "cancelled", 10, "重建索引任务已取消。", nil, "")
+			return
+		}
+		s.completeMCPJob(jobID, "failed", 100, "重建索引任务失败。", nil, err.Error())
+		return
+	}
+	s.completeMCPJob(jobID, "succeeded", 100, fmt.Sprintf("文档《%s》索引重建完成。", document.Name), map[string]any{
+		"document":        document,
+		"knowledgeBaseId": knowledgeBaseID,
+	}, "")
+}
+
+func (s *AppService) startMCPEvalDatasetJob(req model.MCPStartImportJobRequest, owner AuthPrincipal) (model.MCPJob, error) {
+	now := util.NowRFC3339()
+	job := model.MCPJob{
+		ID:            util.NextID("job"),
+		Type:          "eval-dataset",
+		Status:        "queued",
+		Summary:       "准备生成评估数据集。",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OwnerUserID:   strings.TrimSpace(owner.UserID),
+		OwnerAPIKeyID: strings.TrimSpace(owner.APIKeyID),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if !s.registerMCPJob(job, cancel) {
+		cancel()
+		return model.MCPJob{}, fmt.Errorf("mcp jobs are shutting down")
+	}
+	evalRequest := model.GenerateEvalDatasetRequest{
+		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
+		DocumentID:      strings.TrimSpace(req.DocumentID),
+		MaxPerDocument:  req.MaxPerDocument,
+	}
+	go func() {
+		defer s.mcpJobWG.Done()
+		s.runMCPEvalDatasetJob(ctx, job.ID, evalRequest)
+	}()
+	return job, nil
+}
+
+func (s *AppService) runMCPEvalDatasetJob(ctx context.Context, jobID string, req model.GenerateEvalDatasetRequest) {
+	s.updateMCPJob(jobID, func(job *model.MCPJob) {
+		job.Status = "running"
+		job.Progress = 10
+		job.Summary = "正在生成评估数据集。"
+	})
+	response, err := s.GenerateEvalDatasetWithContext(ctx, req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			s.completeMCPJob(jobID, "cancelled", 10, "评估数据集任务已取消。", nil, "")
+			return
+		}
+		s.completeMCPJob(jobID, "failed", 100, "评估数据集任务失败。", nil, err.Error())
+		return
+	}
+	s.completeMCPJob(jobID, "succeeded", 100, fmt.Sprintf("评估数据集生成完成，共 %d 条样本。", response.Count), map[string]any{
+		"dataset": response,
+	}, "")
 }
 
 func (s *AppService) registerMCPJob(job model.MCPJob, cancel context.CancelFunc) bool {
@@ -1135,7 +1301,7 @@ func (s *AppService) ShutdownJobs(ctx context.Context) error {
 	}
 }
 
-func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req model.MCPStartImportJobRequest) {
+func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req model.MCPStartImportJobRequest, owner AuthPrincipal) {
 	s.updateMCPJob(jobID, func(job *model.MCPJob) {
 		job.Status = "running"
 		job.Progress = 10
@@ -1162,7 +1328,7 @@ func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req mode
 		job.Progress = 45
 		job.Summary = "文件已进入暂存。"
 	})
-	staged, err := s.StageInlineUpload(req.FileName, []byte(req.Content), "mcp-job-import")
+	staged, err := s.StageInlineUploadAs(req.FileName, []byte(req.Content), "mcp-job-import", owner)
 	if err != nil {
 		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
 		return
@@ -1185,7 +1351,7 @@ func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req mode
 		return
 	default:
 	}
-	uploaded, err := s.RegisterStagedUpload(staged.ID, req.KnowledgeBaseID, req.FileName)
+	uploaded, err := s.RegisterStagedUploadAs(ctx, staged.ID, req.KnowledgeBaseID, req.FileName, owner)
 	if err != nil {
 		s.completeMCPJob(jobID, "failed", 100, "导入任务失败。", nil, err.Error())
 		return
@@ -1204,6 +1370,10 @@ func (s *AppService) runMCPImportJob(ctx context.Context, jobID string, req mode
 }
 
 func (s *AppService) GetMCPJobStatus(jobID string) (model.MCPJob, error) {
+	return s.GetMCPJobStatusAs(jobID, AuthPrincipal{})
+}
+
+func (s *AppService) GetMCPJobStatusAs(jobID string, owner AuthPrincipal) (model.MCPJob, error) {
 	if s == nil {
 		return model.MCPJob{}, fmt.Errorf("app service is nil")
 	}
@@ -1214,10 +1384,17 @@ func (s *AppService) GetMCPJobStatus(jobID string) (model.MCPJob, error) {
 	if !ok {
 		return model.MCPJob{}, fmt.Errorf("job not found")
 	}
+	if !mcpJobOwnerMatches(job, owner) {
+		return model.MCPJob{}, fmt.Errorf("job is not owned by this principal")
+	}
 	return cloneMCPJob(job), nil
 }
 
 func (s *AppService) CancelMCPJob(jobID string) (model.MCPJob, error) {
+	return s.CancelMCPJobAs(jobID, AuthPrincipal{})
+}
+
+func (s *AppService) CancelMCPJobAs(jobID string, owner AuthPrincipal) (model.MCPJob, error) {
 	if s == nil {
 		return model.MCPJob{}, fmt.Errorf("app service is nil")
 	}
@@ -1227,6 +1404,10 @@ func (s *AppService) CancelMCPJob(jobID string) (model.MCPJob, error) {
 	if !ok {
 		s.mcpJobMu.Unlock()
 		return model.MCPJob{}, fmt.Errorf("job not found")
+	}
+	if !mcpJobOwnerMatches(job, owner) {
+		s.mcpJobMu.Unlock()
+		return model.MCPJob{}, fmt.Errorf("job is not owned by this principal")
 	}
 	cancel := s.mcpJobCancels[jobID]
 	if job.Status == "queued" || job.Status == "running" {
@@ -1246,6 +1427,10 @@ func (s *AppService) CancelMCPJob(jobID string) (model.MCPJob, error) {
 }
 
 func (s *AppService) ListRecentMCPJobs(limit int) []model.MCPJob {
+	return s.ListRecentMCPJobsAs(limit, AuthPrincipal{})
+}
+
+func (s *AppService) ListRecentMCPJobsAs(limit int, owner AuthPrincipal) []model.MCPJob {
 	if s == nil {
 		return nil
 	}
@@ -1256,6 +1441,9 @@ func (s *AppService) ListRecentMCPJobs(limit int) []model.MCPJob {
 	defer s.mcpJobMu.Unlock()
 	items := make([]model.MCPJob, 0, len(s.mcpJobs))
 	for _, job := range s.mcpJobs {
+		if !mcpJobOwnerMatches(job, owner) {
+			continue
+		}
 		items = append(items, cloneMCPJob(job))
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -1265,6 +1453,19 @@ func (s *AppService) ListRecentMCPJobs(limit int) []model.MCPJob {
 		items = items[:limit]
 	}
 	return items
+}
+
+func mcpJobOwnerMatches(job model.MCPJob, owner AuthPrincipal) bool {
+	if strings.TrimSpace(owner.AuthType) == "" {
+		return true
+	}
+	if hasScope(owner.Scopes, "mcp:admin") {
+		return true
+	}
+	if owner.AuthType == "api_key" {
+		return strings.TrimSpace(job.OwnerAPIKeyID) != "" && strings.TrimSpace(job.OwnerAPIKeyID) == strings.TrimSpace(owner.APIKeyID)
+	}
+	return strings.TrimSpace(job.OwnerAPIKeyID) == "" && strings.TrimSpace(job.OwnerUserID) != "" && strings.TrimSpace(job.OwnerUserID) == strings.TrimSpace(owner.UserID)
 }
 
 func (s *AppService) updateMCPJob(jobID string, update func(*model.MCPJob)) {
@@ -1837,6 +2038,11 @@ func (s *AppService) ResolveKnowledgeBaseID(candidate string) (string, error) {
 }
 
 func (s *AppService) IndexDocument(document model.Document) (model.Document, error) {
+	return s.IndexDocumentWithContext(context.Background(), document)
+}
+
+func (s *AppService) IndexDocumentWithContext(ctx context.Context, document model.Document) (model.Document, error) {
+	ctx = normalizeServiceContext(ctx)
 	content, err := util.ExtractDocumentText(document.Path)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
@@ -1844,7 +2050,7 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
-		if err := s.replaceDocumentChunks(document.KnowledgeBaseID, document.ID, nil, nil); err != nil {
+		if err := s.replaceDocumentChunksWithContext(ctx, document.KnowledgeBaseID, document.ID, nil, nil); err != nil {
 			return model.Document{}, err
 		}
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
@@ -1855,12 +2061,12 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 		return s.AddDocument(document.KnowledgeBaseID, document)
 	}
 
-	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
+	vectors, err := s.rag.EmbedTexts(ctx, s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
 	if err != nil {
 		return model.Document{}, err
 	}
 
-	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+	if err := s.upsertDocumentChunksWithContext(ctx, document.KnowledgeBaseID, chunks, vectors); err != nil {
 		return model.Document{}, err
 	}
 
@@ -1873,6 +2079,11 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 }
 
 func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.Document, error) {
+	return s.ReindexDocumentWithContext(context.Background(), knowledgeBaseID, documentID)
+}
+
+func (s *AppService) ReindexDocumentWithContext(ctx context.Context, knowledgeBaseID, documentID string) (model.Document, error) {
+	ctx = normalizeServiceContext(ctx)
 	if s == nil {
 		return model.Document{}, fmt.Errorf("app service is nil")
 	}
@@ -1885,7 +2096,7 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 		return model.Document{}, fmt.Errorf("document path is empty")
 	}
 
-	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+	if err := s.deleteDocumentChunksWithContext(ctx, knowledgeBaseID, documentID); err != nil {
 		return model.Document{}, err
 	}
 
@@ -1893,7 +2104,7 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 	config := s.state.Config
 	s.state.Mu.RUnlock()
 
-	indexed, err := reindexDocumentWithConfig(s, config, document)
+	indexed, err := reindexDocumentWithConfig(ctx, s, config, document)
 	if err != nil {
 		document.Status = "ready"
 		document.IndexError = err.Error()
@@ -1933,7 +2144,7 @@ func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Docum
 		if strings.TrimSpace(doc.Path) == "" {
 			return nil, fmt.Errorf("document %s path is empty", doc.ID)
 		}
-		indexed, err := reindexDocumentWithConfig(s, config, doc)
+		indexed, err := reindexDocumentWithConfig(context.Background(), s, config, doc)
 		if err != nil {
 			return nil, fmt.Errorf("reindex document %s: %w", doc.ID, err)
 		}
@@ -1952,7 +2163,8 @@ func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Docum
 	return reindexed, nil
 }
 
-func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document model.Document) (model.Document, error) {
+func reindexDocumentWithConfig(ctx context.Context, s *AppService, cfg model.AppConfig, document model.Document) (model.Document, error) {
+	ctx = normalizeServiceContext(ctx)
 	content, err := util.ExtractDocumentText(document.Path)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
@@ -1968,7 +2180,7 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 		return document, nil
 	}
 
-	vectors, err := s.rag.EmbedTexts(context.Background(), model.EmbeddingModelConfig{
+	vectors, err := s.rag.EmbedTexts(ctx, model.EmbeddingModelConfig{
 		Provider: strings.TrimSpace(cfg.Embedding.Provider),
 		BaseURL:  strings.TrimSpace(cfg.Embedding.BaseURL),
 		Model:    strings.TrimSpace(cfg.Embedding.Model),
@@ -1978,7 +2190,7 @@ func reindexDocumentWithConfig(s *AppService, cfg model.AppConfig, document mode
 		return model.Document{}, err
 	}
 
-	if err := s.replaceDocumentChunks(document.KnowledgeBaseID, document.ID, chunks, vectors); err != nil {
+	if err := s.replaceDocumentChunksWithContext(ctx, document.KnowledgeBaseID, document.ID, chunks, vectors); err != nil {
 		return model.Document{}, err
 	}
 
@@ -2085,8 +2297,13 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 }
 
 func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (string, []map[string]string, error) {
+	return s.BuildRetrievalContextWithContext(context.Background(), req)
+}
+
+func (s *AppService) BuildRetrievalContextWithContext(ctx context.Context, req model.ChatCompletionRequest) (string, []map[string]string, error) {
+	ctx = normalizeServiceContext(ctx)
 	startedAt := time.Now()
-	chunks, err := s.EvaluateRetrieve(req)
+	chunks, err := s.EvaluateRetrieveWithContext(ctx, req)
 	if err != nil {
 		return "", nil, err
 	}
@@ -2126,7 +2343,7 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	})
 	if s.contextCompressor != nil && maxContextChars > 0 && chunksTotalChars(chunks) > maxContextChars {
 		compressStartedAt := time.Now()
-		compressed, err := s.contextCompressor.Compress(context.Background(), query, chunks)
+		compressed, err := s.contextCompressor.Compress(ctx, query, chunks)
 		if err == nil && strings.TrimSpace(compressed) != "" {
 			contextText = compressed
 			logRetrievalStageMetrics(req, query, "context_compress", compressStartedAt, map[string]any{
@@ -2149,6 +2366,11 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 }
 
 func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]RetrievedChunk, error) {
+	return s.EvaluateRetrieveWithContext(context.Background(), req)
+}
+
+func (s *AppService) EvaluateRetrieveWithContext(ctx context.Context, req model.ChatCompletionRequest) ([]RetrievedChunk, error) {
+	ctx = normalizeServiceContext(ctx)
 	if s == nil {
 		return nil, fmt.Errorf("app service is nil")
 	}
@@ -2162,7 +2384,7 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 	var queryVector []float64
 	embeddingStartedAt := time.Now()
 	if !s.queryRewriteEnabledForRequest(req) {
-		embedCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
 		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
 		if err == nil && len(vectors) == 0 {
@@ -2189,7 +2411,7 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 		})
 	}
 
-	chunks, err := s.retrieveRelevantChunks(req, queryVector)
+	chunks, err := s.retrieveRelevantChunksWithContext(ctx, req, queryVector)
 	logRetrievalStageMetrics(req, query, "evaluate_retrieve_total", startedAt, map[string]any{
 		"status":          retrievalStatus(err),
 		"selected_chunks": len(chunks),
@@ -2198,6 +2420,11 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 }
 
 func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	return s.DebugRetrieveWithContext(context.Background(), req)
+}
+
+func (s *AppService) DebugRetrieveWithContext(ctx context.Context, req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	ctx = normalizeServiceContext(ctx)
 	if s == nil {
 		return model.RetrievalDebugResponse{}, fmt.Errorf("app service is nil")
 	}
@@ -2229,9 +2456,9 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 	var err error
 
 	if req.Verbose {
-		chunks, verboseDetails, queryVariants, err = s.debugRetrieveVerbose(chatReq, query)
+		chunks, verboseDetails, queryVariants, err = s.debugRetrieveVerboseWithContext(ctx, chatReq, query)
 	} else {
-		chunks, err = s.EvaluateRetrieve(chatReq)
+		chunks, err = s.EvaluateRetrieveWithContext(ctx, chatReq)
 	}
 	if err != nil {
 		return model.RetrievalDebugResponse{}, err
@@ -2315,8 +2542,12 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 }
 
 func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
+	return s.debugRetrieveVerboseWithContext(context.Background(), req, query)
+}
+
+func (s *AppService) debugRetrieveVerboseWithContext(ctx context.Context, req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
 	verboseDetails := &model.RetrievalDebugVerboseDetails{}
-	ctx := context.Background()
+	ctx = normalizeServiceContext(ctx)
 
 	knowledgeBaseIDs, err := s.resolveRetrievalKnowledgeBaseIDs(req)
 	if err != nil {
@@ -2666,11 +2897,15 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest, relevantD
 }
 
 func (s *AppService) ensureKnowledgeBaseCollection(knowledgeBaseID string) error {
+	return s.ensureKnowledgeBaseCollectionWithContext(context.Background(), knowledgeBaseID)
+}
+
+func (s *AppService) ensureKnowledgeBaseCollectionWithContext(ctx context.Context, knowledgeBaseID string) error {
 	if s.qdrant == nil || !s.qdrant.IsEnabled() {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(normalizeServiceContext(ctx), 5*time.Second)
 	defer cancel()
 
 	if err := s.qdrant.EnsureCollection(ctx, knowledgeBaseID); err != nil {
@@ -3190,6 +3425,10 @@ func (s *AppService) qdrantVectorSize() int {
 }
 
 func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []DocumentChunk, vectors [][]float64) error {
+	return s.upsertDocumentChunksWithContext(context.Background(), knowledgeBaseID, chunks, vectors)
+}
+
+func (s *AppService) upsertDocumentChunksWithContext(ctx context.Context, knowledgeBaseID string, chunks []DocumentChunk, vectors [][]float64) error {
 	if s.qdrant == nil || !s.qdrant.IsEnabled() || len(chunks) == 0 {
 		return nil
 	}
@@ -3214,7 +3453,7 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 		})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(normalizeServiceContext(ctx), 10*time.Minute)
 	defer cancel()
 	if err := s.qdrant.UpsertPoints(ctx, knowledgeBaseID, points); err != nil {
 		return fmt.Errorf("upsert qdrant points: %w", err)
@@ -3223,15 +3462,19 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 }
 
 func (s *AppService) replaceDocumentChunks(knowledgeBaseID, documentID string, chunks []DocumentChunk, vectors [][]float64) error {
+	return s.replaceDocumentChunksWithContext(context.Background(), knowledgeBaseID, documentID, chunks, vectors)
+}
+
+func (s *AppService) replaceDocumentChunksWithContext(ctx context.Context, knowledgeBaseID, documentID string, chunks []DocumentChunk, vectors [][]float64) error {
 	if s == nil || s.qdrant == nil || !s.qdrant.IsEnabled() {
 		return nil
 	}
 
-	if err := s.ensureKnowledgeBaseCollection(knowledgeBaseID); err != nil {
+	if err := s.ensureKnowledgeBaseCollectionWithContext(ctx, knowledgeBaseID); err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(normalizeServiceContext(ctx), 10*time.Minute)
 	defer cancel()
 	previousPoints, err := s.qdrant.ScrollPointPayloadsByFilter(ctx, knowledgeBaseID, documentFilter(documentID))
 	if err != nil {
@@ -3239,7 +3482,7 @@ func (s *AppService) replaceDocumentChunks(knowledgeBaseID, documentID string, c
 	}
 
 	if len(chunks) > 0 {
-		if err := s.upsertDocumentChunks(knowledgeBaseID, chunks, vectors); err != nil {
+		if err := s.upsertDocumentChunksWithContext(ctx, knowledgeBaseID, chunks, vectors); err != nil {
 			return err
 		}
 	}
@@ -3262,6 +3505,10 @@ func (s *AppService) replaceDocumentChunks(knowledgeBaseID, documentID string, c
 }
 
 func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, queryVector []float64) ([]RetrievedChunk, error) {
+	return s.retrieveRelevantChunksWithContext(context.Background(), req, queryVector)
+}
+
+func (s *AppService) retrieveRelevantChunksWithContext(ctx context.Context, req model.ChatCompletionRequest, queryVector []float64) ([]RetrievedChunk, error) {
 	if s.qdrant == nil || !s.qdrant.IsEnabled() {
 		return nil, nil
 	}
@@ -3275,7 +3522,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	query := latestUserMessage(req.Messages)
 	params := s.resolveRetrievalParams(req)
 	autoExpand := s.retrievalAutoExpandEnabled()
-	ctx := context.Background()
+	ctx = normalizeServiceContext(ctx)
 
 	var queryEmbedding []float32
 	if s.semanticCache != nil {
@@ -3632,10 +3879,14 @@ func chunkTexts(chunks []DocumentChunk) []string {
 }
 
 func (s *AppService) deleteDocumentChunks(knowledgeBaseID, documentID string) error {
+	return s.deleteDocumentChunksWithContext(context.Background(), knowledgeBaseID, documentID)
+}
+
+func (s *AppService) deleteDocumentChunksWithContext(ctx context.Context, knowledgeBaseID, documentID string) error {
 	if s == nil || s.qdrant == nil || !s.qdrant.IsEnabled() {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(normalizeServiceContext(ctx), 2*time.Minute)
 	defer cancel()
 	if err := s.qdrant.DeletePointsByFilter(ctx, knowledgeBaseID, documentFilter(documentID)); err != nil {
 		return fmt.Errorf("delete qdrant points for document %s: %w", documentID, err)

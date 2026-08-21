@@ -42,6 +42,88 @@ type AppServiceReader interface {
 	ListRecentMCPJobs(limit int) []model.MCPJob
 }
 
+// contextAwareAppService is implemented by the production AppService. Keeping
+// these methods optional preserves compatibility with small tool test doubles.
+type contextAwareAppService interface {
+	BuildRetrievalContextWithContext(ctx context.Context, req model.ChatCompletionRequest) (string, []map[string]string, error)
+	DebugRetrieveWithContext(ctx context.Context, req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error)
+	StageInlineUploadAs(fileName string, content []byte, source string, owner service.AuthPrincipal) (model.StagedUpload, error)
+	RegisterStagedUploadAs(ctx context.Context, uploadID, knowledgeBaseID, fileName string, owner service.AuthPrincipal) (model.Document, error)
+	StartMCPImportJobAs(req model.MCPStartImportJobRequest, owner service.AuthPrincipal) (model.MCPJob, error)
+	GetMCPJobStatusAs(jobID string, owner service.AuthPrincipal) (model.MCPJob, error)
+	CancelMCPJobAs(jobID string, owner service.AuthPrincipal) (model.MCPJob, error)
+	ListRecentMCPJobsAs(limit int, owner service.AuthPrincipal) []model.MCPJob
+	ReindexDocumentWithContext(ctx context.Context, knowledgeBaseID, documentID string) (model.Document, error)
+}
+
+func contextAwareService(appService AppServiceReader) (contextAwareAppService, bool) {
+	service, ok := appService.(contextAwareAppService)
+	return service, ok
+}
+
+func buildRetrievalContextWithContext(appService AppServiceReader, ctx context.Context, req model.ChatCompletionRequest) (string, []map[string]string, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.BuildRetrievalContextWithContext(ctx, req)
+	}
+	return appService.BuildRetrievalContext(req)
+}
+
+func debugRetrieveWithContext(appService AppServiceReader, ctx context.Context, req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.DebugRetrieveWithContext(ctx, req)
+	}
+	return appService.DebugRetrieve(req)
+}
+
+func stageInlineUploadAs(appService AppServiceReader, fileName string, content []byte, source string, owner service.AuthPrincipal) (model.StagedUpload, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.StageInlineUploadAs(fileName, content, source, owner)
+	}
+	return appService.StageInlineUpload(fileName, content, source)
+}
+
+func registerStagedUploadAs(appService AppServiceReader, ctx context.Context, uploadID, knowledgeBaseID, fileName string, owner service.AuthPrincipal) (model.Document, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.RegisterStagedUploadAs(ctx, uploadID, knowledgeBaseID, fileName, owner)
+	}
+	return appService.RegisterStagedUpload(uploadID, knowledgeBaseID, fileName)
+}
+
+func startMCPImportJobAs(appService AppServiceReader, req model.MCPStartImportJobRequest, owner service.AuthPrincipal) (model.MCPJob, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.StartMCPImportJobAs(req, owner)
+	}
+	return appService.StartMCPImportJob(req)
+}
+
+func getMCPJobStatusAs(appService AppServiceReader, jobID string, owner service.AuthPrincipal) (model.MCPJob, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.GetMCPJobStatusAs(jobID, owner)
+	}
+	return appService.GetMCPJobStatus(jobID)
+}
+
+func cancelMCPJobAs(appService AppServiceReader, jobID string, owner service.AuthPrincipal) (model.MCPJob, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.CancelMCPJobAs(jobID, owner)
+	}
+	return appService.CancelMCPJob(jobID)
+}
+
+func listRecentMCPJobsAs(appService AppServiceReader, limit int, owner service.AuthPrincipal) []model.MCPJob {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.ListRecentMCPJobsAs(limit, owner)
+	}
+	return appService.ListRecentMCPJobs(limit)
+}
+
+func reindexDocumentWithContext(appService AppServiceReader, ctx context.Context, knowledgeBaseID, documentID string) (model.Document, error) {
+	if enhanced, ok := contextAwareService(appService); ok {
+		return enhanced.ReindexDocumentWithContext(ctx, knowledgeBaseID, documentID)
+	}
+	return appService.ReindexDocument(knowledgeBaseID, documentID)
+}
+
 func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 	return []ToolDefinition{
 		{
@@ -217,7 +299,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				contextText, sources, err := appService.BuildRetrievalContext(model.ChatCompletionRequest{
+				contextText, sources, err := buildRetrievalContextWithContext(appService, ctx, model.ChatCompletionRequest{
 					KnowledgeBaseID: knowledgeBaseID,
 					Messages: []model.ChatMessage{{
 						Role:    "user",
@@ -254,7 +336,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				contextText, sources, err := appService.BuildRetrievalContext(model.ChatCompletionRequest{
+				contextText, sources, err := buildRetrievalContextWithContext(appService, ctx, model.ChatCompletionRequest{
 					DocumentID: documentID,
 					Messages: []model.ChatMessage{{
 						Role:    "user",
@@ -356,7 +438,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if knowledgeBaseID == "" && documentID == "" {
 					return ToolCallResult{}, fmt.Errorf("knowledgeBaseId or documentId is required")
 				}
-				response, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+				response, err := debugRetrieveWithContext(appService, ctx, model.RetrievalDebugRequest{
 					Query:           query,
 					KnowledgeBaseID: knowledgeBaseID,
 					DocumentID:      documentID,
@@ -429,7 +511,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					data["structuredData"] = structuredData
 				} else {
 					mode = "retrieval_evidence"
-					evidence, retrievalSources, err := appService.BuildRetrievalContext(chatReq)
+					evidence, retrievalSources, err := buildRetrievalContextWithContext(appService, ctx, chatReq)
 					if err != nil {
 						return ToolCallResult{}, err
 					}
@@ -535,7 +617,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if topK <= 0 {
 					topK = 5
 				}
-				dense, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+				dense, err := debugRetrieveWithContext(appService, ctx, model.RetrievalDebugRequest{
 					Query:           query,
 					KnowledgeBaseID: knowledgeBaseID,
 					DocumentID:      documentID,
@@ -545,7 +627,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				hybrid, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+				hybrid, err := debugRetrieveWithContext(appService, ctx, model.RetrievalDebugRequest{
 					Query:           query,
 					KnowledgeBaseID: knowledgeBaseID,
 					DocumentID:      documentID,
@@ -590,7 +672,6 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
 				query, err := requiredStringArg(args, "query")
 				if err != nil {
 					return ToolCallResult{}, err
@@ -604,7 +685,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if topK <= 0 {
 					topK = 5
 				}
-				debug, err := appService.DebugRetrieve(model.RetrievalDebugRequest{
+				debug, err := debugRetrieveWithContext(appService, ctx, model.RetrievalDebugRequest{
 					Query:           query,
 					KnowledgeBaseID: knowledgeBaseID,
 					DocumentID:      documentID,
@@ -816,7 +897,6 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
 				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
 				if err != nil {
 					return ToolCallResult{}, err
@@ -825,7 +905,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				document, err := appService.ReindexDocument(knowledgeBaseID, documentID)
+				document, err := reindexDocumentWithContext(appService, ctx, knowledgeBaseID, documentID)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
@@ -945,7 +1025,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
+				caller := principalFromContext(ctx)
 				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
 				if err != nil {
 					return ToolCallResult{}, err
@@ -964,11 +1044,11 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if err := validateTextUploadFileName(fileName, appService.GetConfig()); err != nil {
 					return ToolCallResult{}, err
 				}
-				staged, err := appService.StageInlineUpload(fileName, []byte(content), "mcp-text")
+				staged, err := stageInlineUploadAs(appService, fileName, []byte(content), "mcp-text", caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				uploaded, err := appService.RegisterStagedUpload(staged.ID, knowledgeBaseID, fileName)
+				uploaded, err := registerStagedUploadAs(appService, ctx, staged.ID, knowledgeBaseID, fileName, caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
@@ -992,7 +1072,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
+				caller := principalFromContext(ctx)
 				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
 				if err != nil {
 					return ToolCallResult{}, err
@@ -1018,11 +1098,11 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				if int64(len(decoded)) > maxInlineUploadBytes {
 					return ToolCallResult{}, fmt.Errorf("inline upload too large: current=%s, max=%s; please POST file stream to /api/uploads first, then call register_staged_upload", util.FormatFileSize(int64(len(decoded))), util.FormatFileSize(maxInlineUploadBytes))
 				}
-				staged, err := appService.StageInlineUpload(fileName, decoded, "mcp-inline")
+				staged, err := stageInlineUploadAs(appService, fileName, decoded, "mcp-inline", caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				uploaded, err := appService.RegisterStagedUpload(staged.ID, knowledgeBaseID, fileName)
+				uploaded, err := registerStagedUploadAs(appService, ctx, staged.ID, knowledgeBaseID, fileName, caller)
 				if err != nil {
 					return ToolCallResult{}, wrapBinaryUploadParseError(fileName, err)
 				}
@@ -1046,7 +1126,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
+				caller := principalFromContext(ctx)
 				uploadID, err := requiredStringArg(args, "uploadId")
 				if err != nil {
 					return ToolCallResult{}, err
@@ -1056,7 +1136,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					return ToolCallResult{}, err
 				}
 				fileName := optionalStringArg(args, "fileName")
-				uploaded, err := appService.RegisterStagedUpload(uploadID, knowledgeBaseID, fileName)
+				uploaded, err := registerStagedUploadAs(appService, ctx, uploadID, knowledgeBaseID, fileName, caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
@@ -1068,37 +1148,67 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "start_import_job",
-			Description: "启动异步文本文档导入任务。参数 knowledgeBaseId、fileName 为必填，content 为文本内容。",
+			Description: "启动异步长任务。jobType 可选：import（默认）、reindex、eval_dataset、batch_index；不同类型使用对应参数。",
 			InputSchema: objectSchema(
 				map[string]any{
+					"jobType":         map[string]any{"type": "string", "enum": []string{"import", "reindex", "eval_dataset", "batch_index"}, "description": "任务类型，默认为 import"},
 					"knowledgeBaseId": map[string]any{"type": "string", "description": "知识库 ID"},
 					"fileName":        map[string]any{"type": "string", "description": "文件名，需带扩展名"},
 					"content":         map[string]any{"type": "string", "description": "纯文本内容；留空会创建失败状态用于排查"},
+					"documentId":      map[string]any{"type": "string", "description": "reindex 类型的文档 ID"},
+					"maxPerDocument":  map[string]any{"type": "integer", "description": "eval_dataset 类型每个文档最多生成多少条，默认 5，最大 20"},
+					"uploadIds":       map[string]any{"type": "array", "description": "batch_index 类型的暂存上传 ID 列表", "items": map[string]any{"type": "string"}},
+					"concurrency":     map[string]any{"type": "integer", "description": "batch_index 类型并发数，默认 3，最大 10"},
 				},
-				[]string{"knowledgeBaseId", "fileName"},
+				[]string{},
 			),
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
-				knowledgeBaseID, err := requiredStringArg(args, "knowledgeBaseId")
+				caller := principalFromContext(ctx)
+				jobType := strings.ToLower(optionalStringArg(args, "jobType"))
+				if jobType == "" {
+					jobType = "import"
+				}
+				knowledgeBaseID := optionalStringArg(args, "knowledgeBaseId")
+				fileName := optionalStringArg(args, "fileName")
+				documentID := optionalStringArg(args, "documentId")
+				uploadIDs, err := optionalStringSliceArg(args, "uploadIds")
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				fileName, err := requiredStringArg(args, "fileName")
-				if err != nil {
-					return ToolCallResult{}, err
+				switch jobType {
+				case "import":
+					if knowledgeBaseID == "" || fileName == "" {
+						return ToolCallResult{}, fmt.Errorf("knowledgeBaseId and fileName are required for import jobs")
+					}
+				case "reindex":
+					if knowledgeBaseID == "" || documentID == "" {
+						return ToolCallResult{}, fmt.Errorf("knowledgeBaseId and documentId are required for reindex jobs")
+					}
+				case "eval_dataset":
+				case "batch_index":
+					if knowledgeBaseID == "" || len(uploadIDs) == 0 {
+						return ToolCallResult{}, fmt.Errorf("knowledgeBaseId and uploadIds are required for batch_index jobs")
+					}
+				default:
+					return ToolCallResult{}, fmt.Errorf("unsupported jobType: %s", jobType)
 				}
-				job, err := appService.StartMCPImportJob(model.MCPStartImportJobRequest{
+				job, err := startMCPImportJobAs(appService, model.MCPStartImportJobRequest{
 					KnowledgeBaseID: knowledgeBaseID,
 					FileName:        fileName,
 					Content:         optionalStringArg(args, "content"),
-				})
+					JobType:         jobType,
+					DocumentID:      documentID,
+					MaxPerDocument:  optionalIntArg(args, "maxPerDocument"),
+					UploadIDs:       uploadIDs,
+					Concurrency:     optionalIntArg(args, "concurrency"),
+				}, caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
 				return NewTextResult(
-					fmt.Sprintf("导入任务已启动：%s。", job.ID),
+					fmt.Sprintf("%s 任务已启动：%s。", mcpJobTypeLabel(jobType), job.ID),
 					map[string]any{"job": job},
 				), nil
 			},
@@ -1110,15 +1220,16 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        true,
 			PermissionLevel: ToolPermissionReadOnly,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
+				caller := principalFromContext(ctx)
 				jobID, err := requiredStringArg(args, "jobId")
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				job, err := appService.GetMCPJobStatus(jobID)
+				job, err := getMCPJobStatusAs(appService, jobID, caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
+				job = sanitizeMCPJob(job)
 				return NewTextResult(
 					fmt.Sprintf("任务 %s 当前状态为 %s，进度 %d%%。", job.ID, job.Status, job.Progress),
 					map[string]any{"job": job},
@@ -1132,15 +1243,16 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        false,
 			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
+				caller := principalFromContext(ctx)
 				jobID, err := requiredStringArg(args, "jobId")
 				if err != nil {
 					return ToolCallResult{}, err
 				}
-				job, err := appService.CancelMCPJob(jobID)
+				job, err := cancelMCPJobAs(appService, jobID, caller)
 				if err != nil {
 					return ToolCallResult{}, err
 				}
+				job = sanitizeMCPJob(job)
 				return NewTextResult(
 					fmt.Sprintf("任务 %s 当前状态为 %s。", job.ID, job.Status),
 					map[string]any{"job": job},
@@ -1159,11 +1271,61 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 			ReadOnly:        true,
 			PermissionLevel: ToolPermissionReadOnly,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
-				_ = ctx
-				jobs := appService.ListRecentMCPJobs(optionalIntArg(args, "limit"))
+				caller := principalFromContext(ctx)
+				jobs := listRecentMCPJobsAs(appService, optionalIntArg(args, "limit"), caller)
+				for index := range jobs {
+					jobs[index] = sanitizeMCPJob(jobs[index])
+				}
 				return NewTextResult(formatMCPJobListText(jobs), map[string]any{"jobs": jobs}), nil
 			},
 		},
+	}
+}
+
+func sanitizeMCPJob(job model.MCPJob) model.MCPJob {
+	job.Error = sanitizeMCPError(job.Error)
+	for index := range job.Warnings {
+		job.Warnings[index] = sanitizeMCPError(job.Warnings[index])
+	}
+	job.Result = sanitizeMCPJobMap(job.Result)
+	return job
+}
+
+func sanitizeMCPJobMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	sanitized := make(map[string]any, len(values))
+	for key, value := range values {
+		sanitized[key] = sanitizeMCPJobValue(key, value)
+	}
+	return sanitized
+}
+
+func sanitizeMCPJobValue(key string, value any) any {
+	switch typed := value.(type) {
+	case string:
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		if strings.Contains(lowerKey, "error") || strings.Contains(lowerKey, "warning") {
+			return sanitizeMCPError(typed)
+		}
+		return value
+	case map[string]any:
+		return sanitizeMCPJobMap(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index, item := range typed {
+			items[index] = sanitizeMCPJobValue(key, item)
+		}
+		return items
+	case []map[string]any:
+		items := make([]map[string]any, len(typed))
+		for index, item := range typed {
+			items[index] = sanitizeMCPJobMap(item)
+		}
+		return items
+	default:
+		return value
 	}
 }
 
@@ -1712,6 +1874,45 @@ func optionalIntArg(args map[string]any, key string) int {
 		}
 	}
 	return 0
+}
+
+func optionalStringSliceArg(args map[string]any, key string) ([]string, error) {
+	if args == nil || args[key] == nil {
+		return nil, nil
+	}
+	var rawItems []any
+	switch value := args[key].(type) {
+	case []any:
+		rawItems = value
+	case []string:
+		items := make([]string, len(value))
+		copy(items, value)
+		return items, nil
+	default:
+		return nil, fmt.Errorf("%s must be an array of strings", key)
+	}
+	items := make([]string, 0, len(rawItems))
+	for index, rawItem := range rawItems {
+		item, ok := rawItem.(string)
+		if !ok || strings.TrimSpace(item) == "" {
+			return nil, fmt.Errorf("%s[%d] must be a non-empty string", key, index)
+		}
+		items = append(items, strings.TrimSpace(item))
+	}
+	return items, nil
+}
+
+func mcpJobTypeLabel(jobType string) string {
+	switch jobType {
+	case "reindex":
+		return "重建索引"
+	case "eval_dataset":
+		return "评估数据集生成"
+	case "batch_index":
+		return "批量索引"
+	default:
+		return "导入"
+	}
 }
 
 func requiredStringArg(args map[string]any, key string) (string, error) {

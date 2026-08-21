@@ -119,3 +119,48 @@ func TestPruneMCPJobsPreservesActiveJobs(t *testing.T) {
 		t.Fatal("expected active job cancellation to remain tracked")
 	}
 }
+
+func TestMCPDangerHashIgnoresConfirmationNonce(t *testing.T) {
+	withoutNonce, err := hashMCPDangerArguments(map[string]any{"id": "conversation-1"})
+	if err != nil {
+		t.Fatalf("hash arguments without nonce: %v", err)
+	}
+	withNonce, err := hashMCPDangerArguments(map[string]any{
+		"id":           "conversation-1",
+		"confirmNonce": "mcp_confirm_secret",
+	})
+	if err != nil {
+		t.Fatalf("hash arguments with nonce: %v", err)
+	}
+	if withoutNonce != withNonce {
+		t.Fatalf("expected transport nonce to be excluded from parameter hash: %q != %q", withoutNonce, withNonce)
+	}
+}
+
+func TestMCPJobOwnerIsolation(t *testing.T) {
+	service := &AppService{
+		mcpJobs: map[string]model.MCPJob{
+			"job-api-key": {
+				ID:            "job-api-key",
+				Status:        "running",
+				OwnerUserID:   "root-user",
+				OwnerAPIKeyID: "key-a",
+			},
+			"job-session": {
+				ID:          "job-session",
+				Status:      "succeeded",
+				OwnerUserID: "root-user",
+			},
+		},
+	}
+
+	if _, err := service.GetMCPJobStatusAs("job-api-key", AuthPrincipal{AuthType: "api_key", UserID: "root-user", APIKeyID: "key-b"}); err == nil {
+		t.Fatal("expected another API key to be denied")
+	}
+	if _, err := service.GetMCPJobStatusAs("job-api-key", AuthPrincipal{AuthType: "api_key", UserID: "root-user", APIKeyID: "key-a"}); err != nil {
+		t.Fatalf("expected owning API key to be allowed: %v", err)
+	}
+	if jobs := service.ListRecentMCPJobsAs(20, AuthPrincipal{AuthType: "session", UserID: "root-user"}); len(jobs) != 1 || jobs[0].ID != "job-session" {
+		t.Fatalf("expected session owner to see only session jobs, got %+v", jobs)
+	}
+}

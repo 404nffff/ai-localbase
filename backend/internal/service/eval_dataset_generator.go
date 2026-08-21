@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -24,8 +25,16 @@ const (
 )
 
 func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (model.GenerateEvalDatasetResponse, error) {
+	return s.GenerateEvalDatasetWithContext(context.Background(), req)
+}
+
+func (s *AppService) GenerateEvalDatasetWithContext(ctx context.Context, req model.GenerateEvalDatasetRequest) (model.GenerateEvalDatasetResponse, error) {
 	if s == nil {
 		return model.GenerateEvalDatasetResponse{}, fmt.Errorf("app service is nil")
+	}
+	ctx = normalizeServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return model.GenerateEvalDatasetResponse{}, err
 	}
 
 	maxPerDocument := req.MaxPerDocument
@@ -47,6 +56,9 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 	cases := make([]model.EvalGroundTruthCase, 0, len(documents)*maxPerDocument)
 	crossDocumentEvidence := make([]evalCrossDocumentEvidence, 0, len(documents))
 	for _, document := range documents {
+		if err := ctx.Err(); err != nil {
+			return model.GenerateEvalDatasetResponse{}, err
+		}
 		text, err := util.ExtractDocumentText(document.Path)
 		if err != nil {
 			return model.GenerateEvalDatasetResponse{}, fmt.Errorf("extract document %s: %w", document.ID, err)
@@ -88,6 +100,9 @@ func (s *AppService) GenerateEvalDataset(req model.GenerateEvalDatasetRequest) (
 
 	if len(cases) == 0 {
 		return model.GenerateEvalDatasetResponse{}, fmt.Errorf("no eval cases generated from selected documents")
+	}
+	if err := ctx.Err(); err != nil {
+		return model.GenerateEvalDatasetResponse{}, err
 	}
 
 	datasetKnowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)

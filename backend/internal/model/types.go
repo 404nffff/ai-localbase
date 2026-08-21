@@ -157,23 +157,30 @@ type MCPDangerConfirmationResponse struct {
 }
 
 type MCPStartImportJobRequest struct {
-	KnowledgeBaseID string `json:"knowledgeBaseId"`
-	FileName        string `json:"fileName"`
-	Content         string `json:"content,omitempty"`
+	KnowledgeBaseID string   `json:"knowledgeBaseId"`
+	FileName        string   `json:"fileName"`
+	Content         string   `json:"content,omitempty"`
+	JobType         string   `json:"jobType,omitempty"`
+	DocumentID      string   `json:"documentId,omitempty"`
+	MaxPerDocument  int      `json:"maxPerDocument,omitempty"`
+	UploadIDs       []string `json:"uploadIds,omitempty"`
+	Concurrency     int      `json:"concurrency,omitempty"`
 }
 
 type MCPJob struct {
-	ID          string         `json:"jobId"`
-	Type        string         `json:"type"`
-	Status      string         `json:"status"`
-	Progress    int            `json:"progress"`
-	Summary     string         `json:"summary"`
-	Result      map[string]any `json:"result,omitempty"`
-	Error       string         `json:"error,omitempty"`
-	Warnings    []string       `json:"warnings,omitempty"`
-	CreatedAt   string         `json:"createdAt"`
-	UpdatedAt   string         `json:"updatedAt"`
-	CompletedAt string         `json:"completedAt,omitempty"`
+	ID            string         `json:"jobId"`
+	Type          string         `json:"type"`
+	Status        string         `json:"status"`
+	Progress      int            `json:"progress"`
+	Summary       string         `json:"summary"`
+	Result        map[string]any `json:"result,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Warnings      []string       `json:"warnings,omitempty"`
+	CreatedAt     string         `json:"createdAt"`
+	UpdatedAt     string         `json:"updatedAt"`
+	CompletedAt   string         `json:"completedAt,omitempty"`
+	OwnerUserID   string         `json:"-"`
+	OwnerAPIKeyID string         `json:"-"`
 }
 
 type RetrievalConfig struct {
@@ -302,17 +309,19 @@ type UploadResponse struct {
 }
 
 type StagedUpload struct {
-	ID         string `json:"id"`
-	FileName   string `json:"fileName"`
-	Path       string `json:"-"`
-	Size       int64  `json:"size"`
-	SizeLabel  string `json:"sizeLabel"`
-	SHA256     string `json:"sha256"`
-	CreatedAt  string `json:"createdAt"`
-	ExpiresAt  string `json:"expiresAt"`
-	Status     string `json:"status"`
-	Source     string `json:"source,omitempty"`
-	ConsumedAt string `json:"consumedAt,omitempty"`
+	ID            string `json:"id"`
+	FileName      string `json:"fileName"`
+	Path          string `json:"-"`
+	Size          int64  `json:"size"`
+	SizeLabel     string `json:"sizeLabel"`
+	SHA256        string `json:"sha256"`
+	CreatedAt     string `json:"createdAt"`
+	ExpiresAt     string `json:"expiresAt"`
+	Status        string `json:"status"`
+	Source        string `json:"source,omitempty"`
+	ConsumedAt    string `json:"consumedAt,omitempty"`
+	OwnerUserID   string `json:"-"`
+	OwnerAPIKeyID string `json:"-"`
 }
 
 type StageUploadResponse struct {

@@ -137,3 +137,32 @@ func TestGenerateEvalDatasetIsWriteToolWithEvalScope(t *testing.T) {
 		t.Fatalf("expected mcp:eval scope, got %v", scopes)
 	}
 }
+
+func TestStartImportJobSchemaSupportsAllLongTaskTypes(t *testing.T) {
+	var definition ToolDefinition
+	for _, candidate := range NewReadOnlyTools(listToolsAppService{}) {
+		if candidate.Name == "start_import_job" {
+			definition = candidate
+			break
+		}
+	}
+	if definition.Name == "" {
+		t.Fatal("start_import_job tool not found")
+	}
+	properties, ok := definition.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object schema properties, got %#v", definition.InputSchema["properties"])
+	}
+	for _, name := range []string{"jobType", "documentId", "maxPerDocument", "uploadIds", "concurrency"} {
+		if properties[name] == nil {
+			t.Errorf("expected long-task property %q", name)
+		}
+	}
+	jobType, ok := properties["jobType"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected jobType schema, got %#v", properties["jobType"])
+	}
+	if got := jobType["enum"]; got == nil {
+		t.Fatalf("expected jobType enum, got %#v", jobType)
+	}
+}

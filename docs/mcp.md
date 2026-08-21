@@ -7,7 +7,8 @@
 当前能力包括：
 
 - MCP Server 版本：随应用发布版本注入，开发构建显示 `dev`
-- 提供 HTTP 形式的 MCP 入口
+- 提供 HTTP / JSON-RPC MCP 入口
+- 当前为无会话、JSON 响应型 HTTP MCP 子集，不发放 `Mcp-Session-Id`，不提供 SSE 长连接
 - 提供工具列表发现能力
 - 提供只读 / 写入 / 危险工具调用能力
 - 提供 API Key Scope 鉴权；旧 MCP 全权限 Token 已废弃，仅保留迁移兼容开关
@@ -45,6 +46,8 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 当前危险工具确认 **只接受 `confirmNonce`**。即使启用了 `ENABLE_MCP_LEGACY_TOKEN=true`，服务端也不会再接受 `X-MCP-Confirm` 或 `?confirm_token=` 作为危险操作确认方式。
 
+POST 请求必须使用 `Content-Type: application/json`。客户端可以使用 `Accept: application/json`，或使用 `Accept: application/json, text/event-stream`；当前服务始终返回 JSON，不支持仅接受 `text/event-stream` 的请求。`notifications/initialized` 是无响应通知，服务返回 `202` 空响应。
+
 如果将 `MCP_BASE_PATH` 改成不以 `/mcp` 结尾的路径，需要自行配置外部反向代理，或让 MCP 客户端直接访问后端端口。
 
 启动后可访问：
@@ -67,7 +70,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 |------|------|
 | `mcp:read` | 工具发现、列表、检索、文档详情、会话读取等只读工具 |
 | `mcp:write` | 创建知识库、保存会话、重建索引等写入工具 |
-| `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload`、`start_import_job` |
+| `mcp:upload` | `upload_text_document`、`upload_document`、`register_staged_upload`、`start_import_job` 的 `import` / `batch_index` |
 | `mcp:eval` | `generate_eval_dataset`、`create_eval_case_from_query` |
 | `mcp:danger` | 删除知识库、删除文档、删除会话 |
 | `mcp:admin` | 允许调用全部 MCP 工具 |
@@ -116,6 +119,14 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 旧客户端可继续读取 `content` 和 `data`；新客户端建议优先读取 `summary`、`data` 和 `requestId`。
 
+### `ping`
+
+返回空对象，用于检查 MCP JSON-RPC 连接是否可用。
+
+### `notifications/initialized`
+
+初始化完成通知。该请求不需要 `id`，服务返回 `202` 且不返回 JSON-RPC 响应体。
+
 ---
 
 ## 当前内置工具
@@ -155,7 +166,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `upload_document` | `write` | 上传 Base64 编码的真实文件 |
 | `register_staged_upload` | `write` | 注册 HTTP 暂存上传文件 |
 | `reindex_document` | `write` | 重建文档索引 |
-| `start_import_job` | `write` | 启动异步导入任务 |
+| `start_import_job` | `write` | 启动导入、重建索引、评估数据集或批量索引任务 |
 | `get_job_status` | `read-only` | 查询 Job 状态 |
 | `cancel_job` | `write` | 取消 Job |
 | `list_recent_jobs` | `read-only` | 列出最近 Job |
@@ -585,6 +596,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 - 重建文档 chunk
 - 刷新向量索引
 - 适合模型配置、向量维度、混合检索或结构化解析逻辑变更后使用
+- 该工具保留同步兼容入口；长文档建议使用下方 `start_import_job` 的 `jobType=reindex`
 
 返回内容：
 
@@ -607,13 +619,20 @@ Job 工具用于避免长任务占用一次 JSON-RPC 调用。当前实现使用
 
 #### `start_import_job`
 
-权限级别：`write`，需要 `mcp:upload` 或 `mcp:admin`
+权限级别：`write`；所需 Scope 随 `jobType` 变化，或使用 `mcp:admin`
 
 输入参数：
 
-- `knowledgeBaseId`（必填）
-- `fileName`（必填）
-- `content`（选填，文本内容；留空会形成失败 Job）
+- `jobType`（选填，默认为 `import`）
+- `import`：需要 `knowledgeBaseId`、`fileName`，可选 `content`，需要 `mcp:upload`
+- `reindex`：需要 `knowledgeBaseId`、`documentId`，需要 `mcp:write`
+- `eval_dataset`：可选 `knowledgeBaseId`、`documentId`、`maxPerDocument`，需要 `mcp:eval`
+- `batch_index`：需要 `knowledgeBaseId`、`uploadIds`，可选 `concurrency`，需要 `mcp:upload`
+
+返回内容：
+
+- 统一 Job 对象；使用 `get_job_status` 查询最终结果
+- `cancel_job` 会向解析、Embedding 和向量索引链路传递取消信号
 
 #### `get_job_status`
 
@@ -691,6 +710,8 @@ Job 工具用于避免长任务占用一次 JSON-RPC 调用。当前实现使用
 - 方法不存在日志
 - 工具调用失败日志
 - 工具权限级别日志（read-only / write / danger）
+- API Key 鉴权失败、Scope 拒绝、协议错误和限流事件
+- GET 入口访问、初始化、`ping` 和工具列表访问事件
 - 每分钟请求数限制
 - 单次请求超时保护
 - 危险工具一次性确认机制
@@ -809,8 +830,11 @@ curl -X POST http://localhost:8080/mcp \
 
 ```bash
 curl -X POST http://localhost:8080/api/uploads \
+  -H "Authorization: Bearer <MCP_API_KEY_WITH_mcp_upload>" \
   -F "file=@./example.pdf"
 ```
+
+`/api/uploads` 使用 multipart 文件流，不受 JSON 请求体上限限制，但仍受 `MAX_UPLOAD_BYTES` 限制。暂存文件绑定到上传 API Key，注册时必须使用同一个 API Key；API Key 至少需要 `mcp:upload` scope。
 
 返回中会包含 `uploadId`。然后再调用 MCP 注册：
 
@@ -884,7 +908,7 @@ curl -X POST http://localhost:8080/mcp \
   }'
 ```
 
-### 6. 删除文档（危险工具）
+### 7. 删除文档（危险工具）
 
 该示例需要 API Key 具备 `mcp:danger` 或 `mcp:admin` scope。
 
@@ -924,7 +948,7 @@ curl -X POST http://localhost:8080/mcp \
   }'
 ```
 
-### 7. 保存会话
+### 8. 保存会话
 
 ```bash
 curl -X POST http://localhost:8080/mcp \
@@ -958,11 +982,12 @@ curl -X POST http://localhost:8080/mcp \
 
 如果你希望在 Cherry Studio 中通过 MCP 接入本项目，可以按以下方式配置：
 
-- **类型**：可流式传输的 HTTP（`streamableHttp`）
+- **类型**：HTTP JSON-RPC（部分客户端配置项名称为 `streamableHttp`）
 - **URL**：`http://127.0.0.1:8080/mcp`
 - **请求头**：
   - `Content-Type: application/json`
   - `Authorization: Bearer <带 MCP scope 的 API Key>`
+  - `Accept: application/json, text/event-stream`
 - **建议 scope**：`mcp:read`、`mcp:upload`、`mcp:eval`
 
 Settings 的 MCP 页面也提供了可复制模板。以下示例中的 `<MCP_API_KEY>` 需要替换为带 MCP scope 的 API Key。
@@ -975,7 +1000,9 @@ Settings 的 MCP 页面也提供了可复制模板。以下示例中的 `<MCP_AP
   "type": "streamable-http",
   "url": "http://127.0.0.1:8080/mcp",
   "headers": {
-    "Authorization": "Bearer <MCP_API_KEY>"
+    "Authorization": "Bearer <MCP_API_KEY>",
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream"
   }
 }
 ```
@@ -989,7 +1016,9 @@ Settings 的 MCP 页面也提供了可复制模板。以下示例中的 `<MCP_AP
       "type": "http",
       "url": "http://127.0.0.1:8080/mcp",
       "headers": {
-        "Authorization": "Bearer <MCP_API_KEY>"
+        "Authorization": "Bearer <MCP_API_KEY>",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"
       }
     }
   }
@@ -1006,7 +1035,9 @@ Settings 的 MCP 页面也提供了可复制模板。以下示例中的 `<MCP_AP
   "transport": "http",
   "endpoint": "http://127.0.0.1:8080/mcp",
   "headers": {
-    "Authorization": "Bearer <MCP_API_KEY>"
+    "Authorization": "Bearer <MCP_API_KEY>",
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream"
   }
 }
 ```
