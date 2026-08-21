@@ -191,6 +191,7 @@ export interface ChatModeSettings {
 }
 
 const THINK_MODEL_STORAGE_KEY = 'ai-localbase-think-model'
+const SIDEBAR_OPEN_STORAGE_KEY = 'ai-localbase-conversation-sidebar-open'
 const FALLBACK_REQUEST_TIMEOUT_MS = 180_000
 const STREAM_FIRST_CHUNK_TIMEOUT_MS = 30_000
 const STREAM_REQUEST_TIMEOUT_MS = 180_000
@@ -535,7 +536,13 @@ function AppContent() {
   const [authCheckDone, setAuthCheckDone] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() =>
-    typeof window === 'undefined' ? true : window.innerWidth > 768,
+    (() => {
+      if (typeof window === 'undefined') return true
+      const storedValue = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY)
+      if (storedValue === 'true') return true
+      if (storedValue === 'false') return false
+      return window.innerWidth > 768
+    })(),
   )
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
@@ -561,6 +568,10 @@ function AppContent() {
   const directoryUploadCancelRef = useRef(false)
   const chatAbortControllerRef = useRef<AbortController | null>(null)
   const activeChatRequestRef = useRef<{ requestId: string; conversationId: string } | null>(null)
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(sidebarOpen))
+  }, [sidebarOpen])
 
   const waitForBackendReady = async (attempts = 12, delayMs = 1500) => {
     for (let index = 0; index < attempts; index += 1) {
@@ -2180,9 +2191,6 @@ function AppContent() {
 
   const handleChangeWorkspace = (workspace: WorkspaceView) => {
     setActiveWorkspace(workspace)
-    if (workspace !== 'chat') {
-      setSidebarOpen(false)
-    }
   }
 
   const handleToggleKnowledgeBaseCollapse = (knowledgeBaseId: string) => {
@@ -2203,7 +2211,6 @@ function AppContent() {
       chunkId: source.chunkId,
     })
     setActiveWorkspace('knowledge')
-    setSidebarOpen(false)
   }
 
   useEffect(() => {
@@ -2276,7 +2283,7 @@ function AppContent() {
       >
         <Sidebar
           isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
+          onToggle={() => setSidebarOpen((current) => !current)}
           activeWorkspace={activeWorkspace}
           onChangeWorkspace={handleChangeWorkspace}
           conversations={conversations}

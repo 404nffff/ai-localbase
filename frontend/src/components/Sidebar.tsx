@@ -87,13 +87,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               aria-current={activeWorkspace === item.id ? 'page' : undefined}
               aria-label={item.label}
               title={item.label}
-              onClick={() => {
-                if (item.id === 'chat' && activeWorkspace === 'chat') {
-                  onToggle()
-                  return
-                }
-                onChangeWorkspace(item.id)
-              }}
+              onClick={() => onChangeWorkspace(item.id)}
             >
               <AppIcon name={item.icon} size={20} />
               <span>{item.label}</span>
