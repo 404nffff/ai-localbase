@@ -113,3 +113,27 @@ func TestMCPListLabelCollapsesUserProvidedWhitespace(t *testing.T) {
 		t.Fatalf("expected fallback label, got %q", got)
 	}
 }
+
+func TestGenerateEvalDatasetIsWriteToolWithEvalScope(t *testing.T) {
+	var definition ToolDefinition
+	for _, candidate := range NewReadOnlyTools(listToolsAppService{}) {
+		if candidate.Name == "generate_eval_dataset" {
+			definition = candidate
+			break
+		}
+	}
+	if definition.Name == "" {
+		t.Fatal("generate_eval_dataset tool not found")
+	}
+	if definition.ReadOnly {
+		t.Fatal("generate_eval_dataset must not be advertised as read-only")
+	}
+	if definition.PermissionLevel != ToolPermissionWrite {
+		t.Fatalf("expected write permission level, got %q", definition.PermissionLevel)
+	}
+
+	scopes := requiredScopesForTool(definition)
+	if len(scopes) != 1 || scopes[0] != scopeMCPEval {
+		t.Fatalf("expected mcp:eval scope, got %v", scopes)
+	}
+}

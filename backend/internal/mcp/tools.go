@@ -699,8 +699,8 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				},
 				[]string{},
 			),
-			ReadOnly:        true,
-			PermissionLevel: ToolPermissionReadOnly,
+			ReadOnly:        false,
+			PermissionLevel: ToolPermissionWrite,
 			Handler: func(ctx context.Context, args map[string]any) (ToolCallResult, error) {
 				_ = ctx
 				response, err := appService.GenerateEvalDataset(model.GenerateEvalDatasetRequest{

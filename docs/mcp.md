@@ -120,7 +120,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 ## 当前内置工具
 
-当前共提供 **30 个 MCP 工具**，分为 **18 个只读工具**、**9 个写工具**、**3 个危险工具**。
+当前共提供 **30 个 MCP 工具**，分为 **17 个只读工具**、**10 个写工具**、**3 个危险工具**。
 
 ### 权限级别说明
 
@@ -147,7 +147,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 | `inspect_knowledge_base_quality` | `read-only` | 聚合索引健康、最近评估和质量建议 |
 | `compare_retrieval_modes` | `read-only` | 对比 dense 与 hybrid 检索结果 |
 | `summarize_document` | `read-only` | 返回文档摘要、索引诊断和 chunk 预览 |
-| `generate_eval_dataset` | `read-only` | 生成 RAG 评估数据集 |
+| `generate_eval_dataset` | `write` | 生成并保存 RAG 评估数据集 |
 | `create_eval_case_from_query` | `write` | 根据检索问题创建待审核评测样本 |
 | `create_knowledge_base` | `write` | 创建知识库 |
 | `save_conversation` | `write` | 保存完整会话 |
@@ -422,7 +422,7 @@ MCP 默认关闭。服务器部署如需开启 MCP，必须同时设置 `ENABLE_
 
 #### `generate_eval_dataset`
 
-权限级别：`read-only`，需要 `mcp:eval` 或 `mcp:admin`
+权限级别：`write`，需要 `mcp:eval` 或 `mcp:admin`
 
 输入参数：
 
