@@ -150,7 +150,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
       {
         id: 'cherry-studio',
         name: 'Cherry Studio',
-        description: 'Streamable HTTP 服务配置',
+        description: 'HTTP JSON-RPC 配置（兼容部分客户端的 Streamable HTTP 入口）',
         scopes: ['mcp:read', 'mcp:upload', 'mcp:eval'],
         content: JSON.stringify(
           {
@@ -159,6 +159,8 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
             url: mcpEndpoint,
             headers: {
               Authorization: authHeader,
+              'Content-Type': 'application/json',
+              Accept: 'application/json, text/event-stream',
             },
           },
           null,
@@ -168,7 +170,7 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
       {
         id: 'claude-desktop',
         name: 'Claude Desktop',
-        description: '桌面端 HTTP MCP 配置',
+        description: '桌面端 HTTP JSON-RPC 配置',
         scopes: ['mcp:read', 'mcp:eval'],
         content: JSON.stringify(
           {
@@ -178,6 +180,8 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
                 url: mcpEndpoint,
                 headers: {
                   Authorization: authHeader,
+                  'Content-Type': 'application/json',
+                  Accept: 'application/json, text/event-stream',
                 },
               },
             },
@@ -198,6 +202,8 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({
             endpoint: mcpEndpoint,
             headers: {
               Authorization: authHeader,
+              'Content-Type': 'application/json',
+              Accept: 'application/json, text/event-stream',
             },
           },
           null,

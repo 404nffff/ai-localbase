@@ -201,7 +201,8 @@ docker compose -f docker-compose.dev.yml up --build
 当前支持：
 
 - MCP Server 版本：随应用发布版本注入，开发构建显示 `dev`
-- HTTP 形式 MCP 入口
+- HTTP / JSON-RPC MCP 入口（JSON 响应型 Streamable HTTP 子集）
+- 支持 `initialize`、`ping`、`tools/list`、`tools/call` 与初始化通知
 - 工具列表发现能力
 - 只读 / 写入 / 危险工具权限分级
 - API Key Scope 鉴权，旧 MCP Token 已废弃，仅保留迁移兼容开关
@@ -230,17 +231,18 @@ docker compose -f docker-compose.dev.yml up --build
 
 MCP 面向外部 Agent 暴露本地知识库和会话能力，服务器部署时请只在 `ENABLE_AUTH=true` 后再开启。新接入推荐使用带 `mcp:*` scope 的 API Key。旧 MCP Token 等价 MCP 全权限，已废弃且默认不允许鉴权；仅迁移旧客户端时临时设置 `ENABLE_MCP_LEGACY_TOKEN=true`。
 
-Docker 前端同源代理支持默认 `/mcp`，也支持以 `/mcp` 结尾的嵌套路径，例如 `/agent/mcp`。如果使用其他自定义路径，需要自行配置外部反向代理，或让 MCP 客户端直接访问后端端口。
+Docker 前端同源代理支持默认 `/mcp`，也支持以 `/mcp` 结尾的嵌套路径，例如 `/agent/mcp`。当前实现返回 JSON，不发放 MCP 会话 ID，也不提供 SSE 长连接；客户端应同时接受 `application/json`，不要只声明 `text/event-stream`。如果使用其他自定义路径，需要自行配置外部反向代理，或让 MCP 客户端直接访问后端端口。
 
 ### Cherry Studio 接入示例
 
 如果你希望在 Cherry Studio 中通过 MCP 接入 [`AI LocalBase`](README.md)，可以按以下方式配置：
 
-- **类型**：可流式传输的 HTTP（`streamableHttp`）
+- **类型**：HTTP JSON-RPC（客户端配置中可能显示为 `streamableHttp`）
 - **URL**：`http://127.0.0.1:8080/mcp`
 - **请求头**：
   - `Content-Type: application/json`
   - `Authorization: Bearer <带 MCP scope 的 API Key>`
+  - `Accept: application/json, text/event-stream`
 - **建议 scope**：`mcp:read`、`mcp:upload`、`mcp:eval`；需要删除类工具时再额外授予 `mcp:danger`
 
 ![Cherry Studio MCP 设置页面](./assets/mcp_setting.png)
