@@ -13,6 +13,9 @@
 - 提供只读 / 写入 / 危险工具调用能力
 - 提供 API Key Scope 鉴权；旧 MCP 全权限 Token 已废弃，仅保留迁移兼容开关
 - 提供调用日志与耗时记录
+- 提供受保护的 `/mcp/metrics` 调用统计与延迟指标
+- 工具结果统一使用 [MCP 平台化契约](mcp-platform-contract.md)，包含契约版本和结构化错误码
+- 知识库索引治理字段和错误分类见 [知识库治理规格](knowledge-governance-spec.md)
 - 提供工具权限分级（只读 / 写入 / 危险）
 - 提供 MCP 级限流与超时保护
 - 为危险工具提供一次性确认机制
@@ -54,6 +57,7 @@ POST 请求必须使用 `Content-Type: application/json`。客户端可以使用
 
 - `GET /mcp`：查看 MCP 服务基础信息
 - `GET /mcp/tools`：查看当前可用工具列表
+- `GET /mcp/metrics`：查看当前进程的调用计数、错误计数和延迟指标
 - `POST /mcp`：通过 JSON-RPC 调用 MCP 方法
 - `POST /api/config/mcp/danger-confirmations`：创建危险工具一次性确认 nonce
 - `POST /api/config/mcp/reset-token`：重置 MCP Token（仅在 `ENABLE_MCP_LEGACY_TOKEN=true` 时用于旧客户端迁移）

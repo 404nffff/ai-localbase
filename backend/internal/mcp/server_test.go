@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,6 +125,124 @@ func TestMCPJSONRPCProtocolBoundaries(t *testing.T) {
 	unsupportedAccept := performProtocolRequest(router, `{"jsonrpc":"2.0","id":4,"method":"ping"}`, "application/json", "text/event-stream")
 	if unsupportedAccept.Code != http.StatusNotAcceptable {
 		t.Fatalf("expected unacceptable response format status 406, got %d", unsupportedAccept.Code)
+	}
+}
+
+func TestMCPMetricsEndpointIsProtectedAndReportsContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, router := newProtocolTestServer()
+
+	ping := performProtocolRequest(router, `{"jsonrpc":"2.0","id":9,"method":"ping"}`, "application/json", "application/json")
+	if ping.Code != http.StatusOK {
+		t.Fatalf("expected ping to succeed, got %d", ping.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected metrics status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	for _, expected := range []string{`"contractVersion":"1.0"`, `"requestsTotal":1`, `"toolP95Ms"`} {
+		if !strings.Contains(resp.Body.String(), expected) {
+			t.Fatalf("expected metrics response to contain %q, got %s", expected, resp.Body.String())
+		}
+	}
+}
+
+func TestMCPMetricsCountProtocolAndAuthenticationFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, router := newProtocolTestServer()
+
+	unauthorized := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	unauthorizedResponse := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status 401, got %d", unauthorizedResponse.Code)
+	}
+
+	invalidBody := performProtocolRequest(router, "{", "application/json", "application/json")
+	if invalidBody.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed body status 400, got %d", invalidBody.Code)
+	}
+
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/mcp/metrics", nil)
+	metricsRequest.Header.Set("Authorization", "Bearer test-token")
+	metricsResponse := httptest.NewRecorder()
+	router.ServeHTTP(metricsResponse, metricsRequest)
+	if metricsResponse.Code != http.StatusOK {
+		t.Fatalf("expected metrics status 200, got %d body=%s", metricsResponse.Code, metricsResponse.Body.String())
+	}
+	for _, expected := range []string{`"requestsTotal":2`, `"requestsFailed":2`, `"authFailures":1`} {
+		if !strings.Contains(metricsResponse.Body.String(), expected) {
+			t.Fatalf("expected metrics response to contain %q, got %s", expected, metricsResponse.Body.String())
+		}
+	}
+}
+
+func TestMCPToolErrorContainsStructuredContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	registry := NewToolRegistry(ToolDefinition{
+		Name:            "failing_tool",
+		Description:     "test tool",
+		InputSchema:     emptyObjectSchema(),
+		ReadOnly:        true,
+		PermissionLevel: ToolPermissionReadOnly,
+		Handler: func(context.Context, map[string]any) (ToolCallResult, error) {
+			return ToolCallResult{}, fmt.Errorf("document not found")
+		},
+	})
+	server := NewServer(registry, staticTokenProvider{config: model.AppConfig{MCP: model.MCPConfig{Token: "test-token"}}}, nil, model.ServerConfig{
+		EnableAuth:           true,
+		EnableMCP:            true,
+		EnableMCPLegacyToken: true,
+	})
+	router := gin.New()
+	server.RegisterRoutes(router.Group("/mcp"))
+
+	resp := performProtocolRequest(router, `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"failing_tool","arguments":{}}}`, "application/json", "application/json")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected JSON-RPC tool error status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	for _, expected := range []string{`"contractVersion":"1.0"`, `"code":"not_found"`, `"retryable":false`} {
+		if !strings.Contains(resp.Body.String(), expected) {
+			t.Fatalf("expected structured tool error to contain %q, got %s", expected, resp.Body.String())
+		}
+	}
+}
+
+func TestMCPToolDescriptorPublishesDynamicImportScopes(t *testing.T) {
+	server := NewServer(NewToolRegistry(ToolDefinition{
+		Name:            "start_import_job",
+		Description:     "start import",
+		InputSchema:     emptyObjectSchema(),
+		ReadOnly:        false,
+		PermissionLevel: ToolPermissionWrite,
+		Handler:         noopToolHandler,
+	}), nil, nil, model.ServerConfig{})
+
+	descriptors := server.toolDescriptors()
+	if len(descriptors) != 1 {
+		t.Fatalf("expected one descriptor, got %d", len(descriptors))
+	}
+	annotations, ok := descriptors[0]["annotations"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected descriptor annotations, got %#v", descriptors[0]["annotations"])
+	}
+	variants, ok := annotations["scopeVariants"].(map[string][]string)
+	if !ok {
+		t.Fatalf("expected dynamic scope variants, got %#v", annotations["scopeVariants"])
+	}
+	if variants["reindex"][0] != scopeMCPWrite || variants["eval_dataset"][0] != scopeMCPEval {
+		t.Fatalf("unexpected dynamic scopes: %#v", variants)
+	}
+}
+
+func TestNormalizeToolCallResultAlwaysHasContractContent(t *testing.T) {
+	result := normalizeToolCallResult(ToolCallResult{}, "req-1")
+	if result.ContractVersion != resultContractVersion || result.Content == nil || result.Warnings == nil || result.NextActions == nil {
+		t.Fatalf("expected complete result contract, got %#v", result)
 	}
 }
 

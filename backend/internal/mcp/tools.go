@@ -169,11 +169,14 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 				items := make([]map[string]any, 0, len(knowledgeBases))
 				for _, kb := range knowledgeBases {
 					items = append(items, map[string]any{
-						"id":            kb.ID,
-						"name":          kb.Name,
-						"description":   kb.Description,
-						"documentCount": len(kb.Documents),
-						"createdAt":     kb.CreatedAt,
+						"id":                  kb.ID,
+						"name":                kb.Name,
+						"description":         kb.Description,
+						"tags":                append([]string(nil), kb.Tags...),
+						"documentCount":       len(kb.Documents),
+						"createdAt":           kb.CreatedAt,
+						"updatedAt":           kb.UpdatedAt,
+						"currentIndexVersion": kb.CurrentIndexVersion,
 					})
 				}
 				return NewTextResult(formatKnowledgeBaseListText(knowledgeBases), map[string]any{"items": items}), nil
@@ -800,7 +803,7 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 		},
 		{
 			Name:        "create_knowledge_base",
-			Description: "创建新的知识库。参数 name 为必填，description 为选填。",
+			Description: "创建新的知识库。参数 name 为必填，description 和 tags 为选填。",
 			InputSchema: objectSchema(
 				map[string]any{
 					"name": map[string]any{
@@ -810,6 +813,11 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					"description": map[string]any{
 						"type":        "string",
 						"description": "知识库描述",
+					},
+					"tags": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "用于分类的标签列表",
 					},
 				},
 				[]string{"name"},
@@ -823,9 +831,14 @@ func NewReadOnlyTools(appService AppServiceReader) []ToolDefinition {
 					return ToolCallResult{}, err
 				}
 				description := optionalStringArg(args, "description")
+				tags, err := optionalStringSliceArg(args, "tags")
+				if err != nil {
+					return ToolCallResult{}, err
+				}
 				knowledgeBase, err := appService.CreateKnowledgeBase(model.KnowledgeBaseInput{
 					Name:        name,
 					Description: description,
+					Tags:        tags,
 				})
 				if err != nil {
 					return ToolCallResult{}, err
@@ -1676,8 +1689,11 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 		"toolCount":        len(tools),
 		"permissionCounts": permissionCounts,
 		"tools":            toolItems,
-		"capabilities":     map[string]any{"tools": map[string]any{"listChanged": false}},
-		"authModel":        "api_key_scope",
+		"capabilities": map[string]any{
+			"tools":   map[string]any{"listChanged": false},
+			"metrics": map[string]any{"path": "/metrics", "scope": scopeMCPRead},
+		},
+		"authModel": "api_key_scope",
 		"requiredScopes": []string{
 			scopeMCPRead,
 			scopeMCPWrite,
@@ -1692,7 +1708,7 @@ func buildMCPCapabilities(cfg model.AppConfig, tools []ToolDefinition) map[strin
 			"legacyHeader": "X-MCP-Confirm",
 		},
 		"jobSupport":            true,
-		"resultContractVersion": "1.0",
+		"resultContractVersion": resultContractVersion,
 		"auth": map[string]any{
 			"type":                  "api_key_scope",
 			"legacyTokenCompatible": cfg.MCP.LegacyTokenEnabled,
@@ -1782,6 +1798,8 @@ func buildSafeMCPKnowledgeBaseHealth(health model.KnowledgeBaseHealthResponse) m
 			"documentName":        document.DocumentName,
 			"status":              document.Status,
 			"indexedAt":           document.IndexedAt,
+			"errorCode":           document.IndexErrorCode,
+			"indexVersion":        document.IndexVersion,
 			"chunkCount":          document.ChunkCount,
 			"vectorCount":         document.VectorCount,
 			"summaryChunkCount":   document.SummaryChunkCount,
@@ -1794,10 +1812,11 @@ func buildSafeMCPKnowledgeBaseHealth(health model.KnowledgeBaseHealthResponse) m
 	}
 
 	return map[string]any{
-		"knowledgeBaseId": health.KnowledgeBaseID,
-		"name":            health.Name,
-		"status":          health.Status,
-		"score":           health.Score,
+		"knowledgeBaseId":     health.KnowledgeBaseID,
+		"name":                health.Name,
+		"status":              health.Status,
+		"score":               health.Score,
+		"currentIndexVersion": health.CurrentIndexVersion,
 		"metrics": map[string]any{
 			"documentCount":      health.Metrics.DocumentCount,
 			"indexedCount":       health.Metrics.IndexedCount,
@@ -1814,7 +1833,28 @@ func buildSafeMCPKnowledgeBaseHealth(health model.KnowledgeBaseHealthResponse) m
 		},
 		"recommendations": health.Recommendations,
 		"documents":       documents,
+		"indexHistory":    safeMCPIndexHistory(health.IndexHistory),
 	}
+}
+
+func safeMCPIndexHistory(items []model.IndexRunRecord) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]any{
+			"id":              item.ID,
+			"knowledgeBaseId": item.KnowledgeBaseID,
+			"documentId":      item.DocumentID,
+			"documentName":    item.DocumentName,
+			"trigger":         item.Trigger,
+			"status":          item.Status,
+			"indexVersion":    item.IndexVersion,
+			"chunkCount":      item.ChunkCount,
+			"errorCode":       item.ErrorCode,
+			"startedAt":       item.StartedAt,
+			"completedAt":     item.CompletedAt,
+		})
+	}
+	return result
 }
 
 func emptyObjectSchema() map[string]any {

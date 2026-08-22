@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -47,11 +48,28 @@ type Server struct {
 	requestsPerMin              int
 	rateMu                      sync.Mutex
 	rateBuckets                 map[string]mcpRateBucket
+	metricsMu                   sync.Mutex
+	metrics                     mcpMetricsState
 }
 
 type mcpRateBucket struct {
 	windowStart time.Time
 	count       int
+}
+
+type mcpMetricsState struct {
+	startedAt          time.Time
+	requestsTotal      int64
+	requestsSucceeded  int64
+	requestsFailed     int64
+	toolCallsTotal     int64
+	toolCallsSucceeded int64
+	toolCallsFailed    int64
+	rateLimited        int64
+	authFailures       int64
+	scopeDenied        int64
+	requestLatencies   []int64
+	toolLatencies      []int64
 }
 
 type authContext struct {
@@ -109,6 +127,7 @@ func NewServer(registry *ToolRegistry, tokenProvider TokenProvider, apiKeyValida
 		requestTimeout:              timeout,
 		requestsPerMin:              requestsPerMin,
 		rateBuckets:                 map[string]mcpRateBucket{},
+		metrics:                     mcpMetricsState{startedAt: time.Now().UTC()},
 	}
 }
 
@@ -119,11 +138,16 @@ func (s *Server) RegisterRoutes(group *gin.RouterGroup) {
 
 	group.GET("", s.handleInfo)
 	group.GET("/tools", s.handleListTools)
+	group.GET("/metrics", s.handleMetrics)
 	group.POST("", s.handleJSONRPC)
 }
 
 func (s *Server) handleInfo(c *gin.Context) {
 	startedAt := time.Now()
+	requestSucceeded := false
+	defer func() {
+		s.recordMCPRequestMetric(requestSucceeded, time.Since(startedAt))
+	}()
 	authCtx, ok := s.authenticate(c)
 	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
@@ -131,20 +155,26 @@ func (s *Server) handleInfo(c *gin.Context) {
 	if !s.allowRequest(c, authCtx) {
 		return
 	}
+	requestSucceeded = true
 	c.JSON(http.StatusOK, gin.H{
-		"name":            serverName,
-		"version":         serverVersion,
-		"protocolVersion": protocolVersion,
-		"jsonrpc":         jsonRPCVersion,
-		"capabilities":    gin.H{"tools": gin.H{"listChanged": false}},
-		"transport":       "http",
-		"toolCount":       len(s.registry.List()),
+		"name":                  serverName,
+		"version":               serverVersion,
+		"protocolVersion":       protocolVersion,
+		"jsonrpc":               jsonRPCVersion,
+		"capabilities":          gin.H{"tools": gin.H{"listChanged": false}, "metrics": gin.H{"path": "/metrics", "scope": scopeMCPRead}},
+		"resultContractVersion": resultContractVersion,
+		"transport":             "http",
+		"toolCount":             len(s.registry.List()),
 	})
 	s.recordMCPRequestAudit(c, authCtx, "GET /mcp", startedAt, true, "")
 }
 
-func (s *Server) handleListTools(c *gin.Context) {
+func (s *Server) handleMetrics(c *gin.Context) {
 	startedAt := time.Now()
+	requestSucceeded := false
+	defer func() {
+		s.recordMCPRequestMetric(requestSucceeded, time.Since(startedAt))
+	}()
 	authCtx, ok := s.authenticate(c)
 	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 		return
@@ -152,6 +182,25 @@ func (s *Server) handleListTools(c *gin.Context) {
 	if !s.allowRequest(c, authCtx) {
 		return
 	}
+	requestSucceeded = true
+	c.JSON(http.StatusOK, s.metricsSnapshot())
+	s.recordMCPRequestAudit(c, authCtx, "GET /mcp/metrics", startedAt, true, "")
+}
+
+func (s *Server) handleListTools(c *gin.Context) {
+	startedAt := time.Now()
+	requestSucceeded := false
+	defer func() {
+		s.recordMCPRequestMetric(requestSucceeded, time.Since(startedAt))
+	}()
+	authCtx, ok := s.authenticate(c)
+	if !ok || !s.authorizeScopes(c, authCtx, scopeMCPRead) {
+		return
+	}
+	if !s.allowRequest(c, authCtx) {
+		return
+	}
+	requestSucceeded = true
 	c.JSON(http.StatusOK, gin.H{
 		"tools": s.toolDescriptors(),
 	})
@@ -159,6 +208,11 @@ func (s *Server) handleListTools(c *gin.Context) {
 }
 
 func (s *Server) handleJSONRPC(c *gin.Context) {
+	startedAt := time.Now()
+	requestSucceeded := false
+	defer func() {
+		s.recordMCPRequestMetric(requestSucceeded, time.Since(startedAt))
+	}()
 	authCtx, ok := s.authenticate(c)
 	if !ok {
 		return
@@ -171,7 +225,6 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 		return
 	}
 
-	startedAt := time.Now()
 	ctx := c.Request.Context()
 	if s.requestTimeout > 0 {
 		var cancel context.CancelFunc
@@ -200,6 +253,7 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 		if !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 			return
 		}
+		requestSucceeded = true
 		response := JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
 			ID:      request.ID,
@@ -213,19 +267,26 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 					"tools": map[string]any{
 						"listChanged": false,
 					},
+					"metrics": map[string]any{
+						"path":  "/metrics",
+						"scope": scopeMCPRead,
+					},
 				},
+				"resultContractVersion": resultContractVersion,
 			},
 		}
 		s.recordMCPRequestAudit(c, authCtx, method, startedAt, true, "")
 		log.Printf("mcp request method=%s remote=%s duration_ms=%d", method, c.ClientIP(), time.Since(startedAt).Milliseconds())
 		writeJSONRPCResponse(c, http.StatusOK, response, isNotification)
 	case "notifications/initialized":
+		requestSucceeded = true
 		s.recordMCPRequestAudit(c, authCtx, method, startedAt, true, "")
 		c.Status(http.StatusAccepted)
 	case "ping":
 		if !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 			return
 		}
+		requestSucceeded = true
 		s.recordMCPRequestAudit(c, authCtx, method, startedAt, true, "")
 		writeJSONRPCResponse(c, http.StatusOK, JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
@@ -236,6 +297,7 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 		if !s.authorizeScopes(c, authCtx, scopeMCPRead) {
 			return
 		}
+		requestSucceeded = true
 		log.Printf("mcp request method=%s remote=%s duration_ms=%d", method, c.ClientIP(), time.Since(startedAt).Milliseconds())
 		s.recordMCPRequestAudit(c, authCtx, method, startedAt, true, "")
 		writeJSONRPCResponse(c, http.StatusOK, JSONRPCResponse{
@@ -296,35 +358,38 @@ func (s *Server) handleJSONRPC(c *gin.Context) {
 			if ctx.Err() != nil {
 				log.Printf("mcp tool call timeout tool=%s permission=%s remote=%s duration_ms=%d", toolName, permissionLevel, c.ClientIP(), time.Since(startedAt).Milliseconds())
 				s.recordMCPAudit(c, authCtx, toolName, permissionLevel, startedAt, false, isDanger, ctx.Err().Error())
-				writeJSONRPCResponse(c, http.StatusGatewayTimeout, errorResponse(request.ID, -32001, "mcp request timed out"), isNotification)
+				writeJSONRPCResponse(c, http.StatusGatewayTimeout, toolErrorResponse(request.ID, toolName, requestIDFromContext(c), -32001, "mcp request timed out", ctx.Err(), ctx), isNotification)
 				return
 			}
 			safeError := sanitizeMCPError(err.Error())
 			log.Printf("mcp tool call failed tool=%s permission=%s remote=%s duration_ms=%d error=%s", toolName, permissionLevel, c.ClientIP(), time.Since(startedAt).Milliseconds(), safeError)
 			s.recordMCPAudit(c, authCtx, toolName, permissionLevel, startedAt, false, isDanger, safeError)
-			writeJSONRPCResponse(c, http.StatusOK, errorResponse(request.ID, -32000, safeError), isNotification)
+			writeJSONRPCResponse(c, http.StatusOK, toolErrorResponse(request.ID, toolName, requestIDFromContext(c), -32000, safeError, err, ctx), isNotification)
 			return
 		}
 		if ctx.Err() != nil {
 			log.Printf("mcp tool call timeout tool=%s permission=%s remote=%s duration_ms=%d", toolName, permissionLevel, c.ClientIP(), time.Since(startedAt).Milliseconds())
 			s.recordMCPAudit(c, authCtx, toolName, permissionLevel, startedAt, false, isDanger, ctx.Err().Error())
-			writeJSONRPCResponse(c, http.StatusGatewayTimeout, errorResponse(request.ID, -32001, "mcp request timed out"), isNotification)
+			writeJSONRPCResponse(c, http.StatusGatewayTimeout, toolErrorResponse(request.ID, toolName, requestIDFromContext(c), -32001, "mcp request timed out", ctx.Err(), ctx), isNotification)
 			return
 		}
 		result = normalizeToolCallResult(result, requestIDFromContext(c))
+		requestSucceeded = !result.IsError
 		log.Printf("mcp tool call tool=%s permission=%s remote=%s duration_ms=%d is_error=%t", toolName, permissionLevel, c.ClientIP(), time.Since(startedAt).Milliseconds(), result.IsError)
 		s.recordMCPAudit(c, authCtx, toolName, permissionLevel, startedAt, !result.IsError, isDanger, "")
 		writeJSONRPCResponse(c, http.StatusOK, JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
 			ID:      request.ID,
 			Result: map[string]any{
-				"summary":     result.Summary,
-				"content":     result.Content,
-				"data":        result.Data,
-				"warnings":    result.Warnings,
-				"nextActions": result.NextActions,
-				"requestId":   result.RequestID,
-				"isError":     result.IsError,
+				"summary":         result.Summary,
+				"content":         result.Content,
+				"data":            result.Data,
+				"warnings":        result.Warnings,
+				"nextActions":     result.NextActions,
+				"requestId":       result.RequestID,
+				"isError":         result.IsError,
+				"contractVersion": result.ContractVersion,
+				"error":           result.Error,
 			},
 		}, isNotification)
 	default:
@@ -357,16 +422,29 @@ func validateJSONRPCHeaders(c *gin.Context) bool {
 }
 
 func normalizeToolCallResult(result ToolCallResult, requestID string) ToolCallResult {
+	if strings.TrimSpace(result.ContractVersion) == "" {
+		result.ContractVersion = resultContractVersion
+	}
 	if strings.TrimSpace(result.Summary) == "" && len(result.Content) > 0 {
 		result.Summary = strings.TrimSpace(result.Content[0].Text)
 	}
 	if result.Warnings == nil {
 		result.Warnings = []string{}
 	}
+	if result.Content == nil {
+		result.Content = []ToolContent{}
+	}
 	if result.NextActions == nil {
 		result.NextActions = []string{}
 	}
 	result.RequestID = strings.TrimSpace(requestID)
+	if result.IsError && result.Error == nil {
+		result.Error = &ToolCallError{
+			Code:      "tool_error",
+			Message:   "tool returned an error",
+			Retryable: false,
+		}
+	}
 	return result
 }
 
@@ -386,15 +464,25 @@ func (s *Server) toolDescriptors() []map[string]any {
 	tools := s.registry.List()
 	items := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
+		annotations := map[string]any{
+			"readOnlyHint":    tool.ReadOnly,
+			"permissionLevel": tool.PermissionLevel,
+			"requiredScopes":  requiredScopesForTool(tool),
+		}
+		if tool.Name == "start_import_job" {
+			annotations["scopeVariants"] = map[string][]string{
+				"import":       []string{scopeMCPUpload},
+				"batch_index":  []string{scopeMCPUpload},
+				"reindex":      []string{scopeMCPWrite},
+				"eval_dataset": []string{scopeMCPEval},
+			}
+		}
 		items = append(items, map[string]any{
-			"name":        tool.Name,
-			"description": tool.Description,
-			"inputSchema": inputSchemaForTool(tool),
-			"annotations": map[string]any{
-				"readOnlyHint":    tool.ReadOnly,
-				"permissionLevel": tool.PermissionLevel,
-				"requiredScopes":  requiredScopesForTool(tool),
-			},
+			"name":                  tool.Name,
+			"description":           tool.Description,
+			"inputSchema":           inputSchemaForTool(tool),
+			"resultContractVersion": resultContractVersion,
+			"annotations":           annotations,
 		})
 	}
 	return items
@@ -455,6 +543,48 @@ func errorResponse(id any, code int, message string) JSONRPCResponse {
 			Code:    code,
 			Message: message,
 		},
+	}
+}
+
+func toolErrorResponse(id any, toolName, requestID string, jsonRPCCode int, message string, err error, ctx context.Context) JSONRPCResponse {
+	toolError := classifyToolCallError(err, ctx)
+	toolError.Message = sanitizeMCPError(message)
+	response := errorResponse(id, jsonRPCCode, toolError.Message)
+	response.Error.Data = map[string]any{
+		"contractVersion": resultContractVersion,
+		"tool":            strings.TrimSpace(toolName),
+		"requestId":       strings.TrimSpace(requestID),
+		"error":           toolError,
+	}
+	return response
+}
+
+func classifyToolCallError(err error, ctx context.Context) ToolCallError {
+	message := "mcp operation failed"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		message = sanitizeMCPError(err.Error())
+	}
+	if ctx != nil {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return ToolCallError{Code: "timeout", Message: "mcp request timed out", Retryable: true}
+		case errors.Is(ctx.Err(), context.Canceled):
+			return ToolCallError{Code: "cancelled", Message: "mcp request was cancelled", Retryable: true}
+		}
+	}
+
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "required"), strings.Contains(lower, "must be"), strings.Contains(lower, "invalid"):
+		return ToolCallError{Code: "invalid_argument", Message: message, Retryable: false}
+	case strings.Contains(lower, "not found"):
+		return ToolCallError{Code: "not_found", Message: message, Retryable: false}
+	case strings.Contains(lower, "permission"), strings.Contains(lower, "unauthorized"), strings.Contains(lower, "forbidden"):
+		return ToolCallError{Code: "permission_denied", Message: message, Retryable: false}
+	case strings.Contains(lower, "unavailable"), strings.Contains(lower, "qdrant"), strings.Contains(lower, "embedding"), strings.Contains(lower, "model"), strings.Contains(lower, "temporarily"):
+		return ToolCallError{Code: "dependency_unavailable", Message: message, Retryable: true}
+	default:
+		return ToolCallError{Code: "internal_error", Message: message, Retryable: false}
 	}
 }
 
@@ -548,7 +678,11 @@ func sanitizeMCPError(message string) string {
 }
 
 func (s *Server) recordMCPEvent(c *gin.Context, authCtx authContext, eventType, message string) {
-	if s == nil || s.auditRecorder == nil || c == nil {
+	if s == nil {
+		return
+	}
+	s.recordMCPEventMetric(eventType)
+	if s.auditRecorder == nil || c == nil {
 		return
 	}
 	username := strings.TrimSpace(authCtx.Principal.Username)
@@ -724,6 +858,7 @@ func withoutConfirmNonce(args map[string]any) map[string]any {
 }
 
 func (s *Server) recordMCPAudit(c *gin.Context, authCtx authContext, toolName, permissionLevel string, startedAt time.Time, success bool, isDanger bool, errorSummary string) {
+	s.recordMCPToolMetric(success, time.Since(startedAt))
 	eventType := "mcp_call_succeeded"
 	if isDanger {
 		eventType = "mcp_danger_succeeded"
@@ -754,6 +889,132 @@ func (s *Server) recordMCPAudit(c *gin.Context, authCtx authContext, toolName, p
 	s.recordMCPEvent(c, authCtx, eventType, message)
 }
 
+func (s *Server) recordMCPEventMetric(eventType string) {
+	if s == nil {
+		return
+	}
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if s.metrics.startedAt.IsZero() {
+		s.metrics.startedAt = time.Now().UTC()
+	}
+	switch eventType {
+	case "mcp_rate_limited":
+		s.metrics.rateLimited++
+	case "mcp_auth_failed":
+		s.metrics.authFailures++
+	case "mcp_scope_denied":
+		s.metrics.scopeDenied++
+	}
+}
+
+func (s *Server) recordMCPRequestMetric(success bool, duration time.Duration) {
+	if s == nil {
+		return
+	}
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if s.metrics.startedAt.IsZero() {
+		s.metrics.startedAt = time.Now().UTC()
+	}
+	s.metrics.requestsTotal++
+	if success {
+		s.metrics.requestsSucceeded++
+	} else {
+		s.metrics.requestsFailed++
+	}
+	s.metrics.requestLatencies = appendMetricLatency(s.metrics.requestLatencies, duration)
+}
+
+func (s *Server) recordMCPToolMetric(success bool, duration time.Duration) {
+	if s == nil {
+		return
+	}
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if s.metrics.startedAt.IsZero() {
+		s.metrics.startedAt = time.Now().UTC()
+	}
+	s.metrics.toolCallsTotal++
+	if success {
+		s.metrics.toolCallsSucceeded++
+	} else {
+		s.metrics.toolCallsFailed++
+	}
+	s.metrics.toolLatencies = appendMetricLatency(s.metrics.toolLatencies, duration)
+}
+
+func appendMetricLatency(values []int64, duration time.Duration) []int64 {
+	if duration < 0 {
+		duration = 0
+	}
+	values = append(values, duration.Milliseconds())
+	const maxSamples = 512
+	if len(values) > maxSamples {
+		values = values[len(values)-maxSamples:]
+	}
+	return values
+}
+
+func (s *Server) metricsSnapshot() MCPMetricsSnapshot {
+	if s == nil {
+		return MCPMetricsSnapshot{ContractVersion: resultContractVersion, ServerVersion: serverVersion}
+	}
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	startedAt := s.metrics.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+		s.metrics.startedAt = startedAt
+	}
+	return MCPMetricsSnapshot{
+		ContractVersion:    resultContractVersion,
+		ServerVersion:      serverVersion,
+		StartedAt:          startedAt.Format(time.RFC3339),
+		RequestsTotal:      s.metrics.requestsTotal,
+		RequestsSucceeded:  s.metrics.requestsSucceeded,
+		RequestsFailed:     s.metrics.requestsFailed,
+		ToolCallsTotal:     s.metrics.toolCallsTotal,
+		ToolCallsSucceeded: s.metrics.toolCallsSucceeded,
+		ToolCallsFailed:    s.metrics.toolCallsFailed,
+		RateLimited:        s.metrics.rateLimited,
+		AuthFailures:       s.metrics.authFailures,
+		ScopeDenied:        s.metrics.scopeDenied,
+		RequestP50Ms:       metricPercentile(s.metrics.requestLatencies, 0.50),
+		RequestP95Ms:       metricPercentile(s.metrics.requestLatencies, 0.95),
+		RequestMaxMs:       metricMax(s.metrics.requestLatencies),
+		ToolP50Ms:          metricPercentile(s.metrics.toolLatencies, 0.50),
+		ToolP95Ms:          metricPercentile(s.metrics.toolLatencies, 0.95),
+		ToolMaxMs:          metricMax(s.metrics.toolLatencies),
+	}
+}
+
+func metricPercentile(values []int64, ratio float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	index := int(float64(len(sorted)-1) * ratio)
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
+func metricMax(values []int64) int64 {
+	var maximum int64
+	for _, value := range values {
+		if value > maximum {
+			maximum = value
+		}
+	}
+	return maximum
+}
+
 func requiredScopesForTool(tool ToolDefinition) []string {
 	switch {
 	case tool.PermissionLevel == ToolPermissionDanger:
@@ -761,7 +1022,9 @@ func requiredScopesForTool(tool ToolDefinition) []string {
 	case tool.Name == "generate_eval_dataset", tool.Name == "create_eval_case_from_query":
 		return []string{scopeMCPEval}
 	case tool.Name == "start_import_job":
-		return []string{scopeMCPUpload, scopeMCPWrite, scopeMCPEval}
+		// The actual scope is selected by jobType; the descriptor advertises
+		// the default import scope and exposes the other variants separately.
+		return []string{scopeMCPUpload}
 	case isMCPUploadTool(tool.Name):
 		return []string{scopeMCPUpload}
 	case tool.PermissionLevel == ToolPermissionWrite:
