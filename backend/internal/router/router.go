@@ -74,6 +74,7 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 		api.POST("/knowledge-bases", appHandler.CreateKnowledgeBase)
 		api.DELETE("/knowledge-bases/:id", appHandler.DeleteKnowledgeBase)
 		api.GET("/knowledge-bases/:id/health", appHandler.GetKnowledgeBaseHealth)
+		api.GET("/knowledge-bases/:id/index-history", appHandler.GetKnowledgeBaseIndexHistory)
 		api.POST("/knowledge-bases/:id/retrieval/debug", appHandler.DebugRetrieve)
 		api.GET("/eval/datasets", appHandler.ListEvalDatasets)
 		api.GET("/eval/runs", appHandler.ListEvalRuns)

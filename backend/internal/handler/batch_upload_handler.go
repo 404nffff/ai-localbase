@@ -27,6 +27,7 @@ type IndexResult struct {
 	DocumentID string         `json:"documentId,omitempty"`
 	FileName   string         `json:"fileName"`
 	Success    bool           `json:"success"`
+	ErrorCode  string         `json:"errorCode,omitempty"`
 	Error      string         `json:"error,omitempty"`
 	Document   model.Document `json:"document,omitempty"`
 }
@@ -145,11 +146,13 @@ func (h *AppHandler) indexSingleStaged(knowledgeBaseID, uploadID string, owner s
 	document, err := h.appService.RegisterStagedUploadAs(context.Background(), uploadID, knowledgeBaseID, "", owner)
 
 	if err != nil {
+		code, message := service.PublicIndexFailure(err)
 		return IndexResult{
-			UploadID: uploadID,
-			FileName: "",
-			Success:  false,
-			Error:    err.Error(),
+			UploadID:  uploadID,
+			FileName:  "",
+			Success:   false,
+			ErrorCode: code,
+			Error:     message,
 		}
 	}
 
@@ -164,12 +167,15 @@ func (h *AppHandler) indexSingleStaged(knowledgeBaseID, uploadID string, owner s
 
 // DocumentIndexStatus 文档索引状态
 type DocumentIndexStatus struct {
-	DocumentID  string `json:"documentId"`
-	Status      string `json:"status"` // processing, indexed, failed
-	ChunkCount  int    `json:"chunkCount,omitempty"`
-	IndexedAt   string `json:"indexedAt,omitempty"`
-	IndexError  string `json:"indexError,omitempty"`
-	ProgressPct int    `json:"progressPct,omitempty"` // 0-100
+	DocumentID     string `json:"documentId"`
+	Status         string `json:"status"` // processing, indexed, failed
+	ChunkCount     int    `json:"chunkCount,omitempty"`
+	IndexedAt      string `json:"indexedAt,omitempty"`
+	IndexError     string `json:"indexError,omitempty"`
+	IndexErrorCode string `json:"indexErrorCode,omitempty"`
+	IndexRunID     string `json:"indexRunId,omitempty"`
+	IndexVersion   int    `json:"indexVersion,omitempty"`
+	ProgressPct    int    `json:"progressPct,omitempty"` // 0-100
 }
 
 // GetDocumentIndexStatus 获取文档索引状态
@@ -182,8 +188,7 @@ func (h *AppHandler) GetDocumentIndexStatus(c *gin.Context) {
 		return
 	}
 
-	// 查找文档详情
-	detail, err := h.appService.GetDocumentDetail(knowledgeBaseID, documentID, "")
+	document, err := h.appService.GetDocumentIndexStatus(knowledgeBaseID, documentID)
 	if err != nil {
 		writeError(c, http.StatusNotFound, "document not found")
 		return
@@ -191,15 +196,18 @@ func (h *AppHandler) GetDocumentIndexStatus(c *gin.Context) {
 
 	// 构建状态响应
 	status := DocumentIndexStatus{
-		DocumentID: detail.Document.ID,
-		Status:     detail.Document.Status,
-		ChunkCount: detail.Document.ChunkCount,
-		IndexedAt:  detail.Document.IndexedAt,
-		IndexError: detail.Document.IndexError,
+		DocumentID:     document.ID,
+		Status:         document.Status,
+		ChunkCount:     document.ChunkCount,
+		IndexedAt:      document.IndexedAt,
+		IndexError:     document.IndexError,
+		IndexErrorCode: document.IndexErrorCode,
+		IndexRunID:     document.IndexRunID,
+		IndexVersion:   document.IndexVersion,
 	}
 
 	// 简单的进度估算
-	switch detail.Document.Status {
+	switch document.Status {
 	case "processing":
 		status.ProgressPct = 50 // 处理中显示50%
 	case "indexed":

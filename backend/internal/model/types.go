@@ -206,16 +206,36 @@ type AppConfig struct {
 }
 
 type KnowledgeBase struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Documents   []Document `json:"documents"`
-	CreatedAt   string     `json:"createdAt"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name"`
+	Description         string           `json:"description"`
+	Tags                []string         `json:"tags,omitempty"`
+	Documents           []Document       `json:"documents"`
+	CreatedAt           string           `json:"createdAt"`
+	UpdatedAt           string           `json:"updatedAt,omitempty"`
+	CurrentIndexVersion int              `json:"currentIndexVersion,omitempty"`
+	IndexHistory        []IndexRunRecord `json:"indexHistory,omitempty"`
 }
 
 type KnowledgeBaseInput struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+type IndexRunRecord struct {
+	ID              string `json:"id"`
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	DocumentID      string `json:"documentId,omitempty"`
+	DocumentName    string `json:"documentName,omitempty"`
+	Trigger         string `json:"trigger"`
+	Status          string `json:"status"`
+	IndexVersion    int    `json:"indexVersion"`
+	ChunkCount      int    `json:"chunkCount,omitempty"`
+	ErrorCode       string `json:"errorCode,omitempty"`
+	Error           string `json:"error,omitempty"`
+	StartedAt       string `json:"startedAt"`
+	CompletedAt     string `json:"completedAt,omitempty"`
 }
 
 type Document struct {
@@ -226,11 +246,16 @@ type Document struct {
 	SizeLabel       string `json:"sizeLabel"`
 	UploadedAt      string `json:"uploadedAt"`
 	Status          string `json:"status"`
+	Source          string `json:"source,omitempty"`
+	Version         int    `json:"version,omitempty"`
+	Checksum        string `json:"-"`
 	Path            string `json:"-"`
 	ContentPreview  string `json:"contentPreview"`
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
 	IndexError      string `json:"indexError,omitempty"`
+	IndexErrorCode  string `json:"indexErrorCode,omitempty"`
+	IndexRunID      string `json:"indexRunId,omitempty"`
 	IndexVersion    int    `json:"indexVersion,omitempty"`
 }
 
@@ -283,6 +308,8 @@ type KnowledgeBaseDocumentHealth struct {
 	Status              string `json:"status"`
 	IndexedAt           string `json:"indexedAt,omitempty"`
 	IndexError          string `json:"indexError,omitempty"`
+	IndexErrorCode      string `json:"indexErrorCode,omitempty"`
+	IndexVersion        int    `json:"indexVersion,omitempty"`
 	ChunkCount          int    `json:"chunkCount"`
 	VectorCount         int    `json:"vectorCount"`
 	SummaryChunkCount   int    `json:"summaryChunkCount"`
@@ -294,13 +321,21 @@ type KnowledgeBaseDocumentHealth struct {
 }
 
 type KnowledgeBaseHealthResponse struct {
-	KnowledgeBaseID string                        `json:"knowledgeBaseId"`
-	Name            string                        `json:"name"`
-	Status          string                        `json:"status"`
-	Score           int                           `json:"score"`
-	Metrics         KnowledgeBaseHealthMetrics    `json:"metrics"`
-	Recommendations []string                      `json:"recommendations"`
-	Documents       []KnowledgeBaseDocumentHealth `json:"documents"`
+	KnowledgeBaseID     string                        `json:"knowledgeBaseId"`
+	Name                string                        `json:"name"`
+	Status              string                        `json:"status"`
+	Score               int                           `json:"score"`
+	CurrentIndexVersion int                           `json:"currentIndexVersion"`
+	Metrics             KnowledgeBaseHealthMetrics    `json:"metrics"`
+	Recommendations     []string                      `json:"recommendations"`
+	Documents           []KnowledgeBaseDocumentHealth `json:"documents"`
+	IndexHistory        []IndexRunRecord              `json:"indexHistory,omitempty"`
+}
+
+type KnowledgeBaseIndexHistoryResponse struct {
+	KnowledgeBaseID     string           `json:"knowledgeBaseId"`
+	CurrentIndexVersion int              `json:"currentIndexVersion"`
+	Items               []IndexRunRecord `json:"items"`
 }
 
 type UploadResponse struct {

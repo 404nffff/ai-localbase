@@ -139,6 +139,54 @@ func TestAppStateStoreLoadMissingFile(t *testing.T) {
 	}
 }
 
+func TestAppStateStoreMigratesLegacyKnowledgeBaseGovernance(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "legacy-state.json")
+	legacy := `{
+  "knowledgeBases": {
+    "kb-legacy": {
+      "name": "旧知识库",
+      "documents": [{
+        "id": "doc-legacy",
+        "name": "notes.txt",
+        "status": "indexed",
+        "indexError": "open /Users/private/notes.txt: no such file"
+      }],
+      "indexHistory": [{
+        "id": "run-legacy",
+        "documentId": "doc-legacy",
+        "status": "failed",
+        "error": "qdrant request failed at http://qdrant:6333/collections/private"
+      }]
+    }
+  }
+}`
+	if err := os.WriteFile(statePath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	loaded, err := NewAppStateStore(statePath).Load()
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	kb := loaded.KnowledgeBases["kb-legacy"]
+	if kb.ID != "kb-legacy" || kb.CurrentIndexVersion != currentIndexVersion {
+		t.Fatalf("expected migrated knowledge base identity/version, got %+v", kb)
+	}
+	if len(kb.Documents) != 1 {
+		t.Fatalf("expected one migrated document, got %d", len(kb.Documents))
+	}
+	document := kb.Documents[0]
+	if document.KnowledgeBaseID != kb.ID || document.Source != "legacy" || document.Version != 1 {
+		t.Fatalf("expected migrated document governance, got %+v", document)
+	}
+	if document.IndexErrorCode != indexErrorSourceMissing || document.IndexError != publicIndexError(indexErrorSourceMissing) {
+		t.Fatalf("expected classified public error, got %+v", document)
+	}
+	if len(kb.IndexHistory) != 1 || kb.IndexHistory[0].Error == "qdrant request failed at http://qdrant:6333/collections/private" {
+		t.Fatalf("expected migrated history error to be sanitized, got %+v", kb.IndexHistory)
+	}
+}
+
 func TestNewAppServiceLoadsPersistedState(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "persisted.json")
 	store := NewAppStateStore(statePath)

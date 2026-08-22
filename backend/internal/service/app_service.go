@@ -66,27 +66,28 @@ func normalizeServiceContext(ctx context.Context) context.Context {
 }
 
 type AppService struct {
-	state             *model.AppState
-	store             *AppStateStore
-	chatHistory       ChatHistoryStore
-	qdrant            *QdrantService
-	rag               *RagService
-	serverConfig      model.ServerConfig
-	staging           *UploadStagingService
-	stateSaveMu       sync.Mutex
-	reranker          SemanticReranker
-	queryRewriter     QueryRewriter
-	semanticCache     *SemanticCache
-	contextCompressor ContextCompressor
-	mcpDangerMu       sync.Mutex
-	mcpDangerConfirms map[string]mcpDangerConfirmationRecord
-	mcpDangerRates    map[string][]time.Time
-	mcpJobMu          sync.Mutex
-	mcpJobs           map[string]model.MCPJob
-	mcpJobCancels     map[string]context.CancelFunc
-	mcpJobLifecycleMu sync.Mutex
-	mcpJobWG          sync.WaitGroup
-	mcpJobsShutdown   bool
+	state                 *model.AppState
+	store                 *AppStateStore
+	chatHistory           ChatHistoryStore
+	qdrant                *QdrantService
+	rag                   *RagService
+	serverConfig          model.ServerConfig
+	staging               *UploadStagingService
+	stateSaveMu           sync.Mutex
+	reranker              SemanticReranker
+	queryRewriter         QueryRewriter
+	semanticCache         *SemanticCache
+	contextCompressor     ContextCompressor
+	retrievalOrchestrator *RetrievalOrchestrator
+	mcpDangerMu           sync.Mutex
+	mcpDangerConfirms     map[string]mcpDangerConfirmationRecord
+	mcpDangerRates        map[string][]time.Time
+	mcpJobMu              sync.Mutex
+	mcpJobs               map[string]model.MCPJob
+	mcpJobCancels         map[string]context.CancelFunc
+	mcpJobLifecycleMu     sync.Mutex
+	mcpJobWG              sync.WaitGroup
+	mcpJobsShutdown       bool
 }
 
 type mcpDangerConfirmationRecord struct {
@@ -184,6 +185,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		mcpJobs:           map[string]model.MCPJob{},
 		mcpJobCancels:     map[string]context.CancelFunc{},
 	}
+	service.retrievalOrchestrator = NewRetrievalOrchestrator(service)
 	service.rag.SetQdrantService(qdrant)
 
 	service.reranker = NewEmbeddingReranker(service.rag)
@@ -291,6 +293,8 @@ func cloneKnowledgeBases(source map[string]model.KnowledgeBase) map[string]model
 		documents := make([]model.Document, len(kb.Documents))
 		copy(documents, kb.Documents)
 		kb.Documents = documents
+		kb.Tags = append([]string(nil), kb.Tags...)
+		kb.IndexHistory = append([]model.IndexRunRecord(nil), kb.IndexHistory...)
 		cloned[id] = kb
 	}
 
@@ -421,11 +425,13 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 		},
 		KnowledgeBases: map[string]model.KnowledgeBase{
 			kbID: {
-				ID:          kbID,
-				Name:        "默认知识库",
-				Description: "用于存放本地上传文档的默认知识库",
-				Documents:   []model.Document{},
-				CreatedAt:   now,
+				ID:                  kbID,
+				Name:                "默认知识库",
+				Description:         "用于存放本地上传文档的默认知识库",
+				Documents:           []model.Document{},
+				CreatedAt:           now,
+				UpdatedAt:           now,
+				CurrentIndexVersion: currentIndexVersion,
 			},
 		},
 		EvalDatasets: map[string]model.EvalDataset{},
@@ -591,6 +597,9 @@ func (s *AppService) RegisterStagedUploadAs(ctx context.Context, uploadID, knowl
 		SizeLabel:       staged.SizeLabel,
 		UploadedAt:      util.NowRFC3339(),
 		Status:          "processing",
+		Source:          staged.Source,
+		Version:         1,
+		Checksum:        staged.SHA256,
 		Path:            permanentPath,
 		ContentPreview:  util.ExtractContentPreview(permanentPath),
 	}
@@ -1818,7 +1827,7 @@ func (s *AppService) ListKnowledgeBases() []model.KnowledgeBase {
 	s.state.Mu.RLock()
 	knowledgeBases := make([]model.KnowledgeBase, 0, len(s.state.KnowledgeBases))
 	for _, kb := range s.state.KnowledgeBases {
-		knowledgeBases = append(knowledgeBases, kb)
+		knowledgeBases = append(knowledgeBases, publicKnowledgeBase(kb))
 	}
 	s.state.Mu.RUnlock()
 
@@ -1835,11 +1844,14 @@ func (s *AppService) CreateKnowledgeBase(req model.KnowledgeBaseInput) (model.Kn
 	}
 
 	knowledgeBase := model.KnowledgeBase{
-		ID:          util.NextID("kb"),
-		Name:        strings.TrimSpace(req.Name),
-		Description: strings.TrimSpace(req.Description),
-		Documents:   []model.Document{},
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		ID:                  util.NextID("kb"),
+		Name:                strings.TrimSpace(req.Name),
+		Description:         strings.TrimSpace(req.Description),
+		Tags:                normalizeKnowledgeBaseTags(req.Tags),
+		Documents:           []model.Document{},
+		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:           time.Now().UTC().Format(time.RFC3339),
+		CurrentIndexVersion: currentIndexVersion,
 	}
 
 	s.state.Mu.Lock()
@@ -1924,7 +1936,21 @@ func (s *AppService) GetKnowledgeBaseDocuments(id string) ([]model.Document, err
 		return nil, fmt.Errorf("knowledge base not found")
 	}
 
-	return kb.Documents, nil
+	documents := make([]model.Document, len(kb.Documents))
+	for index, document := range kb.Documents {
+		documents[index] = publicDocument(document)
+	}
+	return documents, nil
+}
+
+// GetDocumentIndexStatus returns persisted index fields without reading or
+// reparsing the source file. Status polling should not perform document work.
+func (s *AppService) GetDocumentIndexStatus(knowledgeBaseID, documentID string) (model.Document, error) {
+	document, err := s.findDocument(knowledgeBaseID, documentID)
+	if err != nil {
+		return model.Document{}, err
+	}
+	return publicDocument(document), nil
 }
 
 func (s *AppService) GetDocumentDetail(knowledgeBaseID, documentID, focusChunkID string) (model.DocumentDetailResponse, error) {
@@ -1974,7 +2000,7 @@ func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.Knowl
 		case "processing":
 			metrics.ProcessingCount++
 		}
-		if strings.TrimSpace(document.IndexError) != "" || document.Status == "failed" {
+		if documentIndexErrorCode(document) != "" || document.Status == "failed" {
 			metrics.FailedCount++
 		}
 		if !item.RawContentAvailable {
@@ -1996,24 +2022,29 @@ func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.Knowl
 	score := knowledgeBaseHealthScore(metrics, needsReindexCount)
 	status := knowledgeBaseHealthStatus(score, metrics, needsReindexCount)
 	return model.KnowledgeBaseHealthResponse{
-		KnowledgeBaseID: kb.ID,
-		Name:            kb.Name,
-		Status:          status,
-		Score:           score,
-		Metrics:         metrics,
-		Recommendations: knowledgeBaseHealthRecommendations(metrics, needsReindexCount),
-		Documents:       documents,
+		KnowledgeBaseID:     kb.ID,
+		Name:                kb.Name,
+		Status:              status,
+		Score:               score,
+		CurrentIndexVersion: currentKnowledgeBaseIndexVersion(kb),
+		Metrics:             metrics,
+		Recommendations:     knowledgeBaseHealthRecommendations(metrics, needsReindexCount),
+		Documents:           documents,
+		IndexHistory:        publicIndexRunRecords(kb.IndexHistory),
 	}, nil
 }
 
 func (s *AppService) buildKnowledgeBaseDocumentHealth(document model.Document) model.KnowledgeBaseDocumentHealth {
+	errorCode := documentIndexErrorCode(document)
 	item := model.KnowledgeBaseDocumentHealth{
-		DocumentID:   document.ID,
-		DocumentName: document.Name,
-		Status:       document.Status,
-		IndexedAt:    document.IndexedAt,
-		IndexError:   document.IndexError,
-		ChunkCount:   document.ChunkCount,
+		DocumentID:     document.ID,
+		DocumentName:   document.Name,
+		Status:         document.Status,
+		IndexedAt:      document.IndexedAt,
+		IndexError:     publicIndexError(errorCode),
+		IndexErrorCode: errorCode,
+		IndexVersion:   document.IndexVersion,
+		ChunkCount:     document.ChunkCount,
 	}
 
 	content, err := util.ExtractDocumentText(document.Path)
@@ -2093,8 +2124,23 @@ func (s *AppService) IndexDocument(document model.Document) (model.Document, err
 	return s.IndexDocumentWithContext(context.Background(), document)
 }
 
-func (s *AppService) IndexDocumentWithContext(ctx context.Context, document model.Document) (model.Document, error) {
+func (s *AppService) IndexDocumentWithContext(ctx context.Context, document model.Document) (indexed model.Document, err error) {
 	ctx = normalizeServiceContext(ctx)
+	document = enrichDocumentGovernance(document)
+	startedAt := time.Now()
+	if document.Version <= 0 {
+		document.Version = 1
+	}
+	defer func() {
+		status := "failed"
+		if err == nil {
+			status = "succeeded"
+		}
+		if runID := s.recordIndexRun(document.KnowledgeBaseID, indexedOrDocument(indexed, document), "upload", startedAt, status, err); runID != "" && indexed.ID != "" {
+			indexed.IndexRunID = runID
+		}
+	}()
+
 	content, err := util.ExtractDocumentText(document.Path)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("extract uploaded document text: %w", err)
@@ -2110,6 +2156,7 @@ func (s *AppService) IndexDocumentWithContext(ctx context.Context, document mode
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		document.IndexErrorCode = ""
 		document.IndexVersion = currentIndexVersion
 		return s.AddDocument(document.KnowledgeBaseID, document)
 	}
@@ -2128,6 +2175,7 @@ func (s *AppService) IndexDocumentWithContext(ctx context.Context, document mode
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexErrorCode = ""
 	document.IndexVersion = currentIndexVersion
 	return s.AddDocument(document.KnowledgeBaseID, document)
 }
@@ -2136,7 +2184,7 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 	return s.ReindexDocumentWithContext(context.Background(), knowledgeBaseID, documentID)
 }
 
-func (s *AppService) ReindexDocumentWithContext(ctx context.Context, knowledgeBaseID, documentID string) (model.Document, error) {
+func (s *AppService) ReindexDocumentWithContext(ctx context.Context, knowledgeBaseID, documentID string) (indexed model.Document, err error) {
 	ctx = normalizeServiceContext(ctx)
 	if s == nil {
 		return model.Document{}, fmt.Errorf("app service is nil")
@@ -2146,22 +2194,34 @@ func (s *AppService) ReindexDocumentWithContext(ctx context.Context, knowledgeBa
 	if err != nil {
 		return model.Document{}, err
 	}
-	if strings.TrimSpace(document.Path) == "" {
-		return model.Document{}, fmt.Errorf("document path is empty")
-	}
-
-	if err := s.deleteDocumentChunksWithContext(ctx, knowledgeBaseID, documentID); err != nil {
+	document = enrichDocumentGovernance(document)
+	startedAt := time.Now()
+	defer func() {
+		status := "failed"
+		if err == nil {
+			status = "succeeded"
+		}
+		if runID := s.recordIndexRun(knowledgeBaseID, indexedOrDocument(indexed, document), "reindex", startedAt, status, err); runID != "" && indexed.ID != "" {
+			indexed.IndexRunID = runID
+		}
+	}()
+	if err := verifyDocumentSource(document); err != nil {
+		document.Status = "failed"
+		document.IndexErrorCode = classifyIndexError(err)
+		document.IndexError = publicIndexError(document.IndexErrorCode)
+		document.IndexedAt = util.NowRFC3339()
+		_ = s.updateDocument(knowledgeBaseID, document)
 		return model.Document{}, err
 	}
-
 	s.state.Mu.RLock()
 	config := s.state.Config
 	s.state.Mu.RUnlock()
 
-	indexed, err := reindexDocumentWithConfig(ctx, s, config, document)
+	indexed, err = reindexDocumentWithConfig(ctx, s, config, document)
 	if err != nil {
-		document.Status = "ready"
-		document.IndexError = err.Error()
+		document.Status = "failed"
+		document.IndexErrorCode = classifyIndexError(err)
+		document.IndexError = publicIndexError(document.IndexErrorCode)
 		document.IndexedAt = util.NowRFC3339()
 		_ = s.updateDocument(knowledgeBaseID, document)
 		return model.Document{}, err
@@ -2195,32 +2255,27 @@ func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Docum
 	// 先确认整批原文都可读取，再开始写入 Qdrant，避免处理到中途才发现
 	// 暂存文件已被清理而留下部分重建结果。
 	for _, document := range originalDocs {
-		if strings.TrimSpace(document.Path) == "" {
-			return nil, fmt.Errorf("document %s path is empty", document.ID)
-		}
-		if _, err := os.Stat(document.Path); err != nil {
-			return nil, fmt.Errorf("document %s source file unavailable: %w", document.ID, err)
+		if err := verifyDocumentSource(enrichDocumentGovernance(document)); err != nil {
+			s.recordIndexRun(knowledgeBaseID, document, "bulk_reindex", time.Now(), "failed", err)
+			return nil, fmt.Errorf("document %s: %w", document.ID, err)
 		}
 	}
 
 	reindexed := make([]model.Document, 0, len(originalDocs))
 	for _, document := range originalDocs {
-		doc := document
+		doc := enrichDocumentGovernance(document)
+		startedAt := time.Now()
 		indexed, err := reindexDocumentWithConfig(context.Background(), s, config, doc)
 		if err != nil {
+			s.recordIndexRun(knowledgeBaseID, doc, "bulk_reindex", startedAt, "failed", err)
 			return nil, fmt.Errorf("reindex document %s: %w", doc.ID, err)
 		}
+		runID := s.recordIndexRun(knowledgeBaseID, indexed, "bulk_reindex", startedAt, "succeeded", nil)
+		indexed.IndexRunID = runID
+		if err := s.updateDocument(knowledgeBaseID, indexed); err != nil {
+			return nil, err
+		}
 		reindexed = append(reindexed, indexed)
-	}
-
-	s.state.Mu.Lock()
-	kb = s.state.KnowledgeBases[knowledgeBaseID]
-	kb.Documents = reindexed
-	s.state.KnowledgeBases[knowledgeBaseID] = kb
-	s.state.Mu.Unlock()
-
-	if err := s.saveState(); err != nil {
-		return nil, err
 	}
 	return reindexed, nil
 }
@@ -2234,11 +2289,15 @@ func reindexDocumentWithConfig(ctx context.Context, s *AppService, cfg model.App
 
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
+		if err := s.replaceDocumentChunksWithContext(ctx, document.KnowledgeBaseID, document.ID, nil, nil); err != nil {
+			return model.Document{}, err
+		}
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
 		document.Status = "ready"
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		document.IndexErrorCode = ""
 		document.IndexVersion = currentIndexVersion
 		return document, nil
 	}
@@ -2262,6 +2321,7 @@ func reindexDocumentWithConfig(ctx context.Context, s *AppService, cfg model.App
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexErrorCode = ""
 	document.IndexVersion = currentIndexVersion
 	return document, nil
 }
@@ -2365,68 +2425,7 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 }
 
 func (s *AppService) BuildRetrievalContextWithContext(ctx context.Context, req model.ChatCompletionRequest) (string, []map[string]string, error) {
-	ctx = normalizeServiceContext(ctx)
-	startedAt := time.Now()
-	chunks, err := s.EvaluateRetrieveWithContext(ctx, req)
-	if err != nil {
-		return "", nil, err
-	}
-	knowledgeBaseIDs, err := s.resolveRetrievalKnowledgeBaseIDs(req)
-	if err != nil {
-		return "", nil, err
-	}
-	chunks = s.filterRetrievedChunksToScope(req, knowledgeBaseIDs, chunks)
-
-	query := latestUserMessage(req.Messages)
-
-	dedupStartedAt := time.Now()
-	chunks = deduplicateRetrievedChunks(chunks)
-	logRetrievalStageMetrics(req, query, "context_deduplicate", dedupStartedAt, map[string]any{
-		"status":           "ok",
-		"remaining_chunks": len(chunks),
-	})
-
-	maxContextChars := s.retrievalMaxContextChars()
-	trimStartedAt := time.Now()
-	if maxContextChars > 0 {
-		chunks = trimRetrievedChunksToContextLimit(chunks, maxContextChars, query)
-	}
-	logRetrievalStageMetrics(req, query, "context_trim", trimStartedAt, map[string]any{
-		"status":            "ok",
-		"remaining_chunks":  len(chunks),
-		"max_context_chars": maxContextChars,
-		"context_chars":     chunksTotalChars(chunks),
-	})
-
-	buildStartedAt := time.Now()
-	contextText, sources := s.rag.BuildContext(chunks)
-	logRetrievalStageMetrics(req, query, "context_build", buildStartedAt, map[string]any{
-		"status":        "ok",
-		"sources":       len(sources),
-		"context_chars": len(contextText),
-	})
-	if s.contextCompressor != nil && maxContextChars > 0 && chunksTotalChars(chunks) > maxContextChars {
-		compressStartedAt := time.Now()
-		compressed, err := s.contextCompressor.Compress(ctx, query, chunks)
-		if err == nil && strings.TrimSpace(compressed) != "" {
-			contextText = compressed
-			logRetrievalStageMetrics(req, query, "context_compress", compressStartedAt, map[string]any{
-				"status":           "ok",
-				"compressed_chars": len(contextText),
-			})
-		} else {
-			logRetrievalStageMetrics(req, query, "context_compress", compressStartedAt, map[string]any{
-				"status": "error",
-				"error":  fmt.Sprint(err),
-			})
-		}
-	}
-	logRetrievalStageMetrics(req, query, "build_retrieval_context_total", startedAt, map[string]any{
-		"status":        "ok",
-		"sources":       len(sources),
-		"context_chars": len(contextText),
-	})
-	return contextText, sources, nil
+	return s.retrievalBoundary().BuildContext(ctx, req)
 }
 
 func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]RetrievedChunk, error) {
@@ -2434,77 +2433,7 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 }
 
 func (s *AppService) EvaluateRetrieveWithContext(ctx context.Context, req model.ChatCompletionRequest) ([]RetrievedChunk, error) {
-	ctx = normalizeServiceContext(ctx)
-	if s == nil {
-		return nil, fmt.Errorf("app service is nil")
-	}
-
-	startedAt := time.Now()
-	query := latestUserMessage(req.Messages)
-	if strings.TrimSpace(query) == "" {
-		return nil, nil
-	}
-
-	structuredStartedAt := time.Now()
-	if chunks, ok, err := s.retrieveStructuredDataChunks(req); err != nil {
-		logRetrievalStageMetrics(req, query, "structured_retrieve", structuredStartedAt, map[string]any{
-			"status":   "error",
-			"error":    err.Error(),
-			"fallback": true,
-		})
-	} else if ok {
-		logRetrievalStageMetrics(req, query, "structured_retrieve", structuredStartedAt, map[string]any{
-			"status":          "ok",
-			"selected_chunks": len(chunks),
-		})
-		return chunks, nil
-	}
-
-	if s.qdrant == nil || !s.qdrant.IsEnabled() {
-		logRetrievalStageMetrics(req, query, "evaluate_retrieve_total", startedAt, map[string]any{
-			"status":          "skipped",
-			"selected_chunks": 0,
-			"reason":          "qdrant_disabled",
-		})
-		return nil, nil
-	}
-
-	var queryVector []float64
-	embeddingStartedAt := time.Now()
-	if !s.queryRewriteEnabledForRequest(req) {
-		embedCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		defer cancel()
-		vectors, err := s.rag.EmbedTexts(embedCtx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
-		if err == nil && len(vectors) == 0 {
-			err = fmt.Errorf("embedding api returned no vectors")
-		}
-		if err != nil {
-			logRetrievalStageMetrics(req, query, "query_embedding", embeddingStartedAt, map[string]any{
-				"status": "error",
-				"error":  fmt.Sprint(err),
-			})
-			return nil, err
-		}
-		queryVector = vectors[0]
-		logRetrievalStageMetrics(req, query, "query_embedding", embeddingStartedAt, map[string]any{
-			"status":          "ok",
-			"vector_size":     len(queryVector),
-			"used_rewriter":   false,
-			"used_cache_only": false,
-		})
-	} else {
-		logRetrievalStageMetrics(req, query, "query_embedding", embeddingStartedAt, map[string]any{
-			"status":        "skipped",
-			"used_rewriter": true,
-		})
-	}
-
-	chunks, err := s.retrieveRelevantChunksWithContext(ctx, req, queryVector)
-	logRetrievalStageMetrics(req, query, "evaluate_retrieve_total", startedAt, map[string]any{
-		"status":          retrievalStatus(err),
-		"selected_chunks": len(chunks),
-	})
-	return chunks, err
+	return s.retrievalBoundary().Evaluate(ctx, req)
 }
 
 func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
@@ -2512,168 +2441,7 @@ func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.Retri
 }
 
 func (s *AppService) DebugRetrieveWithContext(ctx context.Context, req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
-	ctx = normalizeServiceContext(ctx)
-	if s == nil {
-		return model.RetrievalDebugResponse{}, fmt.Errorf("app service is nil")
-	}
-
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		return model.RetrievalDebugResponse{}, fmt.Errorf("query is required")
-	}
-
-	startedAt := time.Now()
-	chatReq := model.ChatCompletionRequest{
-		KnowledgeBaseID:         strings.TrimSpace(req.KnowledgeBaseID),
-		DocumentID:              strings.TrimSpace(req.DocumentID),
-		RetrievalMode:           normalizeRetrievalMode(req.SearchMode),
-		RerankStrategy:          req.RerankStrategy,
-		EnableQueryRewrite:      req.EnableQueryRewrite,
-		QueryRewriteMaxVariants: req.QueryRewriteMaxVariants,
-		Config:                  s.currentChatConfig(),
-		Embedding:               s.currentEmbeddingConfig(),
-		Messages: []model.ChatMessage{{
-			Role:    "user",
-			Content: query,
-		}},
-	}
-
-	var verboseDetails *model.RetrievalDebugVerboseDetails
-	var chunks []RetrievedChunk
-	var queryVariants []string
-	structuredUsed := false
-	var structuredErr error
-	var err error
-
-	if structuredChunks, ok, retrieveErr := s.retrieveStructuredDataChunks(chatReq); retrieveErr != nil {
-		structuredErr = retrieveErr
-	} else if ok {
-		chunks = structuredChunks
-		structuredUsed = true
-		if req.Verbose {
-			verboseDetails = &model.RetrievalDebugVerboseDetails{
-				CandidatesCount:  len(chunks),
-				AfterRerankCount: len(chunks),
-				AfterMMRCount:    len(chunks),
-			}
-		}
-	} else if req.Verbose {
-		chunks, verboseDetails, queryVariants, err = s.debugRetrieveVerboseWithContext(ctx, chatReq, query)
-	} else {
-		chunks, err = s.EvaluateRetrieveWithContext(ctx, chatReq)
-	}
-	if err != nil {
-		return model.RetrievalDebugResponse{}, err
-	}
-
-	trace := make([]model.RetrievalDebugTraceStep, 0, 6)
-	if structuredUsed {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:       "structured_retrieve",
-			Status:      "ok",
-			Reason:      fmt.Sprintf("结构化确定性查询直接返回 %d 个证据片段，无需向量召回", len(chunks)),
-			OutputCount: len(chunks),
-		})
-	} else if structuredErr != nil {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "structured_retrieve",
-			Status: "error",
-			Reason: "结构化解析失败，已回落常规检索",
-		})
-	}
-	trace = append(trace, model.RetrievalDebugTraceStep{
-		Stage:       "retrieve",
-		Status:      "ok",
-		Reason:      "基础检索、重排、MMR 和相关性过滤后的候选",
-		OutputCount: len(chunks),
-	})
-	if structuredUsed {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "rerank",
-			Status: "skipped",
-			Reason: "确定性结构化结果无需重排",
-		})
-	} else {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "rerank",
-			Status: "ok",
-			Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategyForRequest(chatReq)),
-		})
-	}
-	if structuredUsed {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "query_rewrite",
-			Status: "skipped",
-			Reason: "确定性结构化查询已直接处理原始问题",
-		})
-	} else if s.queryRewriteEnabledForRequest(chatReq) {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "query_rewrite",
-			Status: "ok",
-			Reason: fmt.Sprintf("已启用查询改写，最多生成 %d 个查询变体", s.queryRewriteMaxVariantsForRequest(chatReq)),
-		})
-	} else {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:  "query_rewrite",
-			Status: "skipped",
-			Reason: "未启用查询改写",
-		})
-	}
-	dedupInputCount := len(chunks)
-	chunks = deduplicateRetrievedChunks(chunks)
-	if len(chunks) != dedupInputCount {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:       "deduplicate",
-			Status:      "ok",
-			Reason:      "移除重复 chunk，保留首个更靠前结果",
-			InputCount:  dedupInputCount,
-			OutputCount: len(chunks),
-		})
-	}
-	if req.TopK > 0 && len(chunks) > req.TopK {
-		trace = append(trace, model.RetrievalDebugTraceStep{
-			Stage:       "topk",
-			Status:      "ok",
-			Reason:      "根据调试 TopK 截断展示结果",
-			InputCount:  len(chunks),
-			OutputCount: req.TopK,
-		})
-		chunks = chunks[:req.TopK]
-	}
-	confidence := buildRetrievalDebugConfidence(query, chunks)
-	retrievalLowConfidence := confidence.Status == "low"
-	contextText, sources := s.rag.BuildContext(chunks)
-	contextText = truncateRunes(strings.TrimSpace(contextText), retrievalDebugContextLimit)
-	evalCandidate := buildRetrievalDebugEvalCandidate(chatReq, query, retrievalLowConfidence, chunks, contextText)
-
-	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		items = append(items, buildRetrievalDebugChunk(query, chunk))
-	}
-
-	return model.RetrievalDebugResponse{
-		Query:            query,
-		KnowledgeBaseID:  chatReq.KnowledgeBaseID,
-		DocumentID:       chatReq.DocumentID,
-		SearchMode:       s.resolvedRetrievalSearchMode(chatReq),
-		RerankStrategy:   s.rerankStrategyForRequest(chatReq),
-		QueryRewriteUsed: s.queryRewriteEnabledForRequest(chatReq),
-		QueryVariants:    queryVariants,
-		ElapsedMs:        time.Since(startedAt).Milliseconds(),
-		Count:            len(items),
-		LowConfidence:    retrievalLowConfidence,
-		Confidence:       confidence,
-		ContextPreview:   contextText,
-		Sources:          sources,
-		EvalCandidate:    evalCandidate,
-		Trace:            trace,
-		Items:            items,
-		VerboseDetails:   verboseDetails,
-	}, nil
-}
-
-func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
-	return s.debugRetrieveVerboseWithContext(context.Background(), req, query)
+	return s.retrievalBoundary().Debug(ctx, req)
 }
 
 func (s *AppService) debugRetrieveVerboseWithContext(ctx context.Context, req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
@@ -4042,6 +3810,7 @@ func documentFilter(documentID string) map[string]any {
 }
 
 func buildDocumentDetailResponse(s *AppService, document model.Document, content string, chunks []DocumentChunk, focusChunkID string) model.DocumentDetailResponse {
+	document = publicDocument(document)
 	rawContent := strings.TrimSpace(content)
 	rawContentTruncated := false
 	if len([]rune(rawContent)) > documentDetailRawContentLimit {
@@ -4127,7 +3896,7 @@ func documentChunkPreviewContains(chunks []model.DocumentChunkPreview, chunkID s
 }
 
 func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDocumentHealth) bool {
-	if strings.TrimSpace(document.IndexError) != "" {
+	if documentIndexErrorCode(document) != "" {
 		return true
 	}
 	if document.Status != "indexed" {
@@ -4150,7 +3919,7 @@ func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDoc
 
 func documentHealthRecommendation(document model.Document, health model.KnowledgeBaseDocumentHealth) string {
 	switch {
-	case strings.TrimSpace(document.IndexError) != "":
+	case documentIndexErrorCode(document) != "":
 		return "索引失败，建议查看错误信息后重建索引。"
 	case document.Status == "processing":
 		return "文档仍在处理中，完成后再观察健康度。"

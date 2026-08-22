@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"ai-localbase/internal/model"
 )
@@ -27,11 +29,15 @@ type persistedAppStateJSON struct {
 }
 
 type persistedKnowledgeBase struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Documents   []persistedDocument `json:"documents"`
-	CreatedAt   string              `json:"createdAt"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	Tags                []string               `json:"tags,omitempty"`
+	Documents           []persistedDocument    `json:"documents"`
+	CreatedAt           string                 `json:"createdAt"`
+	UpdatedAt           string                 `json:"updatedAt,omitempty"`
+	CurrentIndexVersion int                    `json:"currentIndexVersion,omitempty"`
+	IndexHistory        []model.IndexRunRecord `json:"indexHistory,omitempty"`
 }
 
 type persistedDocument struct {
@@ -42,11 +48,16 @@ type persistedDocument struct {
 	SizeLabel       string `json:"sizeLabel"`
 	UploadedAt      string `json:"uploadedAt"`
 	Status          string `json:"status"`
+	Source          string `json:"source,omitempty"`
+	Version         int    `json:"version,omitempty"`
+	Checksum        string `json:"checksum,omitempty"`
 	Path            string `json:"path"`
 	ContentPreview  string `json:"contentPreview"`
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
 	IndexError      string `json:"indexError,omitempty"`
+	IndexErrorCode  string `json:"indexErrorCode,omitempty"`
+	IndexRunID      string `json:"indexRunId,omitempty"`
 	IndexVersion    int    `json:"indexVersion,omitempty"`
 }
 
@@ -58,11 +69,15 @@ func (s persistentAppState) MarshalJSON() ([]byte, error) {
 			documents[index] = persistedDocumentFromModel(document)
 		}
 		knowledgeBases[id] = persistedKnowledgeBase{
-			ID:          knowledgeBase.ID,
-			Name:        knowledgeBase.Name,
-			Description: knowledgeBase.Description,
-			Documents:   documents,
-			CreatedAt:   knowledgeBase.CreatedAt,
+			ID:                  knowledgeBase.ID,
+			Name:                knowledgeBase.Name,
+			Description:         knowledgeBase.Description,
+			Tags:                append([]string(nil), knowledgeBase.Tags...),
+			Documents:           documents,
+			CreatedAt:           knowledgeBase.CreatedAt,
+			UpdatedAt:           knowledgeBase.UpdatedAt,
+			CurrentIndexVersion: knowledgeBase.CurrentIndexVersion,
+			IndexHistory:        append([]model.IndexRunRecord(nil), knowledgeBase.IndexHistory...),
 		}
 	}
 	return json.Marshal(persistedAppStateJSON{
@@ -82,22 +97,77 @@ func (s *persistentAppState) UnmarshalJSON(data []byte) error {
 	s.Config = raw.Config
 	s.KnowledgeBases = make(map[string]model.KnowledgeBase, len(raw.KnowledgeBases))
 	for id, knowledgeBase := range raw.KnowledgeBases {
-		documents := make([]model.Document, len(knowledgeBase.Documents))
-		for index, document := range knowledgeBase.Documents {
-			documents[index] = documentToModel(document)
-		}
-		s.KnowledgeBases[id] = model.KnowledgeBase{
-			ID:          knowledgeBase.ID,
-			Name:        knowledgeBase.Name,
-			Description: knowledgeBase.Description,
-			Documents:   documents,
-			CreatedAt:   knowledgeBase.CreatedAt,
-		}
+		s.KnowledgeBases[id] = migratePersistedKnowledgeBase(id, knowledgeBase)
 	}
 	s.EvalDatasets = raw.EvalDatasets
 	s.EvalRuns = raw.EvalRuns
 	s.Auth = raw.Auth
 	return nil
+}
+
+func migratePersistedKnowledgeBase(mapKey string, raw persistedKnowledgeBase) model.KnowledgeBase {
+	knowledgeBaseID := strings.TrimSpace(raw.ID)
+	if knowledgeBaseID == "" {
+		knowledgeBaseID = strings.TrimSpace(mapKey)
+	}
+	createdAt := strings.TrimSpace(raw.CreatedAt)
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	updatedAt := strings.TrimSpace(raw.UpdatedAt)
+	if updatedAt == "" {
+		updatedAt = createdAt
+	}
+	indexVersion := raw.CurrentIndexVersion
+	if indexVersion <= 0 {
+		indexVersion = currentIndexVersion
+	}
+
+	documents := make([]model.Document, len(raw.Documents))
+	for index, persisted := range raw.Documents {
+		document := documentToModel(persisted)
+		if strings.TrimSpace(document.KnowledgeBaseID) == "" {
+			document.KnowledgeBaseID = knowledgeBaseID
+		}
+		if strings.TrimSpace(document.Source) == "" {
+			document.Source = "legacy"
+		}
+		if document.Version <= 0 {
+			document.Version = 1
+		}
+		if strings.TrimSpace(document.Status) == "" {
+			document.Status = "ready"
+		}
+		if strings.TrimSpace(document.IndexError) != "" && strings.TrimSpace(document.IndexErrorCode) == "" {
+			document.IndexErrorCode = classifyIndexError(fmt.Errorf("%s", document.IndexError))
+			document.IndexError = publicIndexError(document.IndexErrorCode)
+		}
+		documents[index] = document
+	}
+
+	history := make([]model.IndexRunRecord, len(raw.IndexHistory))
+	for index, record := range raw.IndexHistory {
+		if strings.TrimSpace(record.KnowledgeBaseID) == "" {
+			record.KnowledgeBaseID = knowledgeBaseID
+		}
+		if record.IndexVersion <= 0 {
+			record.IndexVersion = indexVersion
+		}
+		record = publicIndexRunRecord(record)
+		history[index] = record
+	}
+
+	return model.KnowledgeBase{
+		ID:                  knowledgeBaseID,
+		Name:                raw.Name,
+		Description:         raw.Description,
+		Tags:                normalizeKnowledgeBaseTags(raw.Tags),
+		Documents:           documents,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
+		CurrentIndexVersion: indexVersion,
+		IndexHistory:        history,
+	}
 }
 
 func persistedDocumentFromModel(document model.Document) persistedDocument {
@@ -109,11 +179,16 @@ func persistedDocumentFromModel(document model.Document) persistedDocument {
 		SizeLabel:       document.SizeLabel,
 		UploadedAt:      document.UploadedAt,
 		Status:          document.Status,
+		Source:          document.Source,
+		Version:         document.Version,
+		Checksum:        document.Checksum,
 		Path:            document.Path,
 		ContentPreview:  document.ContentPreview,
 		ChunkCount:      document.ChunkCount,
 		IndexedAt:       document.IndexedAt,
 		IndexError:      document.IndexError,
+		IndexErrorCode:  document.IndexErrorCode,
+		IndexRunID:      document.IndexRunID,
 		IndexVersion:    document.IndexVersion,
 	}
 }
@@ -127,11 +202,16 @@ func documentToModel(document persistedDocument) model.Document {
 		SizeLabel:       document.SizeLabel,
 		UploadedAt:      document.UploadedAt,
 		Status:          document.Status,
+		Source:          document.Source,
+		Version:         document.Version,
+		Checksum:        document.Checksum,
 		Path:            document.Path,
 		ContentPreview:  document.ContentPreview,
 		ChunkCount:      document.ChunkCount,
 		IndexedAt:       document.IndexedAt,
 		IndexError:      document.IndexError,
+		IndexErrorCode:  document.IndexErrorCode,
+		IndexRunID:      document.IndexRunID,
 		IndexVersion:    document.IndexVersion,
 	}
 }
