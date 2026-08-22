@@ -52,6 +52,13 @@ func (h *AppHandler) Health(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) Liveness(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "alive",
+		"name":   "ai-localbase-backend",
+	})
+}
+
 func (h *AppHandler) GetJobStatus(c *gin.Context) {
 	jobID := c.Param("jobId")
 	job, err := h.appService.GetMCPJobStatusAs(jobID, auth.PrincipalFromContext(c))

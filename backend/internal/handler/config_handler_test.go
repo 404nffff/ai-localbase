@@ -72,3 +72,50 @@ func TestFormatErrorMessageExplainsEmbeddingDimensionMigration(t *testing.T) {
 		t.Fatalf("unexpected dimension details: actual=%d configured=%d", actual, configured)
 	}
 }
+
+func TestReadinessReturnsReadyWithoutOptionalDependencies(t *testing.T) {
+	appService := service.NewAppService(nil, nil, nil, model.ServerConfig{})
+	handler := NewConfigHandler(appService, nil)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	handler.Readiness(context)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected readiness status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response ReadinessResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if response.Status != "ready" {
+		t.Fatalf("expected ready status, got %#v", response)
+	}
+	if response.Checks["chat_model"].Status != "configured" {
+		t.Fatalf("expected default chat model configuration to be reported, got %#v", response.Checks["chat_model"])
+	}
+}
+
+func TestReadinessReturnsUnavailableWhenQdrantIsDown(t *testing.T) {
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(qdrantServer.Close)
+
+	serverConfig := model.ServerConfig{QdrantURL: qdrantServer.URL}
+	qdrant := service.NewQdrantService(serverConfig)
+	appService := service.NewAppService(qdrant, nil, nil, serverConfig)
+	handler := NewConfigHandler(appService, qdrant)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	handler.Readiness(context)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected readiness status 503, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}

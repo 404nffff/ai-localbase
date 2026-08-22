@@ -30,6 +30,8 @@ func NewRouter(appHandler *handler.AppHandler, configHandler *handler.ConfigHand
 	}
 
 	r.GET("/health", appHandler.Health)
+	r.GET("/livez", appHandler.Liveness)
+	r.GET("/readyz", configHandler.Readiness)
 
 	// Auth endpoints (always available for consistency)
 	authGroup := r.Group("/api/auth")

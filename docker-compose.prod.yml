@@ -29,7 +29,7 @@ services:
         fi
         exec ./entrypoint.sh
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$${AI_LOCALBASE_QDRANT_API_KEY}\" ]; then curl -f -H \"api-key: $${AI_LOCALBASE_QDRANT_API_KEY}\" http://localhost:6333/collections; else curl -f http://localhost:6333/collections; fi"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333; if [ -n \"$$AI_LOCALBASE_QDRANT_API_KEY\" ]; then printf \"GET /collections HTTP/1.1\\r\\nHost: localhost\\r\\napi-key: %s\\r\\nConnection: close\\r\\n\\r\\n\" \"$$AI_LOCALBASE_QDRANT_API_KEY\" >&3; else printf \"GET /collections HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; fi; head -n 1 <&3 | grep -q \" 200 \"'"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -43,7 +43,7 @@ services:
     pids_limit: ${QDRANT_PIDS_LIMIT:-512}
 
   backend:
-    image: ghcr.io/veyliss/ai-localbase-backend:${AI_LOCALBASE_IMAGE_TAG:-v1.4.4}
+    image: ghcr.io/veyliss/ai-localbase-backend:${AI_LOCALBASE_IMAGE_TAG:-v1.4.5}
     container_name: ai-localbase-backend
     restart: unless-stopped
     ports:
@@ -95,7 +95,7 @@ services:
     volumes:
       - ./backend/data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-8080}/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-8080}/readyz"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -111,7 +111,7 @@ services:
     pids_limit: ${BACKEND_PIDS_LIMIT:-256}
 
   frontend:
-    image: ghcr.io/veyliss/ai-localbase-frontend:${AI_LOCALBASE_IMAGE_TAG:-v1.4.4}
+    image: ghcr.io/veyliss/ai-localbase-frontend:${AI_LOCALBASE_IMAGE_TAG:-v1.4.5}
     container_name: ai-localbase-frontend
     restart: unless-stopped
     ports:

@@ -62,8 +62,13 @@ type HealthSummaryResponse struct {
 	Auth           ComponentHealth `json:"auth"`
 }
 
+type ReadinessResponse struct {
+	Status string                     `json:"status"`
+	Checks map[string]ComponentHealth `json:"checks"`
+}
+
 type ComponentHealth struct {
-	Status       string `json:"status"` // "ok", "error", "not_configured"
+	Status       string `json:"status"` // "ok", "configured", "error", "not_configured"
 	Message      string `json:"message,omitempty"`
 	LatencyMs    int64  `json:"latency_ms,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
@@ -257,6 +262,49 @@ func (h *ConfigHandler) HealthSummary(c *gin.Context) {
 	summary.Auth = h.checkAuthHealth()
 
 	c.JSON(http.StatusOK, summary)
+}
+
+// Readiness reports whether the backend can serve normal requests. It avoids
+// model inference probes because Docker polls this endpoint repeatedly.
+func (h *ConfigHandler) Readiness(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	checks := map[string]ComponentHealth{}
+	if h == nil || h.appService == nil {
+		checks["backend"] = ComponentHealth{Status: "error", ErrorMessage: "application service is unavailable"}
+		c.JSON(http.StatusServiceUnavailable, ReadinessResponse{Status: "not_ready", Checks: checks})
+		return
+	}
+
+	checks["qdrant"] = h.checkQdrantHealth(ctx)
+	checks["storage"] = h.checkStorageHealth()
+	config := h.appService.GetConfig()
+	checks["chat_model"] = modelConfigurationHealth("chat", config.Chat.BaseURL, config.Chat.Model)
+	checks["embedding_model"] = modelConfigurationHealth("embedding", config.Embedding.BaseURL, config.Embedding.Model)
+
+	qdrantReady := checks["qdrant"].Status == "ok" || checks["qdrant"].Status == "not_configured"
+	ready := qdrantReady && checks["storage"].Status == "ok"
+	status := "not_ready"
+	statusCode := http.StatusServiceUnavailable
+	if ready {
+		status = "ready"
+		statusCode = http.StatusOK
+	}
+	c.JSON(statusCode, ReadinessResponse{Status: status, Checks: checks})
+}
+
+func modelConfigurationHealth(kind, baseURL, modelName string) ComponentHealth {
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(modelName) == "" {
+		return ComponentHealth{
+			Status:  "not_configured",
+			Message: fmt.Sprintf("%s model is not configured", kind),
+		}
+	}
+	return ComponentHealth{
+		Status:  "configured",
+		Message: fmt.Sprintf("%s model configuration is present", kind),
+	}
 }
 
 func (h *ConfigHandler) checkQdrantHealth(ctx context.Context) ComponentHealth {
