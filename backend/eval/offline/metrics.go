@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // CaseResult 单个用例的评估结果
@@ -16,6 +17,10 @@ type CaseResult struct {
 	LLMAnswer         string
 	RetrievalLatency  time.Duration
 	GenerationLatency time.Duration
+	DocumentHit       bool
+	ChunkHit          bool
+	AnswerSnippetHit  bool
+	DirectEvidenceHit bool
 	HitRank           int     // 第一个命中的排名，-1 表示未命中
 	ReciprocalRank    float64 // 1/HitRank，未命中为 0
 	Error             string  // 运行时错误信息（若有）
@@ -23,47 +28,184 @@ type CaseResult struct {
 
 // RetrievedChunkInfo 检索结果摘要（不依赖 service 包，避免循环依赖）
 type RetrievedChunkInfo struct {
-	DocumentID string
-	ChunkID    string
-	Text       string
-	Score      float64
+	KnowledgeBaseID string
+	DocumentID      string
+	ChunkID         string
+	Text            string
+	Score           float64
 }
 
 // AggregateMetrics 聚合后的评估指标
 type AggregateMetrics struct {
-	TotalCases           int
-	HitRate              float64
-	MRR                  float64
-	LatencyRetrievalP50  time.Duration
-	LatencyRetrievalP95  time.Duration
-	LatencyGenerationP50 time.Duration
-	LatencyGenerationP95 time.Duration
+	TotalCases            int
+	HitRate               float64
+	DocumentHitRate       float64
+	ChunkHitRate          float64
+	AnswerSnippetHitRate  float64
+	DirectEvidenceHitRate float64
+	MRR                   float64
+	LatencyRetrievalP50   time.Duration
+	LatencyRetrievalP95   time.Duration
+	LatencyGenerationP50  time.Duration
+	LatencyGenerationP95  time.Duration
 }
 
-// IsHit 判断单个用例是否命中（支持 doc-id 匹配和文本包含匹配）
-// threshold: 文本相似度阈值（0-1），默认 0.5
+type HitClassification struct {
+	Hit               bool
+	DocumentHit       bool
+	ChunkHit          bool
+	AnswerSnippetHit  bool
+	DirectEvidenceHit bool
+	Rank              int
+}
+
+// IsHit 判断单个用例是否命中（支持 Chunk 精确匹配和无 ChunkID 时的片段匹配）。
+// threshold 仅用于没有 source_documents 时的文本片段匹配，范围为 0-1。
 func IsHit(result CaseResult, gt GroundTruthCase, threshold float64) (hit bool, rank int) {
-	// 优先使用 SourceDocuments 中的 DocumentID 精确匹配
-	for i, chunk := range result.RetrievedChunks {
-		for _, srcDoc := range gt.SourceDocuments {
-			if chunk.DocumentID == srcDoc.DocumentID {
-				return true, i + 1 // 1-based rank
-			}
+	classification := ClassifyHit(result, gt, threshold)
+	return classification.Hit, classification.Rank
+}
+
+func normalizeHitThreshold(threshold float64) float64 {
+	if threshold <= 0 {
+		return 0.5
+	}
+	if threshold > 1 {
+		return 1
+	}
+	return threshold
+}
+
+func normalizeEvalText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, value)
+}
+
+func snippetMatchScore(text, snippet string) float64 {
+	text = normalizeEvalText(text)
+	snippet = normalizeEvalText(snippet)
+	if text == "" || snippet == "" {
+		return 0
+	}
+	if strings.Contains(text, snippet) {
+		return 1
+	}
+
+	textRunes := []rune(text)
+	snippetRunes := []rune(snippet)
+	if len(snippetRunes) == 1 {
+		if strings.ContainsRune(text, snippetRunes[0]) {
+			return 1
+		}
+		return 0
+	}
+
+	textGrams := make(map[string]struct{}, len(textRunes)-1)
+	for i := 0; i < len(textRunes)-1; i++ {
+		textGrams[string(textRunes[i:i+2])] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(snippetRunes)-1)
+	matched := 0
+	for i := 0; i < len(snippetRunes)-1; i++ {
+		gram := string(snippetRunes[i : i+2])
+		if _, exists := seen[gram]; exists {
+			continue
+		}
+		seen[gram] = struct{}{}
+		if _, exists := textGrams[gram]; exists {
+			matched++
+		}
+	}
+	if len(seen) == 0 {
+		return 0
+	}
+	return float64(matched) / float64(len(seen))
+}
+
+func retrievedChunkMatchesSource(chunk RetrievedChunkInfo, source SourceDocument) bool {
+	if !retrievedChunkMatchesDocument(chunk, source) {
+		return false
+	}
+	if strings.TrimSpace(source.ChunkID) == "" {
+		return true
+	}
+	return strings.TrimSpace(chunk.ChunkID) != "" &&
+		strings.TrimSpace(chunk.ChunkID) == strings.TrimSpace(source.ChunkID)
+}
+
+func retrievedChunkMatchesDocument(chunk RetrievedChunkInfo, source SourceDocument) bool {
+	if strings.TrimSpace(source.KnowledgeBaseID) != "" &&
+		strings.TrimSpace(chunk.KnowledgeBaseID) != "" &&
+		strings.TrimSpace(chunk.KnowledgeBaseID) != strings.TrimSpace(source.KnowledgeBaseID) {
+		return false
+	}
+	if strings.TrimSpace(source.DocumentID) == "" ||
+		strings.TrimSpace(chunk.DocumentID) != strings.TrimSpace(source.DocumentID) {
+		return false
+	}
+	return true
+}
+
+// ClassifyHit 拆分文档、Chunk、答案片段和直接证据四类命中，便于识别引用不支撑答案的情况。
+func ClassifyHit(result CaseResult, gt GroundTruthCase, threshold float64) HitClassification {
+	threshold = normalizeHitThreshold(threshold)
+	classification := HitClassification{Rank: -1}
+	hasExactChunkSource := false
+	for _, source := range gt.SourceDocuments {
+		if strings.TrimSpace(source.ChunkID) != "" {
+			hasExactChunkSource = true
+			break
 		}
 	}
 
-	// 若无 SourceDocuments，对 AnswerSnippets 中每个片段，检查是否被任一 chunk Text 包含
-	if len(gt.SourceDocuments) == 0 && len(gt.AnswerSnippets) > 0 {
-		for i, chunk := range result.RetrievedChunks {
-			for _, snippet := range gt.AnswerSnippets {
-				if strings.Contains(chunk.Text, snippet) {
-					return true, i + 1 // 1-based rank
+	for index, chunk := range result.RetrievedChunks {
+		rank := index + 1
+		if !classification.DocumentHit {
+			for _, source := range gt.SourceDocuments {
+				if retrievedChunkMatchesDocument(chunk, source) {
+					classification.DocumentHit = true
+					break
 				}
 			}
 		}
+		if !classification.ChunkHit {
+			for _, source := range gt.SourceDocuments {
+				if strings.TrimSpace(source.ChunkID) != "" && retrievedChunkMatchesSource(chunk, source) {
+					classification.ChunkHit = true
+					break
+				}
+			}
+		}
+		if !classification.AnswerSnippetHit {
+			for _, snippet := range gt.AnswerSnippets {
+				if snippetMatchScore(chunk.Text, snippet) >= threshold {
+					classification.AnswerSnippetHit = true
+					break
+				}
+			}
+		}
+		if classification.Rank == -1 {
+			if (hasExactChunkSource && classification.ChunkHit) ||
+				(!hasExactChunkSource && len(gt.SourceDocuments) > 0 && classification.DocumentHit) ||
+				(len(gt.SourceDocuments) == 0 && classification.AnswerSnippetHit) {
+				classification.Rank = rank
+			}
+		}
 	}
 
-	return false, -1
+	classification.DirectEvidenceHit = classification.ChunkHit || classification.AnswerSnippetHit
+	if hasExactChunkSource {
+		classification.Hit = classification.ChunkHit
+	} else if len(gt.SourceDocuments) > 0 {
+		classification.Hit = classification.DocumentHit
+	} else {
+		classification.Hit = classification.AnswerSnippetHit
+	}
+	return classification
 }
 
 // ComputeHitRate 计算命中率
@@ -72,17 +214,23 @@ func ComputeHitRate(results []CaseResult, gts []GroundTruthCase, threshold float
 		return 0.0
 	}
 
+	groundTruthByID := groundTruthIndex(gts)
 	hits := 0
+	evaluated := 0
 	for i, res := range results {
-		if i >= len(gts) {
-			break
+		gt, ok := groundTruthForResult(res, i, gts, groundTruthByID)
+		if !ok {
+			continue
 		}
-		gt := gts[i]
+		evaluated++
 		if hit, _ := IsHit(res, gt, threshold); hit {
 			hits++
 		}
 	}
-	return float64(hits) / float64(len(results))
+	if evaluated == 0 {
+		return 0
+	}
+	return float64(hits) / float64(evaluated)
 }
 
 // ComputeMRR 计算 MRR
@@ -91,17 +239,82 @@ func ComputeMRR(results []CaseResult, gts []GroundTruthCase, threshold float64) 
 		return 0.0
 	}
 
+	groundTruthByID := groundTruthIndex(gts)
 	var sumReciprocalRank float64
+	evaluated := 0
 	for i, res := range results {
-		if i >= len(gts) {
-			break
+		gt, ok := groundTruthForResult(res, i, gts, groundTruthByID)
+		if !ok {
+			continue
 		}
-		gt := gts[i]
+		evaluated++
 		if hit, rank := IsHit(res, gt, threshold); hit && rank > 0 {
 			sumReciprocalRank += 1.0 / float64(rank)
 		}
 	}
-	return sumReciprocalRank / float64(len(results))
+	if evaluated == 0 {
+		return 0
+	}
+	return sumReciprocalRank / float64(evaluated)
+}
+
+func computeClassificationRates(results []CaseResult, gts []GroundTruthCase, threshold float64) (document, chunk, snippet, direct float64) {
+	if len(results) == 0 {
+		return 0, 0, 0, 0
+	}
+	groundTruthByID := groundTruthIndex(gts)
+	var documentHits, chunkHits, snippetHits, directHits, evaluated int
+	for index, result := range results {
+		gt, ok := groundTruthForResult(result, index, gts, groundTruthByID)
+		if !ok {
+			continue
+		}
+		evaluated++
+		classification := ClassifyHit(result, gt, threshold)
+		if classification.DocumentHit {
+			documentHits++
+		}
+		if classification.ChunkHit {
+			chunkHits++
+		}
+		if classification.AnswerSnippetHit {
+			snippetHits++
+		}
+		if classification.DirectEvidenceHit {
+			directHits++
+		}
+	}
+	if evaluated == 0 {
+		return 0, 0, 0, 0
+	}
+	return float64(documentHits) / float64(evaluated),
+		float64(chunkHits) / float64(evaluated),
+		float64(snippetHits) / float64(evaluated),
+		float64(directHits) / float64(evaluated)
+}
+
+func groundTruthIndex(gts []GroundTruthCase) map[string]GroundTruthCase {
+	index := make(map[string]GroundTruthCase, len(gts))
+	for _, gt := range gts {
+		if id := strings.TrimSpace(gt.ID); id != "" {
+			index[id] = gt
+		}
+	}
+	return index
+}
+
+func groundTruthForResult(result CaseResult, position int, gts []GroundTruthCase, byID map[string]GroundTruthCase) (GroundTruthCase, bool) {
+	if id := strings.TrimSpace(result.CaseID); id != "" {
+		gt, ok := byID[id]
+		return gt, ok
+	}
+	if strings.TrimSpace(result.GroundTruth.ID) != "" {
+		return result.GroundTruth, true
+	}
+	if position >= 0 && position < len(gts) {
+		return gts[position], true
+	}
+	return GroundTruthCase{}, false
 }
 
 // ComputeLatencyPercentiles 计算时延 P50/P95
@@ -136,8 +349,8 @@ func ComputeLatencyPercentiles(durations []time.Duration) (p50, p95 time.Duratio
 	return durations[p50Index], durations[p95Index]
 }
 
-// Aggregate 汇总所有用例结果为聚合指标
-func Aggregate(results []CaseResult, gts []GroundTruthCase) AggregateMetrics {
+// Aggregate 汇总所有用例结果为聚合指标。
+func Aggregate(results []CaseResult, gts []GroundTruthCase, threshold float64) AggregateMetrics {
 	totalCases := len(results)
 	if totalCases == 0 {
 		return AggregateMetrics{}
@@ -153,16 +366,21 @@ func Aggregate(results []CaseResult, gts []GroundTruthCase) AggregateMetrics {
 	retrievalP50, retrievalP95 := ComputeLatencyPercentiles(retrievalLatencies)
 	generationP50, generationP95 := ComputeLatencyPercentiles(generationLatencies)
 
-	hitRate := ComputeHitRate(results, gts, 0.5) // Default threshold
-	mrr := ComputeMRR(results, gts, 0.5)         // Default threshold
+	hitRate := ComputeHitRate(results, gts, threshold)
+	mrr := ComputeMRR(results, gts, threshold)
+	documentHitRate, chunkHitRate, answerSnippetHitRate, directEvidenceHitRate := computeClassificationRates(results, gts, threshold)
 
 	return AggregateMetrics{
-		TotalCases:           totalCases,
-		HitRate:              hitRate,
-		MRR:                  mrr,
-		LatencyRetrievalP50:  retrievalP50,
-		LatencyRetrievalP95:  retrievalP95,
-		LatencyGenerationP50: generationP50,
-		LatencyGenerationP95: generationP95,
+		TotalCases:            totalCases,
+		HitRate:               hitRate,
+		DocumentHitRate:       documentHitRate,
+		ChunkHitRate:          chunkHitRate,
+		AnswerSnippetHitRate:  answerSnippetHitRate,
+		DirectEvidenceHitRate: directEvidenceHitRate,
+		MRR:                   mrr,
+		LatencyRetrievalP50:   retrievalP50,
+		LatencyRetrievalP95:   retrievalP95,
+		LatencyGenerationP50:  generationP50,
+		LatencyGenerationP95:  generationP95,
 	}
 }

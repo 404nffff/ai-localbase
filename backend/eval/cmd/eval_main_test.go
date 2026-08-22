@@ -1,9 +1,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"ai-localbase/eval/offline"
 	"ai-localbase/internal/model"
 )
 
@@ -17,6 +19,14 @@ func TestBuildEvalOverrides(t *testing.T) {
 		retrievalMaxChunksPerDocument:  3,
 		retrievalMaxContextChars:       3200,
 		retrievalAutoExpand:            "true",
+		retrievalSearchMode:            "hybrid",
+		retrievalRerankStrategy:        "semantic",
+		retrievalQueryRewrite:          "false",
+		retrievalQueryRewriteVariants:  4,
+		evalEmbeddingBaseURL:           " http://localhost:11434 ",
+		evalChatBaseURL:                " http://localhost:11435 ",
+		evalPathMap:                    "/app=.",
+		evalAllowMissingSources:        true,
 	})
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -45,12 +55,136 @@ func TestBuildEvalOverrides(t *testing.T) {
 	if overrides.retrievalAutoExpand == nil || !*overrides.retrievalAutoExpand {
 		t.Fatal("expected retrievalAutoExpand to be true")
 	}
+	if overrides.retrievalSearchMode != "hybrid" {
+		t.Fatalf("expected retrievalSearchMode hybrid, got %q", overrides.retrievalSearchMode)
+	}
+	if overrides.retrievalRerankStrategy != "semantic" {
+		t.Fatalf("expected retrievalRerankStrategy semantic, got %q", overrides.retrievalRerankStrategy)
+	}
+	if overrides.retrievalQueryRewrite == nil || *overrides.retrievalQueryRewrite {
+		t.Fatal("expected retrievalQueryRewrite to be false")
+	}
+	if overrides.retrievalQueryRewriteVariants != 4 {
+		t.Fatalf("expected retrievalQueryRewriteVariants 4, got %d", overrides.retrievalQueryRewriteVariants)
+	}
+	if overrides.evalEmbeddingBaseURL != "http://localhost:11434" {
+		t.Fatalf("expected trimmed evalEmbeddingBaseURL, got %q", overrides.evalEmbeddingBaseURL)
+	}
+	if overrides.evalChatBaseURL != "http://localhost:11435" {
+		t.Fatalf("expected trimmed evalChatBaseURL, got %q", overrides.evalChatBaseURL)
+	}
+	if len(overrides.evalPathMaps) != 1 || overrides.evalPathMaps[0].from != "/app" || overrides.evalPathMaps[0].to == "." {
+		t.Fatalf("expected absolute /app path map, got %#v", overrides.evalPathMaps)
+	}
+	if !overrides.evalAllowMissingSources {
+		t.Fatal("expected evalAllowMissingSources to be true")
+	}
 }
 
 func TestBuildEvalOverridesRejectsInvalidBool(t *testing.T) {
 	_, err := buildEvalOverrides(evalOverridesInput{retrievalAutoExpand: "maybe"})
 	if err == nil {
 		t.Fatal("expected invalid boolean value error")
+	}
+}
+
+func TestBuildEvalOverridesRejectsInvalidStrategy(t *testing.T) {
+	if _, err := buildEvalOverrides(evalOverridesInput{retrievalSearchMode: "bm25"}); err == nil {
+		t.Fatal("expected invalid search mode error")
+	}
+	if _, err := buildEvalOverrides(evalOverridesInput{retrievalRerankStrategy: "random"}); err == nil {
+		t.Fatal("expected invalid rerank strategy error")
+	}
+	if _, err := buildEvalOverrides(evalOverridesInput{retrievalQueryRewrite: "maybe"}); err == nil {
+		t.Fatal("expected invalid query rewrite error")
+	}
+	if _, err := buildEvalOverrides(evalOverridesInput{evalPathMap: "/app"}); err == nil {
+		t.Fatal("expected invalid eval path map error")
+	}
+}
+
+func TestRewriteEvalPath(t *testing.T) {
+	rules := []evalPathMapRule{{from: "/app", to: "/workspace/backend"}}
+	if actual := rewriteEvalPath("/app/data/uploads/demo.csv", rules); actual != "/workspace/backend/data/uploads/demo.csv" {
+		t.Fatalf("unexpected mapped path: %s", actual)
+	}
+	if actual := rewriteEvalPath("/other/data/uploads/demo.csv", rules); actual != "/other/data/uploads/demo.csv" {
+		t.Fatalf("unexpected unchanged path: %s", actual)
+	}
+}
+
+func TestValidateEvalDatasetSources(t *testing.T) {
+	knowledgeBases := map[string]model.KnowledgeBase{
+		"kb-1": {
+			ID:   "kb-1",
+			Name: "主知识库",
+			Documents: []model.Document{{
+				ID: "doc-active",
+			}},
+		},
+	}
+	ds := &offline.Dataset{Cases: []offline.GroundTruthCase{
+		{
+			ID:       "case-ok",
+			Question: "有效问题",
+			SourceDocuments: []offline.SourceDocument{{
+				KnowledgeBaseID: "kb-1",
+				DocumentID:      "doc-active",
+			}},
+		},
+		{
+			ID:       "case-missing-doc",
+			Question: "失效文档问题",
+			SourceDocuments: []offline.SourceDocument{{
+				KnowledgeBaseID: "kb-1",
+				DocumentID:      "doc-stale",
+			}},
+		},
+		{
+			ID:       "case-missing-kb",
+			Question: "失效知识库问题",
+			SourceDocuments: []offline.SourceDocument{{
+				KnowledgeBaseID: "kb-missing",
+				DocumentID:      "doc-active",
+			}},
+		},
+	}}
+
+	issues := validateEvalDatasetSources(ds, knowledgeBases, "")
+	if len(issues) != 2 {
+		t.Fatalf("expected 2 source issues, got %#v", issues)
+	}
+	if issues[0].CaseID != "case-missing-doc" || issues[0].Reason != "文档不存在于当前知识库" {
+		t.Fatalf("unexpected missing doc issue: %#v", issues[0])
+	}
+	if issues[1].CaseID != "case-missing-kb" || issues[1].Reason != "知识库不存在" {
+		t.Fatalf("unexpected missing kb issue: %#v", issues[1])
+	}
+	formatted := formatEvalDatasetSourceIssues(issues, 1)
+	if formatted == "" || !strings.Contains(formatted, "case-missing-doc") || !strings.Contains(formatted, "还有 1 处问题") {
+		t.Fatalf("unexpected formatted issues: %q", formatted)
+	}
+}
+
+func TestValidateEvalDatasetSourcesUsesOverrideKnowledgeBase(t *testing.T) {
+	knowledgeBases := map[string]model.KnowledgeBase{
+		"kb-override": {
+			ID: "kb-override",
+			Documents: []model.Document{{
+				ID: "doc-active",
+			}},
+		},
+	}
+	ds := &offline.Dataset{Cases: []offline.GroundTruthCase{{
+		ID: "case-override",
+		SourceDocuments: []offline.SourceDocument{{
+			KnowledgeBaseID: "kb-old",
+			DocumentID:      "doc-active",
+		}},
+	}}}
+
+	if issues := validateEvalDatasetSources(ds, knowledgeBases, "kb-override"); len(issues) != 0 {
+		t.Fatalf("expected override knowledge base to validate source document, got %#v", issues)
 	}
 }
 

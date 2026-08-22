@@ -91,10 +91,14 @@ func (e *Evaluator) EvaluateCase(ctx context.Context, gt GroundTruthCase) (CaseR
 	result.LLMAnswer = answer
 
 	// 3. 计算命中指标
-	hit, rank := IsHit(result, gt, e.config.HitThreshold)
-	if hit {
-		result.HitRank = rank
-		result.ReciprocalRank = 1.0 / float64(rank)
+	classification := ClassifyHit(result, gt, e.config.HitThreshold)
+	result.DocumentHit = classification.DocumentHit
+	result.ChunkHit = classification.ChunkHit
+	result.AnswerSnippetHit = classification.AnswerSnippetHit
+	result.DirectEvidenceHit = classification.DirectEvidenceHit
+	if classification.Hit {
+		result.HitRank = classification.Rank
+		result.ReciprocalRank = 1.0 / float64(classification.Rank)
 	} else {
 		result.Error = "未命中"
 	}

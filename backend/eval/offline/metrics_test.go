@@ -56,6 +56,87 @@ func TestIsHit(t *testing.T) {
 	assert.Equal(t, -1, rank)
 }
 
+func TestIsHitRequiresExactChunkWhenGroundTruthProvidesChunkID(t *testing.T) {
+	gt := GroundTruthCase{
+		SourceDocuments: []SourceDocument{{
+			KnowledgeBaseID: "kb-1",
+			DocumentID:      "doc-1",
+			ChunkID:         "chunk-target",
+		}},
+	}
+
+	wrongOnly, rank := IsHit(CaseResult{RetrievedChunks: []RetrievedChunkInfo{
+		{KnowledgeBaseID: "kb-1", DocumentID: "doc-1", ChunkID: "chunk-other"},
+	}}, gt, 0.5)
+	assert.False(t, wrongOnly)
+	assert.Equal(t, -1, rank)
+
+	matched, rank := IsHit(CaseResult{RetrievedChunks: []RetrievedChunkInfo{
+		{KnowledgeBaseID: "kb-1", DocumentID: "doc-1", ChunkID: "chunk-other"},
+		{KnowledgeBaseID: "kb-1", DocumentID: "doc-1", ChunkID: "chunk-target"},
+	}}, gt, 0.5)
+	assert.True(t, matched)
+	assert.Equal(t, 2, rank)
+
+	wrongKnowledgeBase, rank := IsHit(CaseResult{RetrievedChunks: []RetrievedChunkInfo{
+		{KnowledgeBaseID: "kb-2", DocumentID: "doc-1", ChunkID: "chunk-target"},
+	}}, gt, 0.5)
+	assert.False(t, wrongKnowledgeBase)
+	assert.Equal(t, -1, rank)
+}
+
+func TestClassifyHitSeparatesDocumentHitFromDirectEvidence(t *testing.T) {
+	gt := GroundTruthCase{SourceDocuments: []SourceDocument{{
+		KnowledgeBaseID: "kb-1",
+		DocumentID:      "doc-1",
+		ChunkID:         "chunk-target",
+	}}}
+	classification := ClassifyHit(CaseResult{RetrievedChunks: []RetrievedChunkInfo{{
+		KnowledgeBaseID: "kb-1",
+		DocumentID:      "doc-1",
+		ChunkID:         "chunk-other",
+	}}}, gt, 0.5)
+
+	if !classification.DocumentHit {
+		t.Fatal("expected document hit")
+	}
+	if classification.ChunkHit || classification.DirectEvidenceHit || classification.Hit {
+		t.Fatalf("expected document-only hit without direct evidence, got %#v", classification)
+	}
+}
+
+func TestIsHitUsesThresholdForPartialAnswerSnippet(t *testing.T) {
+	gt := GroundTruthCase{AnswerSnippets: []string{"北京大学成立于1900年"}}
+	result := CaseResult{RetrievedChunks: []RetrievedChunkInfo{{Text: "北京大学成立于1898年，位于北京。"}}}
+
+	hit, _ := IsHit(result, gt, 0.4)
+	if !hit {
+		t.Fatal("expected partial snippet to pass the lower threshold")
+	}
+	hit, _ = IsHit(result, gt, 1)
+	if hit {
+		t.Fatal("expected partial snippet to fail the exact threshold")
+	}
+}
+
+func TestComputeMetricsMatchGroundTruthByCaseID(t *testing.T) {
+	groundTruth := []GroundTruthCase{
+		{ID: "case-a", SourceDocuments: []SourceDocument{{DocumentID: "doc-a"}}},
+		{ID: "case-b", SourceDocuments: []SourceDocument{{DocumentID: "doc-b"}}},
+	}
+	results := []CaseResult{
+		{CaseID: "case-b", RetrievedChunks: []RetrievedChunkInfo{{DocumentID: "doc-b"}}},
+		{CaseID: "case-a", RetrievedChunks: []RetrievedChunkInfo{{DocumentID: "doc-a"}}},
+	}
+
+	if got := ComputeHitRate(results, groundTruth, 0.5); got != 1 {
+		t.Fatalf("expected ID-aligned hit rate 1, got %v", got)
+	}
+	if got := ComputeMRR(results, groundTruth, 0.5); got != 1 {
+		t.Fatalf("expected ID-aligned MRR 1, got %v", got)
+	}
+}
+
 func TestComputeHitRate(t *testing.T) {
 	gts := []GroundTruthCase{
 		{SourceDocuments: []SourceDocument{{DocumentID: "doc-a"}}},

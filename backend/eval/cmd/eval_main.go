@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,8 @@ type realEvalRuntime struct {
 	llmService      *service.LLMService
 	casesByQuestion map[string]offline.GroundTruthCase
 	realLLM         bool
+	overrides       evalOverrides
+	cleanup         func()
 }
 
 func main() {
@@ -41,6 +44,14 @@ func main() {
 		retrievalMaxChunksPerDocument  = flag.Int("retrieval-max-chunks-per-document", -1, "真实模式下覆盖每文档最大 chunk 数")
 		retrievalMaxContextChars       = flag.Int("retrieval-max-context-chars", -1, "真实模式下覆盖上下文最大字符数")
 		retrievalAutoExpand            = flag.String("retrieval-auto-expand", "", "真实模式下覆盖自动扩召回开关，可选 true/false")
+		retrievalSearchMode            = flag.String("retrieval-search-mode", "", "真实模式下覆盖检索模式，可选 auto/dense/hybrid")
+		retrievalRerankStrategy        = flag.String("retrieval-rerank-strategy", "", "真实模式下覆盖重排策略，可选 keyword/semantic")
+		retrievalQueryRewrite          = flag.String("retrieval-query-rewrite", "", "真实模式下覆盖查询改写开关，可选 true/false")
+		retrievalQueryRewriteVariants  = flag.Int("retrieval-query-rewrite-max-variants", -1, "真实模式下覆盖查询改写最大变体数")
+		evalEmbeddingBaseURL           = flag.String("eval-embedding-base-url", "", "真实模式下覆盖评估请求使用的 Embedding Base URL")
+		evalChatBaseURL                = flag.String("eval-chat-base-url", "", "真实模式下覆盖评估请求使用的 Chat Base URL")
+		evalPathMap                    = flag.String("eval-path-map", "", "真实模式下临时映射 app-state 中的文档路径，格式 from=to，多个映射用逗号分隔")
+		evalAllowMissingSources        = flag.Bool("eval-allow-missing-sources", false, "真实模式下允许数据集 source_documents 引用不存在的知识库或文档")
 	)
 	flag.Parse()
 
@@ -79,6 +90,14 @@ func main() {
 			retrievalMaxChunksPerDocument:  *retrievalMaxChunksPerDocument,
 			retrievalMaxContextChars:       *retrievalMaxContextChars,
 			retrievalAutoExpand:            *retrievalAutoExpand,
+			retrievalSearchMode:            *retrievalSearchMode,
+			retrievalRerankStrategy:        *retrievalRerankStrategy,
+			retrievalQueryRewrite:          *retrievalQueryRewrite,
+			retrievalQueryRewriteVariants:  *retrievalQueryRewriteVariants,
+			evalEmbeddingBaseURL:           *evalEmbeddingBaseURL,
+			evalChatBaseURL:                *evalChatBaseURL,
+			evalPathMap:                    *evalPathMap,
+			evalAllowMissingSources:        *evalAllowMissingSources,
 		})
 		if err != nil {
 			log.Fatalf("[eval] 解析评估参数覆盖失败: %v", err)
@@ -87,6 +106,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[eval] 初始化真实评估模式失败: %v", err)
 		}
+		defer runtime.Close()
 		log.Printf("[eval] 真实模式配置: evalKnowledgeBaseID=%q retrieval(topKDoc=%d candidateDoc=%d topKKB=%d candidateAll=%d perDocLimit=%d maxContextChars=%d autoExpand=%v)",
 			runtime.appService.ServerConfig().EvalKnowledgeBaseID,
 			runtime.appService.ServerConfig().RetrievalTopKDocument,
@@ -97,6 +117,19 @@ func main() {
 			runtime.appService.ServerConfig().RetrievalMaxContextChars,
 			runtime.appService.ServerConfig().RetrievalEnableAutoExpand,
 		)
+		log.Printf("[eval] 真实模式策略覆盖: searchMode=%q rerankStrategy=%q queryRewrite=%s queryRewriteMaxVariants=%d",
+			overrides.retrievalSearchMode,
+			overrides.retrievalRerankStrategy,
+			formatOptionalBool(overrides.retrievalQueryRewrite),
+			overrides.retrievalQueryRewriteVariants,
+		)
+		log.Printf("[eval] 真实模式模型覆盖: embeddingBaseURL=%q chatBaseURL=%q",
+			overrides.evalEmbeddingBaseURL,
+			overrides.evalChatBaseURL,
+		)
+		if len(overrides.evalPathMaps) > 0 {
+			log.Printf("[eval] 真实模式路径映射: %s", formatEvalPathMaps(overrides.evalPathMaps))
+		}
 		retrievalFn = runtime.retrieval
 		generationFn = runtime.generation
 		defaultRunPrefix = "baseline"
@@ -116,7 +149,7 @@ func main() {
 	log.Printf("[eval] 评估完成，共 %d 个用例", len(results))
 
 	runID := buildRunID(defaultRunPrefix, *runPrefix, *runLabel, time.Now())
-	rpt := report.BuildReport(runID, *dataset, results, ds)
+	rpt := report.BuildReport(runID, *dataset, results, ds, *hitThreshold)
 
 	jsonPath := filepath.Join(*outputDir, runID+".json")
 	if err := rpt.WriteJSON(jsonPath); err != nil {
@@ -147,6 +180,19 @@ type evalOverridesInput struct {
 	retrievalMaxChunksPerDocument  int
 	retrievalMaxContextChars       int
 	retrievalAutoExpand            string
+	retrievalSearchMode            string
+	retrievalRerankStrategy        string
+	retrievalQueryRewrite          string
+	retrievalQueryRewriteVariants  int
+	evalEmbeddingBaseURL           string
+	evalChatBaseURL                string
+	evalPathMap                    string
+	evalAllowMissingSources        bool
+}
+
+type evalPathMapRule struct {
+	from string
+	to   string
 }
 
 type evalOverrides struct {
@@ -158,12 +204,40 @@ type evalOverrides struct {
 	retrievalMaxChunksPerDocument  int
 	retrievalMaxContextChars       int
 	retrievalAutoExpand            *bool
+	retrievalSearchMode            string
+	retrievalRerankStrategy        string
+	retrievalQueryRewrite          *bool
+	retrievalQueryRewriteVariants  int
+	evalEmbeddingBaseURL           string
+	evalChatBaseURL                string
+	evalPathMaps                   []evalPathMapRule
+	evalAllowMissingSources        bool
 }
 
 func newRealEvalRuntime(ctx context.Context, ds *offline.Dataset, realLLM bool, overrides evalOverrides) (*realEvalRuntime, error) {
 	serverConfig := applyEvalOverrides(config.LoadServerConfig(), overrides)
 	if err := os.MkdirAll(serverConfig.UploadDir, 0o755); err != nil {
 		return nil, fmt.Errorf("创建上传目录失败: %w", err)
+	}
+
+	var cleanup func()
+	runtimeReady := false
+	defer func() {
+		if !runtimeReady && cleanup != nil {
+			cleanup()
+		}
+	}()
+	if len(overrides.evalPathMaps) > 0 {
+		mappedStateFile, err := writeMappedEvalStateFile(serverConfig.StateFile, overrides.evalPathMaps)
+		if err != nil {
+			return nil, err
+		}
+		serverConfig.StateFile = mappedStateFile
+		cleanup = func() {
+			if err := os.Remove(mappedStateFile); err != nil && !os.IsNotExist(err) {
+				log.Printf("[eval] 清理临时 app-state 失败 (%s): %v", mappedStateFile, err)
+			}
+		}
 	}
 
 	stateStore := service.NewAppStateStore(serverConfig.StateFile)
@@ -176,6 +250,13 @@ func newRealEvalRuntime(ctx context.Context, ds *offline.Dataset, realLLM bool, 
 	}
 	if len(loadedState.KnowledgeBases) == 0 {
 		return nil, fmt.Errorf("app-state 中不存在可用知识库: %s", serverConfig.StateFile)
+	}
+	if issues := validateEvalDatasetSources(ds, loadedState.KnowledgeBases, serverConfig.EvalKnowledgeBaseID); len(issues) > 0 {
+		formatted := formatEvalDatasetSourceIssues(issues, 12)
+		if !overrides.evalAllowMissingSources {
+			return nil, fmt.Errorf("评估数据集引用了当前 app-state 中不存在的来源，共 %d 处；请清理/重建数据集，或显式添加 -eval-allow-missing-sources 继续运行\n%s", len(issues), formatted)
+		}
+		log.Printf("[eval] 警告: 评估数据集存在 %d 处失效来源，已按 -eval-allow-missing-sources 继续运行\n%s", len(issues), formatted)
 	}
 
 	qdrantService := service.NewQdrantService(serverConfig)
@@ -199,12 +280,23 @@ func newRealEvalRuntime(ctx context.Context, ds *offline.Dataset, realLLM bool, 
 		}
 	}
 
+	runtimeReady = true
 	return &realEvalRuntime{
 		appService:      appService,
 		llmService:      service.NewLLMService(),
 		casesByQuestion: casesByQuestion,
 		realLLM:         realLLM,
+		overrides:       overrides,
+		cleanup:         cleanup,
 	}, nil
+}
+
+func (r *realEvalRuntime) Close() {
+	if r == nil || r.cleanup == nil {
+		return
+	}
+	r.cleanup()
+	r.cleanup = nil
 }
 
 func buildEvalOverrides(input evalOverridesInput) (evalOverrides, error) {
@@ -216,17 +308,45 @@ func buildEvalOverrides(input evalOverridesInput) (evalOverrides, error) {
 		retrievalCandidateTopKAllDocs:  input.retrievalCandidateTopKAllDocs,
 		retrievalMaxChunksPerDocument:  input.retrievalMaxChunksPerDocument,
 		retrievalMaxContextChars:       input.retrievalMaxContextChars,
+		retrievalQueryRewriteVariants:  input.retrievalQueryRewriteVariants,
+		evalEmbeddingBaseURL:           strings.TrimSpace(input.evalEmbeddingBaseURL),
+		evalChatBaseURL:                strings.TrimSpace(input.evalChatBaseURL),
+		evalAllowMissingSources:        input.evalAllowMissingSources,
 	}
 
-	if strings.TrimSpace(input.retrievalAutoExpand) == "" {
-		return overrides, nil
-	}
-
-	parsed, err := parseOptionalBool(input.retrievalAutoExpand)
+	pathMaps, err := parseEvalPathMaps(input.evalPathMap)
 	if err != nil {
 		return evalOverrides{}, err
 	}
-	overrides.retrievalAutoExpand = &parsed
+	overrides.evalPathMaps = pathMaps
+
+	searchMode, err := parseOptionalSearchMode(input.retrievalSearchMode)
+	if err != nil {
+		return evalOverrides{}, err
+	}
+	overrides.retrievalSearchMode = searchMode
+
+	rerankStrategy, err := parseOptionalRerankStrategy(input.retrievalRerankStrategy)
+	if err != nil {
+		return evalOverrides{}, err
+	}
+	overrides.retrievalRerankStrategy = rerankStrategy
+
+	if strings.TrimSpace(input.retrievalAutoExpand) != "" {
+		parsed, err := parseOptionalBool(input.retrievalAutoExpand)
+		if err != nil {
+			return evalOverrides{}, err
+		}
+		overrides.retrievalAutoExpand = &parsed
+	}
+
+	if strings.TrimSpace(input.retrievalQueryRewrite) != "" {
+		parsed, err := parseOptionalBool(input.retrievalQueryRewrite)
+		if err != nil {
+			return evalOverrides{}, err
+		}
+		overrides.retrievalQueryRewrite = &parsed
+	}
 	return overrides, nil
 }
 
@@ -256,6 +376,279 @@ func applyEvalOverrides(serverConfig model.ServerConfig, overrides evalOverrides
 		serverConfig.RetrievalEnableAutoExpand = *overrides.retrievalAutoExpand
 	}
 	return serverConfig
+}
+
+func parseOptionalSearchMode(value string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	switch normalized {
+	case "":
+		return "", nil
+	case "auto", "dense", "vector", "hybrid":
+		if normalized == "vector" {
+			return "dense", nil
+		}
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid retrieval search mode %q, expected auto/dense/hybrid", value)
+	}
+}
+
+func parseOptionalRerankStrategy(value string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	switch normalized {
+	case "":
+		return "", nil
+	case "keyword", "lexical":
+		return "keyword", nil
+	case "semantic", "embedding":
+		return "semantic", nil
+	default:
+		return "", fmt.Errorf("invalid rerank strategy %q, expected keyword/semantic", value)
+	}
+}
+
+func formatOptionalBool(value *bool) string {
+	if value == nil {
+		return "default"
+	}
+	if *value {
+		return "true"
+	}
+	return "false"
+}
+
+func parseEvalPathMaps(value string) ([]evalPathMapRule, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	rules := make([]evalPathMapRule, 0, len(parts))
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		from, to, ok := strings.Cut(part, "=")
+		from = strings.TrimRight(strings.TrimSpace(from), "/")
+		to = strings.TrimRight(strings.TrimSpace(to), "/")
+		if !ok || from == "" || to == "" {
+			return nil, fmt.Errorf("invalid eval path map %q, expected from=to", part)
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(wd, to)
+		}
+		rules = append(rules, evalPathMapRule{from: from, to: to})
+	}
+	return rules, nil
+}
+
+func formatEvalPathMaps(rules []evalPathMapRule) string {
+	parts := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		parts = append(parts, rule.from+"="+rule.to)
+	}
+	return strings.Join(parts, ",")
+}
+
+func writeMappedEvalStateFile(stateFile string, rules []evalPathMapRule) (string, error) {
+	content, err := os.ReadFile(stateFile)
+	if err != nil {
+		return "", fmt.Errorf("read app state for eval path mapping: %w", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(content, &raw); err != nil {
+		return "", fmt.Errorf("decode app state for eval path mapping: %w", err)
+	}
+	applyEvalPathMaps(raw, rules)
+	mapped, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode mapped app state: %w", err)
+	}
+	tempFile, err := os.CreateTemp("", "ai-localbase-eval-state-*.json")
+	if err != nil {
+		return "", fmt.Errorf("create mapped eval state: %w", err)
+	}
+	tempFileName := tempFile.Name()
+	if _, err := tempFile.Write(mapped); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFileName)
+		return "", fmt.Errorf("write mapped eval state: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempFileName)
+		return "", fmt.Errorf("close mapped eval state: %w", err)
+	}
+	return tempFileName, nil
+}
+
+func applyEvalPathMaps(raw map[string]any, rules []evalPathMapRule) {
+	knowledgeBases, _ := raw["knowledgeBases"].(map[string]any)
+	for _, kbValue := range knowledgeBases {
+		kb, _ := kbValue.(map[string]any)
+		documents, _ := kb["documents"].([]any)
+		for _, docValue := range documents {
+			document, _ := docValue.(map[string]any)
+			path, _ := document["path"].(string)
+			if path == "" {
+				continue
+			}
+			document["path"] = rewriteEvalPath(path, rules)
+		}
+	}
+}
+
+func rewriteEvalPath(path string, rules []evalPathMapRule) string {
+	cleanPath := strings.TrimSpace(path)
+	for _, rule := range rules {
+		if cleanPath == rule.from {
+			return rule.to
+		}
+		prefix := rule.from + "/"
+		if strings.HasPrefix(cleanPath, prefix) {
+			return filepath.Join(rule.to, strings.TrimPrefix(cleanPath, prefix))
+		}
+	}
+	return path
+}
+
+type evalDatasetSourceIssue struct {
+	CaseID          string
+	Question        string
+	KnowledgeBaseID string
+	DocumentID      string
+	Reason          string
+}
+
+func validateEvalDatasetSources(ds *offline.Dataset, knowledgeBases map[string]model.KnowledgeBase, evalKnowledgeBaseID string) []evalDatasetSourceIssue {
+	if ds == nil || len(knowledgeBases) == 0 {
+		return nil
+	}
+
+	issues := make([]evalDatasetSourceIssue, 0)
+	for _, gtCase := range ds.Cases {
+		for _, source := range gtCase.SourceDocuments {
+			documentID := strings.TrimSpace(source.DocumentID)
+			if documentID == "" {
+				issues = append(issues, evalDatasetSourceIssue{
+					CaseID:          gtCase.ID,
+					Question:        gtCase.Question,
+					KnowledgeBaseID: strings.TrimSpace(source.KnowledgeBaseID),
+					DocumentID:      documentID,
+					Reason:          "source_documents.document_id 为空",
+				})
+				continue
+			}
+
+			knowledgeBaseID, ok := sourceValidationKnowledgeBaseID(knowledgeBases, source, evalKnowledgeBaseID)
+			if !ok {
+				issues = append(issues, evalDatasetSourceIssue{
+					CaseID:          gtCase.ID,
+					Question:        gtCase.Question,
+					KnowledgeBaseID: firstNonEmpty(strings.TrimSpace(evalKnowledgeBaseID), strings.TrimSpace(source.KnowledgeBaseID)),
+					DocumentID:      documentID,
+					Reason:          "知识库不存在",
+				})
+				continue
+			}
+
+			if !knowledgeBaseContainsDocument(knowledgeBases[knowledgeBaseID], documentID) {
+				issues = append(issues, evalDatasetSourceIssue{
+					CaseID:          gtCase.ID,
+					Question:        gtCase.Question,
+					KnowledgeBaseID: knowledgeBaseID,
+					DocumentID:      documentID,
+					Reason:          "文档不存在于当前知识库",
+				})
+			}
+		}
+	}
+	return issues
+}
+
+func sourceValidationKnowledgeBaseID(knowledgeBases map[string]model.KnowledgeBase, source offline.SourceDocument, evalKnowledgeBaseID string) (string, bool) {
+	if configured := strings.TrimSpace(evalKnowledgeBaseID); configured != "" {
+		return resolveKnowledgeBaseIDInState(knowledgeBases, configured)
+	}
+	if sourceKBID := strings.TrimSpace(source.KnowledgeBaseID); sourceKBID != "" {
+		return resolveKnowledgeBaseIDInState(knowledgeBases, sourceKBID)
+	}
+	if len(knowledgeBases) == 1 {
+		for id := range knowledgeBases {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+func resolveKnowledgeBaseIDInState(knowledgeBases map[string]model.KnowledgeBase, value string) (string, bool) {
+	if len(knowledgeBases) == 0 {
+		return "", false
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	if _, ok := knowledgeBases[value]; ok {
+		return value, true
+	}
+	for id, kb := range knowledgeBases {
+		if strings.EqualFold(strings.TrimSpace(kb.Name), value) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+func knowledgeBaseContainsDocument(kb model.KnowledgeBase, documentID string) bool {
+	documentID = strings.TrimSpace(documentID)
+	for _, document := range kb.Documents {
+		if document.ID == documentID {
+			return true
+		}
+	}
+	return false
+}
+
+func formatEvalDatasetSourceIssues(issues []evalDatasetSourceIssue, limit int) string {
+	if len(issues) == 0 {
+		return ""
+	}
+	if limit <= 0 || limit > len(issues) {
+		limit = len(issues)
+	}
+	lines := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		issue := issues[i]
+		question := strings.TrimSpace(issue.Question)
+		if len([]rune(question)) > 80 {
+			question = string([]rune(question)[:80]) + "..."
+		}
+		lines = append(lines, fmt.Sprintf("- case=%s kb=%s doc=%s reason=%s question=%q",
+			issue.CaseID,
+			firstNonEmpty(issue.KnowledgeBaseID, "<未指定>"),
+			firstNonEmpty(issue.DocumentID, "<未指定>"),
+			issue.Reason,
+			question,
+		))
+	}
+	if remaining := len(issues) - limit; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("- ... 还有 %d 处问题未展示", remaining))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func buildRunID(defaultPrefix, customPrefix, label string, now time.Time) string {
@@ -323,12 +716,17 @@ func (r *realEvalRuntime) retrieval(ctx context.Context, question string) ([]off
 	}
 
 	req := model.ChatCompletionRequest{
-		KnowledgeBaseID: knowledgeBaseID,
+		KnowledgeBaseID:         knowledgeBaseID,
+		RetrievalMode:           r.overrides.retrievalSearchMode,
+		RerankStrategy:          r.overrides.retrievalRerankStrategy,
+		EnableQueryRewrite:      r.overrides.retrievalQueryRewrite,
+		QueryRewriteMaxVariants: r.overrides.retrievalQueryRewriteVariants,
+		Config:                  r.evalChatConfig(),
 		Messages: []model.ChatMessage{{
 			Role:    "user",
 			Content: question,
 		}},
-		Embedding: r.appService.CurrentEmbeddingConfig(),
+		Embedding: r.evalEmbeddingConfig(),
 	}
 
 	chunks, err := r.appService.EvaluateRetrieve(req)
@@ -340,10 +738,11 @@ func (r *realEvalRuntime) retrieval(ctx context.Context, question string) ([]off
 	result := make([]offline.RetrievedChunkInfo, 0, len(chunks))
 	for _, chunk := range chunks {
 		result = append(result, offline.RetrievedChunkInfo{
-			DocumentID: chunk.DocumentID,
-			ChunkID:    chunk.ID,
-			Text:       chunk.Text,
-			Score:      chunk.Score,
+			KnowledgeBaseID: chunk.KnowledgeBaseID,
+			DocumentID:      chunk.DocumentID,
+			ChunkID:         chunk.ID,
+			Text:            chunk.Text,
+			Score:           chunk.Score,
 		})
 	}
 	return result, latency, nil
@@ -355,7 +754,7 @@ func (r *realEvalRuntime) generation(ctx context.Context, question string, chunk
 		return buildSummaryAnswer(question, chunks), time.Since(startedAt), nil
 	}
 
-	chatConfig := r.appService.CurrentChatConfig()
+	chatConfig := r.evalChatConfig()
 	if strings.TrimSpace(chatConfig.Model) == "" {
 		answer := buildSummaryAnswer(question, chunks) + "\n\n[degraded] 未配置 Chat 模型，已回退为检索摘要回答。"
 		return answer, time.Since(startedAt), nil
@@ -388,6 +787,22 @@ func (r *realEvalRuntime) generation(ctx context.Context, question string, chunk
 		}
 	}
 	return answer, latency, nil
+}
+
+func (r *realEvalRuntime) evalEmbeddingConfig() model.EmbeddingModelConfig {
+	cfg := r.appService.CurrentEmbeddingConfig()
+	if baseURL := strings.TrimSpace(r.overrides.evalEmbeddingBaseURL); baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
+	return cfg
+}
+
+func (r *realEvalRuntime) evalChatConfig() model.ChatModelConfig {
+	cfg := r.appService.CurrentChatConfig()
+	if baseURL := strings.TrimSpace(r.overrides.evalChatBaseURL); baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
+	return cfg
 }
 
 func (r *realEvalRuntime) resolveKnowledgeBaseID(gtCase offline.GroundTruthCase) (string, error) {
@@ -451,6 +866,10 @@ func printSummary(rpt *report.Report) {
 	fmt.Printf("RunID:          %s\n", rpt.RunID)
 	fmt.Printf("总用例数:       %d\n", rpt.Metrics.TotalCases)
 	fmt.Printf("命中率:         %.2f%%\n", rpt.Metrics.HitRate*100)
+	fmt.Printf("文档命中率:     %.2f%%\n", rpt.Metrics.DocumentHitRate*100)
+	fmt.Printf("Chunk 命中率:    %.2f%%\n", rpt.Metrics.ChunkHitRate*100)
+	fmt.Printf("答案片段命中率: %.2f%%\n", rpt.Metrics.AnswerSnippetHitRate*100)
+	fmt.Printf("直接证据命中率: %.2f%%\n", rpt.Metrics.DirectEvidenceHitRate*100)
 	fmt.Printf("MRR:            %.4f\n", rpt.Metrics.MRR)
 	fmt.Printf("检索时延 P50:   %.0fms\n", rpt.Metrics.RetrievalLatencyP50Ms)
 	fmt.Printf("检索时延 P95:   %.0fms\n", rpt.Metrics.RetrievalLatencyP95Ms)

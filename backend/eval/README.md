@@ -76,14 +76,19 @@ backend/eval/
 | 指标 | 说明 |
 |------|------|
 | **Hit Rate** | 命中率，检索结果中包含正确答案片段的用例比例 |
+| **Document Hit Rate** | 命中文档的用例比例；仅代表范围命中，不代表证据准确 |
+| **Chunk Hit Rate** | 命中标准答案指定 Chunk 的用例比例 |
+| **Answer Snippet Hit Rate** | 检索片段包含答案片段的用例比例 |
+| **Direct Evidence Hit Rate** | 命中指定 Chunk 或答案片段的用例比例 |
 | **MRR** | Mean Reciprocal Rank，首个命中结果的排名倒数均值 |
 | **Retrieval Latency P50/P95** | 检索时延的第 50/95 百分位数 |
 | **Generation Latency P50/P95** | LLM 生成时延的第 50/95 百分位数 |
 
-命中判断逻辑（`HitEval`）：
-1. 优先匹配 `ChunkID`（来自 `source_documents`）
-2. 若无 ChunkID 标注，则用 `answer_snippets` 进行文本包含匹配
-3. 文本相似度阈值由 `EvaluatorConfig.HitThreshold` 控制（默认 0.5）
+命中判断逻辑（`IsHit`）：
+1. `source_documents` 提供 `chunk_id` 时，必须同时匹配知识库（若结果带有）、文档和 Chunk，避免同一文档中的无关片段被误判为命中。
+2. `source_documents` 只有文档信息、没有 `chunk_id` 时，退回文档级匹配，兼容历史评估集。
+3. 没有 `source_documents` 时，使用 `answer_snippets` 做文本包含匹配。
+4. 没有 `source_documents` 时，`answer_snippets` 使用归一化文本和二元片段覆盖率判断，`EvaluatorConfig.HitThreshold` 会实际参与命中计算；完整包含仍视为精确命中。
 
 ---
 
@@ -243,6 +248,9 @@ go run ./eval/cmd/ \
   -retrieval-max-chunks-per-document 2 \
   -retrieval-max-context-chars 2400 \
   -retrieval-auto-expand false \
+  -retrieval-search-mode hybrid \
+  -retrieval-rerank-strategy keyword \
+  -retrieval-query-rewrite false \
   -run-prefix baseline \
   -run-label dense-only
 ```
@@ -266,6 +274,52 @@ go run ./eval/cmd/ \
 | `-retrieval-max-chunks-per-document` | `-1` | 覆盖每文档最大 chunk 数 |
 | `-retrieval-max-context-chars` | `-1` | 覆盖上下文最大字符数 |
 | `-retrieval-auto-expand` | 空 | 覆盖自动扩召回开关，支持 `true/false` |
+| `-retrieval-search-mode` | 空 | 按请求覆盖检索模式，支持 `auto/dense/hybrid` |
+| `-retrieval-rerank-strategy` | 空 | 按请求覆盖重排策略，支持 `keyword/semantic` |
+| `-retrieval-query-rewrite` | 空 | 按请求覆盖查询改写开关，支持 `true/false` |
+| `-retrieval-query-rewrite-max-variants` | `-1` | 按请求覆盖查询改写最大变体数 |
+| `-eval-embedding-base-url` | 空 | 覆盖评估请求使用的 Embedding Base URL，适合宿主机与 Docker 地址不一致时使用 |
+| `-eval-chat-base-url` | 空 | 覆盖评估请求使用的 Chat Base URL，适合 Query Rewrite 或真实 LLM 评估 |
+| `-eval-path-map` | 空 | 临时映射 app-state 中的文档路径，例如 Docker dev 中宿主机运行可用 `/app=.` |
+| `-eval-allow-missing-sources` | `false` | 允许 `source_documents` 引用当前 app-state 中不存在的知识库或文档；只建议兼容旧数据时使用 |
+
+真实模式会在运行前校验数据集的 `source_documents` 是否仍存在于当前 app-state。若发现失效来源，默认直接停止并列出问题用例，避免把脏评估集误判为检索召回下降。确认要兼容历史数据时，再显式添加 `-eval-allow-missing-sources`。
+
+### 当前版本 Baseline 策略矩阵
+
+当前版本建议固定复跑以下四组策略，避免被应用状态中的默认检索配置影响：
+
+```bash
+cd backend
+
+# A. dense + keyword + rewrite off
+env STATE_FILE=data/app-state.json UPLOAD_DIR=data/uploads QDRANT_URL=http://localhost:6333 \
+go run ./eval/cmd/ -dataset eval/data/ground_truth_kb30_v3.json -output eval/results/current-baseline \
+  -mock=false -eval-kb-id kb-30 -retrieval-search-mode dense -retrieval-rerank-strategy keyword -retrieval-query-rewrite false \
+  -eval-embedding-base-url http://localhost:11434 -eval-path-map /app=. \
+  -run-prefix current -run-label dense-keyword-no-rewrite
+
+# B. hybrid + keyword + rewrite off
+env STATE_FILE=data/app-state.json UPLOAD_DIR=data/uploads QDRANT_URL=http://localhost:6333 \
+go run ./eval/cmd/ -dataset eval/data/ground_truth_kb30_v3.json -output eval/results/current-baseline \
+  -mock=false -eval-kb-id kb-30 -retrieval-search-mode hybrid -retrieval-rerank-strategy keyword -retrieval-query-rewrite false \
+  -eval-embedding-base-url http://localhost:11434 -eval-path-map /app=. \
+  -run-prefix current -run-label hybrid-keyword-no-rewrite
+
+# C. hybrid + semantic + rewrite off
+env STATE_FILE=data/app-state.json UPLOAD_DIR=data/uploads QDRANT_URL=http://localhost:6333 \
+go run ./eval/cmd/ -dataset eval/data/ground_truth_kb30_v3.json -output eval/results/current-baseline \
+  -mock=false -eval-kb-id kb-30 -retrieval-search-mode hybrid -retrieval-rerank-strategy semantic -retrieval-query-rewrite false \
+  -eval-embedding-base-url http://localhost:11434 -eval-path-map /app=. \
+  -run-prefix current -run-label hybrid-semantic-no-rewrite
+
+# D. hybrid + semantic + rewrite on
+env STATE_FILE=data/app-state.json UPLOAD_DIR=data/uploads QDRANT_URL=http://localhost:6333 \
+go run ./eval/cmd/ -dataset eval/data/ground_truth_kb30_v3.json -output eval/results/current-baseline \
+  -mock=false -eval-kb-id kb-30 -retrieval-search-mode hybrid -retrieval-rerank-strategy semantic -retrieval-query-rewrite true -retrieval-query-rewrite-max-variants 3 \
+  -eval-embedding-base-url http://localhost:11434 -eval-chat-base-url http://localhost:11434 -eval-path-map /app=. \
+  -run-prefix current -run-label hybrid-semantic-rewrite
+```
 
 ### 输出文件
 

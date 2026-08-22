@@ -13,18 +13,22 @@ import (
 
 // Report 完整评估报告
 type Report struct {
-	RunID       string    `json:"run_id"`
-	RunAt       time.Time `json:"run_at"`
-	DatasetPath string    `json:"dataset_path"`
-	Metrics     Metrics   `json:"metrics"`
+	RunID       string       `json:"run_id"`
+	RunAt       time.Time    `json:"run_at"`
+	DatasetPath string       `json:"dataset_path"`
+	Metrics     Metrics      `json:"metrics"`
 	Cases       []CaseReport `json:"cases"`
 }
 
 // Metrics 报告中的聚合指标
 type Metrics struct {
-	TotalCases           int     `json:"total_cases"`
-	HitRate              float64 `json:"hit_rate"`
-	MRR                  float64 `json:"mrr"`
+	TotalCases             int     `json:"total_cases"`
+	HitRate                float64 `json:"hit_rate"`
+	DocumentHitRate        float64 `json:"document_hit_rate"`
+	ChunkHitRate           float64 `json:"chunk_hit_rate"`
+	AnswerSnippetHitRate   float64 `json:"answer_snippet_hit_rate"`
+	DirectEvidenceHitRate  float64 `json:"direct_evidence_hit_rate"`
+	MRR                    float64 `json:"mrr"`
 	RetrievalLatencyP50Ms  float64 `json:"retrieval_latency_p50_ms"`
 	RetrievalLatencyP95Ms  float64 `json:"retrieval_latency_p95_ms"`
 	GenerationLatencyP50Ms float64 `json:"generation_latency_p50_ms"`
@@ -33,28 +37,36 @@ type Metrics struct {
 
 // CaseReport 单个用例在报告中的摘要
 type CaseReport struct {
-	CaseID       string  `json:"case_id"`
-	Question     string  `json:"question"`
-	Hit          bool    `json:"hit"`
-	HitRank      int     `json:"hit_rank"`
-	LLMAnswer    string  `json:"llm_answer,omitempty"`
-	Error        string  `json:"error,omitempty"`
+	CaseID            string `json:"case_id"`
+	Question          string `json:"question"`
+	Hit               bool   `json:"hit"`
+	HitRank           int    `json:"hit_rank"`
+	DocumentHit       bool   `json:"document_hit"`
+	ChunkHit          bool   `json:"chunk_hit"`
+	AnswerSnippetHit  bool   `json:"answer_snippet_hit"`
+	DirectEvidenceHit bool   `json:"direct_evidence_hit"`
+	LLMAnswer         string `json:"llm_answer,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // BuildReport 从 CaseResult 列表和 Dataset 构建报告
-func BuildReport(runID string, datasetPath string, results []offline.CaseResult, dataset *offline.Dataset) *Report {
-	aggMetrics := offline.Aggregate(results, dataset.Cases)
+func BuildReport(runID string, datasetPath string, results []offline.CaseResult, dataset *offline.Dataset, hitThreshold float64) *Report {
+	aggMetrics := offline.Aggregate(results, dataset.Cases, hitThreshold)
 
 	caseReports := make([]CaseReport, len(results))
 	for i, res := range results {
 		hit := res.HitRank != -1
 		caseReports[i] = CaseReport{
-			CaseID:    res.CaseID,
-			Question:  res.Question,
-			Hit:       hit,
-			HitRank:   res.HitRank,
-			LLMAnswer: res.LLMAnswer,
-			Error:     res.Error,
+			CaseID:            res.CaseID,
+			Question:          res.Question,
+			Hit:               hit,
+			HitRank:           res.HitRank,
+			DocumentHit:       res.DocumentHit,
+			ChunkHit:          res.ChunkHit,
+			AnswerSnippetHit:  res.AnswerSnippetHit,
+			DirectEvidenceHit: res.DirectEvidenceHit,
+			LLMAnswer:         res.LLMAnswer,
+			Error:             res.Error,
 		}
 	}
 
@@ -63,15 +75,19 @@ func BuildReport(runID string, datasetPath string, results []offline.CaseResult,
 		RunAt:       time.Now(),
 		DatasetPath: datasetPath,
 		Metrics: Metrics{
-			TotalCases:           aggMetrics.TotalCases,
-			HitRate:              aggMetrics.HitRate,
-			MRR:                  aggMetrics.MRR,
+			TotalCases:             aggMetrics.TotalCases,
+			HitRate:                aggMetrics.HitRate,
+			DocumentHitRate:        aggMetrics.DocumentHitRate,
+			ChunkHitRate:           aggMetrics.ChunkHitRate,
+			AnswerSnippetHitRate:   aggMetrics.AnswerSnippetHitRate,
+			DirectEvidenceHitRate:  aggMetrics.DirectEvidenceHitRate,
+			MRR:                    aggMetrics.MRR,
 			RetrievalLatencyP50Ms:  float64(aggMetrics.LatencyRetrievalP50.Milliseconds()),
 			RetrievalLatencyP95Ms:  float64(aggMetrics.LatencyRetrievalP95.Milliseconds()),
 			GenerationLatencyP50Ms: float64(aggMetrics.LatencyGenerationP50.Milliseconds()),
 			GenerationLatencyP95Ms: float64(aggMetrics.LatencyGenerationP95.Milliseconds()),
 		},
-		Cases:       caseReports,
+		Cases: caseReports,
 	}
 }
 
@@ -102,6 +118,10 @@ func (r *Report) WriteMarkdown(path string) error {
 	md.WriteString("|------|----| \n")
 	md.WriteString(fmt.Sprintf("| 总用例数 | %d |\n", r.Metrics.TotalCases))
 	md.WriteString(fmt.Sprintf("| 命中率 (Hit Rate) | %.2f%% |\n", r.Metrics.HitRate*100))
+	md.WriteString(fmt.Sprintf("| 文档命中率 | %.2f%% |\n", r.Metrics.DocumentHitRate*100))
+	md.WriteString(fmt.Sprintf("| Chunk 命中率 | %.2f%% |\n", r.Metrics.ChunkHitRate*100))
+	md.WriteString(fmt.Sprintf("| 答案片段命中率 | %.2f%% |\n", r.Metrics.AnswerSnippetHitRate*100))
+	md.WriteString(fmt.Sprintf("| 直接证据命中率 | %.2f%% |\n", r.Metrics.DirectEvidenceHitRate*100))
 	md.WriteString(fmt.Sprintf("| MRR | %.4f |\n", r.Metrics.MRR))
 	md.WriteString(fmt.Sprintf("| 检索时延 P50 | %.0fms |\n", r.Metrics.RetrievalLatencyP50Ms))
 	md.WriteString(fmt.Sprintf("| 检索时延 P95 | %.0fms |\n", r.Metrics.RetrievalLatencyP95Ms))
