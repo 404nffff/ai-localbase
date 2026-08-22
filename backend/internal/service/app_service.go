@@ -2110,6 +2110,7 @@ func (s *AppService) IndexDocumentWithContext(ctx context.Context, document mode
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		document.IndexVersion = currentIndexVersion
 		return s.AddDocument(document.KnowledgeBaseID, document)
 	}
 
@@ -2127,6 +2128,7 @@ func (s *AppService) IndexDocumentWithContext(ctx context.Context, document mode
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexVersion = currentIndexVersion
 	return s.AddDocument(document.KnowledgeBaseID, document)
 }
 
@@ -2190,12 +2192,20 @@ func (s *AppService) ReindexKnowledgeBase(knowledgeBaseID string) ([]model.Docum
 	config := s.state.Config
 	s.state.Mu.RUnlock()
 
+	// 先确认整批原文都可读取，再开始写入 Qdrant，避免处理到中途才发现
+	// 暂存文件已被清理而留下部分重建结果。
+	for _, document := range originalDocs {
+		if strings.TrimSpace(document.Path) == "" {
+			return nil, fmt.Errorf("document %s path is empty", document.ID)
+		}
+		if _, err := os.Stat(document.Path); err != nil {
+			return nil, fmt.Errorf("document %s source file unavailable: %w", document.ID, err)
+		}
+	}
+
 	reindexed := make([]model.Document, 0, len(originalDocs))
 	for _, document := range originalDocs {
 		doc := document
-		if strings.TrimSpace(doc.Path) == "" {
-			return nil, fmt.Errorf("document %s path is empty", doc.ID)
-		}
 		indexed, err := reindexDocumentWithConfig(context.Background(), s, config, doc)
 		if err != nil {
 			return nil, fmt.Errorf("reindex document %s: %w", doc.ID, err)
@@ -2229,6 +2239,7 @@ func reindexDocumentWithConfig(ctx context.Context, s *AppService, cfg model.App
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		document.IndexVersion = currentIndexVersion
 		return document, nil
 	}
 
@@ -2251,6 +2262,7 @@ func reindexDocumentWithConfig(ctx context.Context, s *AppService, cfg model.App
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexVersion = currentIndexVersion
 	return document, nil
 }
 
@@ -2433,6 +2445,30 @@ func (s *AppService) EvaluateRetrieveWithContext(ctx context.Context, req model.
 		return nil, nil
 	}
 
+	structuredStartedAt := time.Now()
+	if chunks, ok, err := s.retrieveStructuredDataChunks(req); err != nil {
+		logRetrievalStageMetrics(req, query, "structured_retrieve", structuredStartedAt, map[string]any{
+			"status":   "error",
+			"error":    err.Error(),
+			"fallback": true,
+		})
+	} else if ok {
+		logRetrievalStageMetrics(req, query, "structured_retrieve", structuredStartedAt, map[string]any{
+			"status":          "ok",
+			"selected_chunks": len(chunks),
+		})
+		return chunks, nil
+	}
+
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		logRetrievalStageMetrics(req, query, "evaluate_retrieve_total", startedAt, map[string]any{
+			"status":          "skipped",
+			"selected_chunks": 0,
+			"reason":          "qdrant_disabled",
+		})
+		return nil, nil
+	}
+
 	var queryVector []float64
 	embeddingStartedAt := time.Now()
 	if !s.queryRewriteEnabledForRequest(req) {
@@ -2505,9 +2541,23 @@ func (s *AppService) DebugRetrieveWithContext(ctx context.Context, req model.Ret
 	var verboseDetails *model.RetrievalDebugVerboseDetails
 	var chunks []RetrievedChunk
 	var queryVariants []string
+	structuredUsed := false
+	var structuredErr error
 	var err error
 
-	if req.Verbose {
+	if structuredChunks, ok, retrieveErr := s.retrieveStructuredDataChunks(chatReq); retrieveErr != nil {
+		structuredErr = retrieveErr
+	} else if ok {
+		chunks = structuredChunks
+		structuredUsed = true
+		if req.Verbose {
+			verboseDetails = &model.RetrievalDebugVerboseDetails{
+				CandidatesCount:  len(chunks),
+				AfterRerankCount: len(chunks),
+				AfterMMRCount:    len(chunks),
+			}
+		}
+	} else if req.Verbose {
 		chunks, verboseDetails, queryVariants, err = s.debugRetrieveVerboseWithContext(ctx, chatReq, query)
 	} else {
 		chunks, err = s.EvaluateRetrieveWithContext(ctx, chatReq)
@@ -2516,18 +2566,47 @@ func (s *AppService) DebugRetrieveWithContext(ctx context.Context, req model.Ret
 		return model.RetrievalDebugResponse{}, err
 	}
 
-	trace := []model.RetrievalDebugTraceStep{{
+	trace := make([]model.RetrievalDebugTraceStep, 0, 6)
+	if structuredUsed {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:       "structured_retrieve",
+			Status:      "ok",
+			Reason:      fmt.Sprintf("结构化确定性查询直接返回 %d 个证据片段，无需向量召回", len(chunks)),
+			OutputCount: len(chunks),
+		})
+	} else if structuredErr != nil {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "structured_retrieve",
+			Status: "error",
+			Reason: "结构化解析失败，已回落常规检索",
+		})
+	}
+	trace = append(trace, model.RetrievalDebugTraceStep{
 		Stage:       "retrieve",
 		Status:      "ok",
 		Reason:      "基础检索、重排、MMR 和相关性过滤后的候选",
 		OutputCount: len(chunks),
-	}}
-	trace = append(trace, model.RetrievalDebugTraceStep{
-		Stage:  "rerank",
-		Status: "ok",
-		Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategyForRequest(chatReq)),
 	})
-	if s.queryRewriteEnabledForRequest(chatReq) {
+	if structuredUsed {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "rerank",
+			Status: "skipped",
+			Reason: "确定性结构化结果无需重排",
+		})
+	} else {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "rerank",
+			Status: "ok",
+			Reason: fmt.Sprintf("当前重排策略：%s", s.rerankStrategyForRequest(chatReq)),
+		})
+	}
+	if structuredUsed {
+		trace = append(trace, model.RetrievalDebugTraceStep{
+			Stage:  "query_rewrite",
+			Status: "skipped",
+			Reason: "确定性结构化查询已直接处理原始问题",
+		})
+	} else if s.queryRewriteEnabledForRequest(chatReq) {
 		trace = append(trace, model.RetrievalDebugTraceStep{
 			Stage:  "query_rewrite",
 			Status: "ok",
@@ -2600,6 +2679,9 @@ func (s *AppService) debugRetrieveVerbose(req model.ChatCompletionRequest, query
 func (s *AppService) debugRetrieveVerboseWithContext(ctx context.Context, req model.ChatCompletionRequest, query string) ([]RetrievedChunk, *model.RetrievalDebugVerboseDetails, []string, error) {
 	verboseDetails := &model.RetrievalDebugVerboseDetails{}
 	ctx = normalizeServiceContext(ctx)
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return nil, verboseDetails, nil, nil
+	}
 
 	knowledgeBaseIDs, err := s.resolveRetrievalKnowledgeBaseIDs(req)
 	if err != nil {
@@ -4060,6 +4142,9 @@ func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDoc
 	if strings.TrimSpace(document.IndexedAt) == "" {
 		return true
 	}
+	if document.IndexVersion != currentIndexVersion {
+		return true
+	}
 	return false
 }
 
@@ -4077,6 +4162,8 @@ func documentHealthRecommendation(document model.Document, health model.Knowledg
 		return "未生成 chunk，建议重建索引或检查文件内容。"
 	case health.SummaryChunkCount == 0 && health.StructuredRowCount > 0:
 		return "结构化行已识别但摘要块缺失，建议重建索引。"
+	case document.IndexVersion != currentIndexVersion:
+		return "索引规则已更新，建议重建索引以启用最新检索能力。"
 	default:
 		return ""
 	}
@@ -4522,7 +4609,8 @@ func relevantChunkExcerpt(query, text string, limit int) string {
 	return string(runes[start:end])
 }
 
-func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.ChatCompletionRequest, queryVector []float64, candidateTopK int, useHybrid bool, query string) ([]RetrievedChunk, error) {
+func (s *AppService) collectCandidates(ctx context.Context, knowledgeBaseIDs []string, req model.ChatCompletionRequest, queryVector []float64, candidateTopK int, useHybrid bool, query string) ([]RetrievedChunk, error) {
+	ctx = normalizeServiceContext(ctx)
 	startedAt := time.Now()
 	results := make([]RetrievedChunk, 0)
 	seenChunkIDs := make(map[string]struct{})
@@ -4566,7 +4654,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 		if useHybrid {
 			log.Printf("hybrid search enabled for knowledge base %s", knowledgeBaseID)
 			sparseVector := BuildSparseVector(query)
-			searchResults, err := s.rag.SearchHybrid(context.Background(), s.qdrant, knowledgeBaseID, queryVector, sparseVector, candidateTopK, filter)
+			searchResults, err := s.rag.SearchHybrid(ctx, s.qdrant, knowledgeBaseID, queryVector, sparseVector, candidateTopK, filter)
 			if err != nil {
 				logRetrievalStageMetrics(req, query, "collect_candidates_kb", kbStartedAt, map[string]any{
 					"status":         "error",
@@ -4579,7 +4667,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 			}
 			items = searchResults
 		} else {
-			searchResults, err := s.qdrant.Search(context.Background(), knowledgeBaseID, queryVector, candidateTopK, filter)
+			searchResults, err := s.qdrant.Search(ctx, knowledgeBaseID, queryVector, candidateTopK, filter)
 			if err != nil {
 				logRetrievalStageMetrics(req, query, "collect_candidates_kb", kbStartedAt, map[string]any{
 					"status":         "error",
@@ -4683,7 +4771,7 @@ func (s *AppService) collectCandidatesForQueries(ctx context.Context, knowledgeB
 			vector = vectors[0]
 		}
 
-		candidates, err := s.collectCandidates(knowledgeBaseIDs, req, vector, candidateTopK, useHybrid, searchQuery)
+		candidates, err := s.collectCandidates(ctx, knowledgeBaseIDs, req, vector, candidateTopK, useHybrid, searchQuery)
 		if err != nil {
 			if index == 0 {
 				return nil, err
@@ -4785,8 +4873,12 @@ func (s *AppService) findDocumentByFilename(knowledgeBaseID string, filename str
 		}
 	}
 
-	// 最后尝试扩展名匹配：如果知识库中只有一个该扩展名的文档，返回它
-	// 这处理了临时文件名（如 1780210994576679459____1.xlsx）被重命名为实际文件名（如 工作簿1.xlsx）的情况
+	if !shouldAllowFilenameExtensionFallback(cleanFilename) {
+		return ""
+	}
+
+	// 最后尝试扩展名匹配：如果知识库中只有一个该扩展名的文档，返回它。
+	// 只允许明显的临时上传文件名走该兜底，避免 users.csv 误命中唯一的其它 csv 文档。
 	ext := filepath.Ext(cleanFilename)
 	if ext != "" {
 		var matchedDocs []model.Document
@@ -4802,6 +4894,20 @@ func (s *AppService) findDocumentByFilename(knowledgeBaseID string, filename str
 	}
 
 	return ""
+}
+
+func shouldAllowFilenameExtensionFallback(filename string) bool {
+	base := strings.TrimSuffix(filepath.Base(strings.TrimSpace(filename)), filepath.Ext(filename))
+	if strings.Contains(base, "____") {
+		return true
+	}
+	digits := 0
+	for _, r := range base {
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+	return digits >= 12 && digits*2 >= len([]rune(base))
 }
 
 func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string, req model.ChatCompletionRequest) []RetrievedChunk {
@@ -5104,7 +5210,9 @@ func buildRetrievalDebugMatchReasons(query string, chunk RetrievedChunk) []strin
 		reasons = append(reasons, "关键词覆盖较好")
 	}
 
-	if chunk.Kind == "structured_summary" || chunk.Kind == "structured_row" {
+	if chunk.Kind == "structured_query" {
+		reasons = append(reasons, "结构化确定性结果")
+	} else if chunk.Kind == "structured_summary" || chunk.Kind == "structured_row" {
 		reasons = append(reasons, "结构化数据片段")
 	}
 	if len(reasons) == 0 {

@@ -25,6 +25,7 @@ const (
 	defaultChunkOverlap = 120
 	defaultTopK         = 5
 	embeddingBatchSize  = 32
+	currentIndexVersion = 2
 )
 
 type RagService struct {
@@ -849,27 +850,47 @@ func splitSparseTokens(text string) []string {
 
 	var tokens []string
 	var current []rune
-	flush := func() {
+	var cjkRun []rune
+	flushWord := func() {
 		if len(current) == 0 {
 			return
 		}
 		tokens = append(tokens, strings.ToLower(string(current)))
 		current = current[:0]
 	}
+	flushCJK := func() {
+		if len(cjkRun) == 0 {
+			return
+		}
+
+		// 保留单字 token 以兼容历史稀疏索引，同时补充短语级 token，
+		// 让实体、字段名和连续中文短语获得更强的词法信号。
+		for _, r := range cjkRun {
+			tokens = append(tokens, string(r))
+		}
+		for size := 2; size <= 3; size++ {
+			for start := 0; start+size <= len(cjkRun); start++ {
+				tokens = append(tokens, string(cjkRun[start:start+size]))
+			}
+		}
+		cjkRun = cjkRun[:0]
+	}
 
 	for _, r := range text {
 		if isCJK(r) {
-			flush()
-			tokens = append(tokens, string(r))
+			flushWord()
+			cjkRun = append(cjkRun, r)
 			continue
 		}
+		flushCJK()
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' {
 			current = append(current, r)
 			continue
 		}
-		flush()
+		flushWord()
 	}
-	flush()
+	flushCJK()
+	flushWord()
 
 	return tokens
 }

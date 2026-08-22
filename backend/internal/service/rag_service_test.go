@@ -259,6 +259,30 @@ func TestBuildSparseVector(t *testing.T) {
 	}
 }
 
+func TestSplitSparseTokensAddsChineseNgramsWithoutCrossingBoundaries(t *testing.T) {
+	tokens := splitSparseTokens("某某学校的建校时间，位于杭州")
+	set := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		set[token] = struct{}{}
+	}
+
+	for _, token := range []string{
+		"某", "学", "校", "建", "时", "间",
+		"某某", "学校", "建校", "时间", "杭州",
+		"某某学", "某学校", "建校时", "校时间",
+	} {
+		if _, ok := set[token]; !ok {
+			t.Errorf("expected sparse token %q, got %v", token, tokens)
+		}
+	}
+
+	for _, token := range []string{"校，", "，位", "学校位", "时间位"} {
+		if _, ok := set[token]; ok {
+			t.Errorf("did not expect sparse token crossing punctuation boundary %q", token)
+		}
+	}
+}
+
 func TestRRFFusion(t *testing.T) {
 	dense := []SearchResult{
 		{ID: "a", Score: 0.9},

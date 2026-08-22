@@ -332,6 +332,7 @@ func TestCollectCandidatesPreservesQdrantScoreAndChannels(t *testing.T) {
 		state:  &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{}},
 	}
 	candidates, err := service.collectCandidates(
+		t.Context(),
 		[]string{"kb-1"},
 		model.ChatCompletionRequest{},
 		[]float64{0.1, 0.2},
@@ -350,6 +351,46 @@ func TestCollectCandidatesPreservesQdrantScoreAndChannels(t *testing.T) {
 	}
 	if len(candidates[0].RetrievalChannels) != 1 || candidates[0].RetrievalChannels[0] != "dense" {
 		t.Fatalf("expected only the Qdrant retrieval channel, got %#v", candidates[0].RetrievalChannels)
+	}
+}
+
+func TestCollectCandidatesPropagatesContextCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+	}))
+	t.Cleanup(server.Close)
+	defer close(releaseRequest)
+
+	service := &AppService{
+		qdrant: NewQdrantService(model.ServerConfig{QdrantURL: server.URL, QdrantVectorSize: 2}),
+		state:  &model.AppState{KnowledgeBases: map[string]model.KnowledgeBase{}},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := service.collectCandidates(ctx, []string{"kb-1"}, model.ChatCompletionRequest{}, []float64{0.1, 0.2}, 5, false, "原始问题")
+		errCh <- err
+	}()
+
+	select {
+	case <-requestStarted:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Qdrant request")
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "context canceled") {
+			t.Fatalf("expected context cancellation error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("collectCandidates did not stop after context cancellation")
 	}
 }
 
@@ -574,6 +615,7 @@ func TestGetKnowledgeBaseHealthReportsStructuredMetrics(t *testing.T) {
 						Path:            csvPath,
 						Status:          "indexed",
 						IndexedAt:       indexedAt,
+						IndexVersion:    currentIndexVersion,
 					}},
 				},
 			},
@@ -608,6 +650,45 @@ func TestGetKnowledgeBaseHealthReportsStructuredMetrics(t *testing.T) {
 	}
 	if len(health.Documents) != 1 || health.Documents[0].NeedsReindex {
 		t.Fatalf("unexpected document health: %#v", health.Documents)
+	}
+}
+
+func TestDocumentHealthRequiresReindexAfterIndexRuleChange(t *testing.T) {
+	document := model.Document{
+		Status:       "indexed",
+		IndexedAt:    "2026-08-22T00:00:00Z",
+		IndexVersion: currentIndexVersion - 1,
+	}
+	health := model.KnowledgeBaseDocumentHealth{
+		ChunkCount:          2,
+		RawContentAvailable: true,
+	}
+
+	if !documentNeedsReindex(document, health) {
+		t.Fatal("expected a document from an older index version to require reindex")
+	}
+	if recommendation := documentHealthRecommendation(document, health); !strings.Contains(recommendation, "索引规则已更新") {
+		t.Fatalf("expected index version recommendation, got %q", recommendation)
+	}
+}
+
+func TestReindexKnowledgeBasePreflightsMissingSources(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing.pdf")
+	service := &AppService{
+		state: &model.AppState{
+			KnowledgeBases: map[string]model.KnowledgeBase{
+				"kb-1": {
+					ID: "kb-1",
+					Documents: []model.Document{
+						{ID: "doc-missing", Path: missingPath},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := service.ReindexKnowledgeBase("kb-1"); err == nil || !strings.Contains(err.Error(), "source file unavailable") {
+		t.Fatalf("expected missing source preflight error, got %v", err)
 	}
 }
 
@@ -720,6 +801,12 @@ func TestFindDocumentByFilename(t *testing.T) {
 			name:       "不存在的文件",
 			kbID:       "kb-1",
 			filename:   "nonexistent.csv",
+			expectedID: "",
+		},
+		{
+			name:       "普通文件名不走扩展名兜底",
+			kbID:       "kb-1",
+			filename:   "orders.xlsx",
 			expectedID: "",
 		},
 		{

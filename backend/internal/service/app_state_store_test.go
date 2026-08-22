@@ -36,9 +36,10 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 				Name:      "示例知识库",
 				CreatedAt: "2026-03-12T00:00:00Z",
 				Documents: []model.Document{{
-					ID:   "doc-1",
-					Name: "demo.md",
-					Path: "/srv/ai-localbase/uploads/doc-1_demo.md",
+					ID:           "doc-1",
+					Name:         "demo.md",
+					Path:         "/srv/ai-localbase/uploads/doc-1_demo.md",
+					IndexVersion: currentIndexVersion,
 				}},
 			},
 		},
@@ -81,6 +82,9 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	}
 	if got := loaded.KnowledgeBases["kb-1"].Documents[0].Path; got != "/srv/ai-localbase/uploads/doc-1_demo.md" {
 		t.Fatalf("expected persisted document path, got %q", got)
+	}
+	if got := loaded.KnowledgeBases["kb-1"].Documents[0].IndexVersion; got != currentIndexVersion {
+		t.Fatalf("expected persisted index version %d, got %d", currentIndexVersion, got)
 	}
 	publicJSON, err := json.Marshal(loaded.KnowledgeBases["kb-1"].Documents[0])
 	if err != nil {

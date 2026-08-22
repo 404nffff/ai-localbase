@@ -47,6 +47,7 @@ type persistedDocument struct {
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
 	IndexError      string `json:"indexError,omitempty"`
+	IndexVersion    int    `json:"indexVersion,omitempty"`
 }
 
 func (s persistentAppState) MarshalJSON() ([]byte, error) {
@@ -113,6 +114,7 @@ func persistedDocumentFromModel(document model.Document) persistedDocument {
 		ChunkCount:      document.ChunkCount,
 		IndexedAt:       document.IndexedAt,
 		IndexError:      document.IndexError,
+		IndexVersion:    document.IndexVersion,
 	}
 }
 
@@ -130,6 +132,7 @@ func documentToModel(document persistedDocument) model.Document {
 		ChunkCount:      document.ChunkCount,
 		IndexedAt:       document.IndexedAt,
 		IndexError:      document.IndexError,
+		IndexVersion:    document.IndexVersion,
 	}
 }
 

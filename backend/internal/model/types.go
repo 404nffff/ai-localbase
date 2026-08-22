@@ -231,6 +231,7 @@ type Document struct {
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
 	IndexError      string `json:"indexError,omitempty"`
+	IndexVersion    int    `json:"indexVersion,omitempty"`
 }
 
 type DocumentChunkPreview struct {
