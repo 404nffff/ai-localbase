@@ -64,13 +64,14 @@ ai-localbase/
 ├── docs/
 │   ├── architecture.md                  # 本文档
 │   ├── mcp.md                           # MCP 接入说明
-│   ├── getting-started.md               # 快速开始与运行补充说明
-│   └── retrieval-improvement-plan.md    # 检索命中优化方案
+│   └── getting-started.md               # 快速开始与运行补充说明
 ├── docker-compose.yml                   # 完整三服务编排（Qdrant + 后端 + 前端）
 ├── docker-compose.qdrant.yml            # 仅 Qdrant
 ├── docker-compose.app.yml               # 仅应用服务
 └── README.md
 ```
+
+检索优化计划保存在本地工作区 `plans/retrieval-improvement-plan.md`，不纳入 Git 发布。
 
 ## API 设计
 

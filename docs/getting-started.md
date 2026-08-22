@@ -245,6 +245,6 @@ ENABLE_AUTH=true AUTH_PASSWORD=your-secure-password AI_LOCALBASE_IMAGE_TAG=v1.4.
 - [`docs/architecture.md`](./architecture.md)
 - [`docs/backup-restore.md`](./backup-restore.md)
 - [`docs/mcp.md`](./mcp.md)
-- [`docs/retrieval-improvement-plan.md`](./retrieval-improvement-plan.md)
+- 检索优化计划：本地工作区 `plans/retrieval-improvement-plan.md`（不纳入 Git）
 - [`DOCKER_DEPLOY.md`](../DOCKER_DEPLOY.md)
 - [`TROUBLESHOOTING.md`](../TROUBLESHOOTING.md)

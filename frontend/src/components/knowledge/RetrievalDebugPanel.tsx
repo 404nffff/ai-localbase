@@ -38,6 +38,7 @@ const rerankStrategyLabel = (strategy?: string) => (
 const retrievalChannelLabel = (channel: string) => {
   if (channel === 'dense') return '向量'
   if (channel === 'sparse') return '关键词'
+  if (channel === 'structured') return '结构化'
   return channel
 }
 
@@ -50,16 +51,18 @@ const retrievalContributionSummary = (result: RetrievalDebugResponse) => {
       if (hasDense && hasSparse) acc.both += 1
       else if (hasSparse) acc.sparseOnly += 1
       else if (hasDense) acc.denseOnly += 1
+      else if (channels.includes('structured')) acc.structured += 1
       else acc.unknown += 1
       return acc
     },
-    { both: 0, denseOnly: 0, sparseOnly: 0, unknown: 0 },
+    { both: 0, denseOnly: 0, sparseOnly: 0, structured: 0, unknown: 0 },
   )
 
   return [
     `双路命中 ${counts.both}`,
     `向量独有 ${counts.denseOnly}`,
     `关键词独有 ${counts.sparseOnly}`,
+    counts.structured > 0 ? `结构化 ${counts.structured}` : '',
     counts.unknown > 0 ? `未标记 ${counts.unknown}` : '',
   ].filter(Boolean)
 }
