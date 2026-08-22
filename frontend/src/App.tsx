@@ -7,6 +7,7 @@ import SettingsPanel from './components/settings/SettingsPanel'
 import { ToastProvider, useToast } from './components/common/Toast'
 import LoadingBar from './components/common/LoadingBar'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { useKnowledgeWorkspaceState } from './hooks/useKnowledgeWorkspaceState'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_PATH,
@@ -118,14 +119,22 @@ export interface DocumentItem {
   chunkCount?: number
   indexedAt?: string
   indexError?: string
+  indexErrorCode?: string
+  indexRunId?: string
+  indexVersion?: number
+  source?: string
+  version?: number
 }
 
 export interface KnowledgeBase {
   id: string
   name: string
   description: string
+  tags?: string[]
   documents: DocumentItem[]
   createdAt: string
+  updatedAt?: string
+  currentIndexVersion?: number
 }
 
 export interface ChatConfig {
@@ -544,7 +553,18 @@ function AppContent() {
       return window.innerWidth > 768
     })(),
   )
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
+  const {
+    knowledgeBases,
+    setKnowledgeBases,
+    selectedKnowledgeBaseId,
+    setSelectedKnowledgeBaseId,
+    selectedDocumentId,
+    setSelectedDocumentId,
+    collapsedKnowledgeBases,
+    selectedKnowledgeBase,
+    selectedDocument,
+    toggleKnowledgeBaseCollapse,
+  } = useKnowledgeWorkspaceState()
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
   const [backendReady, setBackendReady] = useState(false)
   const [backendWarmupRequired, setBackendWarmupRequired] = useState(true)
@@ -555,10 +575,7 @@ function AppContent() {
     return [initialConversation]
   })
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<string | null>(null)
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceView>('chat')
-  const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<Record<string, boolean>>({})
   const [citationNavigationTarget, setCitationNavigationTarget] =
     useState<CitationNavigationTarget | null>(null)
   const [directoryUploadTask, setDirectoryUploadTask] = useState<DirectoryUploadTask>(
@@ -677,25 +694,6 @@ function AppContent() {
       conversations[0],
     [activeConversationId, conversations],
   )
-
-  const selectedKnowledgeBase = useMemo(() => {
-    if (!selectedKnowledgeBaseId) return null
-    return knowledgeBases.find(
-      (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId,
-    ) ?? null
-  }, [knowledgeBases, selectedKnowledgeBaseId])
-
-  const selectedDocument = useMemo(() => {
-    if (!selectedKnowledgeBase || !selectedDocumentId) {
-      return null
-    }
-
-    return (
-      selectedKnowledgeBase.documents.find(
-        (document) => document.id === selectedDocumentId,
-      ) ?? null
-    )
-  }, [selectedDocumentId, selectedKnowledgeBase])
 
   useEffect(() => {
     if (!authCheckDone || (authRequired && !isAuthenticated)) {
@@ -1085,9 +1083,9 @@ function AppContent() {
     return exportConversation(conversationId, format)
   }
 
-  const handleCreateKnowledgeBase = async (name: string, description: string) => {
+  const handleCreateKnowledgeBase = async (name: string, description: string, tags: string[] = []) => {
     try {
-      const createdKnowledgeBase = await createKnowledgeBase(name, description)
+      const createdKnowledgeBase = await createKnowledgeBase(name, description, tags)
 
       setKnowledgeBases((prev) => [createdKnowledgeBase, ...prev])
       activateConversationScope(createdKnowledgeBase.id, '')
@@ -1447,28 +1445,38 @@ function AppContent() {
       const documentIds = newDocuments.map((doc) => doc.id)
       const maxPolls = 60
       const pollInterval = 2000
+      let pollingCompleted = false
+      let pollingCanceled = false
 
       for (let poll = 0; poll < maxPolls; poll += 1) {
         if (directoryUploadCancelRef.current) {
+          pollingCanceled = true
           break
         }
 
         await sleep(pollInterval)
+
+        if (directoryUploadCancelRef.current) {
+          pollingCanceled = true
+          break
+        }
 
         const statuses = await Promise.all(
           documentIds.map((docId) => getDocumentIndexStatus(knowledgeBaseId, docId)),
         )
 
         const indexedCount = statuses.filter((s) => s.status === 'indexed').length
-        const processingCount = statuses.filter((s) => s.status === 'processing').length
         const failedCount = statuses.filter((s) => s.status === 'failed').length
+        const terminalCount = statuses.filter((s) =>
+          s.status === 'indexed' || s.status === 'ready' || s.status === 'failed',
+        ).length
 
         setDirectoryUploadTask((prev) => ({
           ...prev,
           failedFiles: prev.failedItems.length + failedCount,
           indexedFiles: indexedCount,
           indexFailedFiles: batchIndexFailedCount + failedCount,
-          summaryMessage: `索引中: ${indexedCount}/${documentIds.length} 已完成`,
+          summaryMessage: `索引中: ${terminalCount}/${documentIds.length} 已处理${failedCount > 0 ? `，失败 ${failedCount}` : ''}`,
         }))
 
         setKnowledgeBases((prev) =>
@@ -1484,6 +1492,9 @@ function AppContent() {
                           status: statusUpdate.status,
                           indexedAt: statusUpdate.indexedAt ?? doc.indexedAt,
                           indexError: statusUpdate.indexError ?? doc.indexError,
+                          indexErrorCode: statusUpdate.indexErrorCode ?? doc.indexErrorCode,
+                          indexRunId: statusUpdate.indexRunId ?? doc.indexRunId,
+                          indexVersion: statusUpdate.indexVersion ?? doc.indexVersion,
                         }
                       : doc
                   }),
@@ -1492,20 +1503,28 @@ function AppContent() {
           ),
         )
 
-        if (processingCount === 0) {
+        if (terminalCount === documentIds.length) {
+          pollingCompleted = true
           break
         }
       }
 
+      const pollingStopped = pollingCanceled || directoryUploadCancelRef.current
+      const pollingTimedOut =
+        !pollingCompleted &&
+        !pollingStopped
+
       setDirectoryUploadTask((prev) => {
         const finalStatus =
-          stopAfterCurrentBatch
+          stopAfterCurrentBatch || pollingStopped
             ? 'canceled'
-            : prev.failedFiles > 0 && prev.successFiles === 0
-              ? 'failed'
-              : prev.failedFiles > 0
-                ? 'partial-failed'
-                : 'done'
+            : pollingTimedOut
+              ? 'partial-failed'
+              : prev.failedFiles > 0 && prev.successFiles === 0
+                ? 'failed'
+                : prev.failedFiles > 0
+                  ? 'partial-failed'
+                  : 'done'
 
         const nextTask: DirectoryUploadTask = {
           ...prev,
@@ -1516,7 +1535,9 @@ function AppContent() {
         }
         return {
           ...nextTask,
-          summaryMessage: buildDirectoryUploadSummary(nextTask),
+          summaryMessage: pollingTimedOut
+            ? '索引确认超时，仍有文件未完成，请稍后刷新知识库。'
+            : buildDirectoryUploadSummary(nextTask),
         }
       })
     } catch (error) {
@@ -1627,8 +1648,20 @@ function AppContent() {
     directoryUploadCancelRef.current = true
     setDirectoryUploadTask((prev) => ({
       ...prev,
-      status: prev.status === 'uploading' ? 'canceling' : prev.status,
-      summaryMessage: prev.status === 'uploading' ? '正在取消，当前文件处理完成后停止。' : prev.summaryMessage,
+      status:
+        prev.status === 'scanning' ||
+        prev.status === 'uploading' ||
+        prev.status === 'indexing' ||
+        prev.status === 'polling-index'
+          ? 'canceling'
+          : prev.status,
+      summaryMessage:
+        prev.status === 'scanning' ||
+        prev.status === 'uploading' ||
+        prev.status === 'indexing' ||
+        prev.status === 'polling-index'
+          ? '正在取消，当前文件处理完成后停止。'
+          : prev.summaryMessage,
     }))
   }
 
@@ -2194,10 +2227,7 @@ function AppContent() {
   }
 
   const handleToggleKnowledgeBaseCollapse = (knowledgeBaseId: string) => {
-    setCollapsedKnowledgeBases((current) => ({
-      ...current,
-      [knowledgeBaseId]: !current[knowledgeBaseId],
-    }))
+    toggleKnowledgeBaseCollapse(knowledgeBaseId)
   }
 
   const handleOpenCitationSource = (source: ChatSourceMetadata) => {

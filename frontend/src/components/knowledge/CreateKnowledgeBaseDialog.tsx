@@ -5,8 +5,10 @@ import KnowledgeIcon from './KnowledgeIcon'
 interface CreateKnowledgeBaseDialogProps {
   name: string
   description: string
+  tags: string
   onNameChange: (value: string) => void
   onDescriptionChange: (value: string) => void
+  onTagsChange: (value: string) => void
   onCancel: () => void
   onConfirm: () => void
 }
@@ -14,8 +16,10 @@ interface CreateKnowledgeBaseDialogProps {
 const CreateKnowledgeBaseDialog: React.FC<CreateKnowledgeBaseDialogProps> = ({
   name,
   description,
+  tags,
   onNameChange,
   onDescriptionChange,
+  onTagsChange,
   onCancel,
   onConfirm,
 }) => {
@@ -64,6 +68,20 @@ const CreateKnowledgeBaseDialog: React.FC<CreateKnowledgeBaseDialogProps> = ({
               ref={nameInputRef}
               maxLength={50}
               aria-required="true"
+            />
+          </div>
+          <div className="kb-form-field">
+            <label className="kb-form-label" htmlFor="kb-tags-input">
+              标签（可选）
+            </label>
+            <input
+              id="kb-tags-input"
+              className="kb-form-input"
+              type="text"
+              placeholder="例如：产品、内部、2026（用逗号分隔）"
+              value={tags}
+              onChange={(event) => onTagsChange(event.target.value)}
+              maxLength={200}
             />
           </div>
           <div className="kb-form-field">

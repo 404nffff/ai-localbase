@@ -32,6 +32,14 @@ describe('fixMarkdown', () => {
     expect(output).toMatch(/```\s*$/)
   })
 
+  it('does not rewrite fenced source code while repairing prose', () => {
+    const output = fixMarkdown('说明 fooBar\n\n```ts\nconst fooBar = "aB"\n```')
+
+    expect(output).toContain('const fooBar = "aB"')
+    expect(output).not.toContain('const foo Bar')
+    expect(output).not.toContain('"a B"')
+  })
+
   it('removes chat template tokens and think tags', () => {
     const output = fixMarkdown('<|im_start|>assistant\n<think>hidden</think>\n##答案\n正文<|im_end|>')
 

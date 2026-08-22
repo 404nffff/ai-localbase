@@ -20,6 +20,19 @@ const KnowledgeHealthPanel: React.FC<KnowledgeHealthPanelProps> = ({
 }) => {
   const badge = health ? healthStatusLabel(health.status) : null
   const needsReindexDocuments = health?.documents.filter((item) => item.needsReindex) ?? []
+  const recentIndexRuns = health?.indexHistory?.slice(0, 5) ?? []
+
+  const indexErrorLabel = (code?: string) => {
+    switch (code) {
+      case 'source_missing': return '原文缺失'
+      case 'source_changed': return '原文已变化'
+      case 'source_unreadable': return '原文不可读'
+      case 'vector_dimension_mismatch': return '向量维度不一致'
+      case 'index_rule_outdated': return '索引规则过期'
+      case 'index_failed': return '索引失败'
+      default: return code || '未分类'
+    }
+  }
 
   return (
     <section className="kb-health-panel">
@@ -59,6 +72,7 @@ const KnowledgeHealthPanel: React.FC<KnowledgeHealthPanelProps> = ({
                   ? `${needsReindexDocuments.length} 份文档需要处理`
                   : '所有文档索引状态正常'}
               </p>
+              <small className="kb-health-version">索引版本 v{health.currentIndexVersion || 1}</small>
             </div>
           </div>
 
@@ -93,7 +107,10 @@ const KnowledgeHealthPanel: React.FC<KnowledgeHealthPanelProps> = ({
                   <div className="kb-health-doc-item" key={item.documentId}>
                     <div>
                       <strong>{item.documentName}</strong>
-                      <span>{item.recommendation || '建议检查索引状态'}</span>
+                      <span>
+                        {item.recommendation || '建议检查索引状态'}
+                        {item.indexVersion ? ` · 当前索引 v${item.indexVersion}` : ''}
+                      </span>
                     </div>
                     <button
                       disabled={reindexingDocumentId === item.documentId}
@@ -103,6 +120,34 @@ const KnowledgeHealthPanel: React.FC<KnowledgeHealthPanelProps> = ({
                       <AppIcon className={reindexingDocumentId === item.documentId ? 'spin' : undefined} name="refresh" size={15} />
                       {reindexingDocumentId === item.documentId ? '重建中' : '重新索引'}
                     </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {recentIndexRuns.length > 0 && (
+            <div className="kb-health-history">
+              <div className="kb-health-history-head">
+                <h4>最近索引记录</h4>
+                <span>显示最近 {recentIndexRuns.length} 次</span>
+              </div>
+              <div className="kb-health-history-list">
+                {recentIndexRuns.map((run) => (
+                  <div className="kb-health-history-item" key={run.id}>
+                    <div>
+                      <strong>{run.documentName || '知识库批量任务'}</strong>
+                      <span>
+                        {run.status === 'succeeded' ? '成功' : '失败'} · {run.trigger} · v{run.indexVersion}
+                      </span>
+                    </div>
+                    {run.status === 'succeeded' ? (
+                      <span className="kb-health-history-status is-success">已完成</span>
+                    ) : (
+                      <span className="kb-health-history-status is-error" title={run.error || undefined}>
+                        {indexErrorLabel(run.errorCode)}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

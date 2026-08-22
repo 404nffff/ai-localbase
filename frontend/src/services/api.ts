@@ -94,14 +94,22 @@ export interface BackendDocumentItem {
   chunkCount?: number
   indexedAt?: string
   indexError?: string
+  indexErrorCode?: string
+  indexRunId?: string
+  indexVersion?: number
+  source?: string
+  version?: number
 }
 
 export interface BackendKnowledgeBase {
   id: string
   name: string
   description: string
+  tags?: string[]
   documents: BackendDocumentItem[]
   createdAt: string
+  updatedAt?: string
+  currentIndexVersion?: number
 }
 
 export interface KnowledgeBaseListResponse {
@@ -224,6 +232,8 @@ export interface KnowledgeBaseDocumentHealth {
   status: string
   indexedAt?: string
   indexError?: string
+  indexErrorCode?: string
+  indexVersion?: number
   chunkCount: number
   vectorCount: number
   summaryChunkCount: number
@@ -234,14 +244,37 @@ export interface KnowledgeBaseDocumentHealth {
   recommendation?: string
 }
 
+export interface IndexRunRecord {
+  id: string
+  knowledgeBaseId: string
+  documentId?: string
+  documentName?: string
+  trigger: string
+  status: string
+  indexVersion: number
+  chunkCount?: number
+  errorCode?: string
+  error?: string
+  startedAt: string
+  completedAt?: string
+}
+
 export interface KnowledgeBaseHealthResponse {
   knowledgeBaseId: string
   name: string
   status: 'healthy' | 'warning' | 'attention' | 'empty'
   score: number
+  currentIndexVersion: number
   metrics: KnowledgeBaseHealthMetrics
   recommendations: string[]
   documents: KnowledgeBaseDocumentHealth[]
+  indexHistory?: IndexRunRecord[]
+}
+
+export interface KnowledgeBaseIndexHistoryResponse {
+  knowledgeBaseId: string
+  currentIndexVersion: number
+  items: IndexRunRecord[]
 }
 
 export interface ReindexDocumentResponse {
@@ -451,14 +484,22 @@ export const normalizeDocument = (document: BackendDocumentItem): DocumentItem =
   chunkCount: document.chunkCount,
   indexedAt: document.indexedAt,
   indexError: document.indexError,
+  indexErrorCode: document.indexErrorCode,
+  indexRunId: document.indexRunId,
+  indexVersion: document.indexVersion,
+  source: document.source,
+  version: document.version,
 })
 
 export const normalizeKnowledgeBase = (knowledgeBase: BackendKnowledgeBase): KnowledgeBase => ({
   id: knowledgeBase.id,
   name: knowledgeBase.name,
   description: knowledgeBase.description,
+  tags: knowledgeBase.tags ?? [],
   documents: (knowledgeBase.documents ?? []).map(normalizeDocument),
   createdAt: knowledgeBase.createdAt,
+  updatedAt: knowledgeBase.updatedAt,
+  currentIndexVersion: knowledgeBase.currentIndexVersion,
 })
 
 const isLegacyOperationalAssistantMessage = (
@@ -824,11 +865,12 @@ export const deleteConversation = async (conversationId: string): Promise<void> 
 export const createKnowledgeBase = async (
   name: string,
   description: string,
+  tags: string[] = [],
 ): Promise<KnowledgeBase> => (
   normalizeKnowledgeBase(
     await requestJson<BackendKnowledgeBase>(
       '/api/knowledge-bases',
-      jsonRequest({ name, description }, { method: 'POST' }),
+      jsonRequest({ name, description, tags }, { method: 'POST' }),
     ),
   )
 )
@@ -880,6 +922,12 @@ export const fetchKnowledgeBaseHealth = async (
   knowledgeBaseId: string,
 ): Promise<KnowledgeBaseHealthResponse> => (
   requestJson<KnowledgeBaseHealthResponse>(`/api/knowledge-bases/${knowledgeBaseId}/health`)
+)
+
+export const fetchKnowledgeBaseIndexHistory = async (
+  knowledgeBaseId: string,
+): Promise<KnowledgeBaseIndexHistoryResponse> => (
+  requestJson<KnowledgeBaseIndexHistoryResponse>(`/api/knowledge-bases/${knowledgeBaseId}/index-history`)
 )
 
 export const reindexKnowledgeBaseDocument = async (
@@ -1003,6 +1051,7 @@ export interface BatchIndexResult {
   documentId?: string
   fileName: string
   success: boolean
+  errorCode?: string
   error?: string
   document?: BackendDocumentItem
 }
@@ -1034,6 +1083,10 @@ export interface DocumentIndexStatusResponse {
   documentId: string
   status: 'indexed' | 'ready' | 'processing' | 'failed'
   indexedAt?: string
+  chunkCount?: number
+  indexErrorCode?: string
+  indexRunId?: string
+  indexVersion?: number
   indexError?: string
 }
 

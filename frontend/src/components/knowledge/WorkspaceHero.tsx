@@ -79,6 +79,13 @@ const WorkspaceHero: React.FC<WorkspaceHeroProps> = ({
             )}
           </div>
           <p>{knowledgeBase.description || '未填写描述'}</p>
+          {(knowledgeBase.tags?.length ?? 0) > 0 && (
+            <div className="kb-workspace-tags" aria-label="知识库标签">
+              {knowledgeBase.tags?.map((tag) => (
+                <span className="kb-workspace-tag" key={tag}>{tag}</span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="kb-workspace-metrics" aria-label="知识库索引概览">
           {overviewMetrics.map((item) => (

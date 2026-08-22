@@ -4095,6 +4095,30 @@ body,
   font-size: 11px;
 }
 
+.knowledge-workspace-page .kb-health-version {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.knowledge-workspace-page .kb-workspace-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.knowledge-workspace-page .kb-workspace-tag {
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
 .knowledge-workspace-page .kb-health-stats {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   margin: 18px;
@@ -4157,6 +4181,81 @@ body,
   background: var(--surface-primary);
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.knowledge-workspace-page .kb-health-history {
+  display: grid;
+  gap: 8px;
+  margin: 22px 18px;
+}
+
+.knowledge-workspace-page .kb-health-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.knowledge-workspace-page .kb-health-history-head h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.knowledge-workspace-page .kb-health-history-head span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.knowledge-workspace-page .kb-health-history-list {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-color);
+}
+
+.knowledge-workspace-page .kb-health-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.knowledge-workspace-page .kb-health-history-item > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.knowledge-workspace-page .kb-health-history-item strong,
+.knowledge-workspace-page .kb-health-history-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-workspace-page .kb-health-history-item span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.knowledge-workspace-page .kb-health-history-status {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+.knowledge-workspace-page .kb-health-history-status.is-success {
+  color: var(--color-success);
+  background: var(--color-success-light);
+}
+
+.knowledge-workspace-page .kb-health-history-status.is-error {
+  color: var(--color-error);
+  background: var(--color-error-light);
 }
 
 /* Evaluation trends */

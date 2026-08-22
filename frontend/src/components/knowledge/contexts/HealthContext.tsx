@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import type {
   KnowledgeBaseHealthResponse,
   RetrievalDebugResponse,
@@ -66,6 +66,7 @@ export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
   >({})
   const [healthLoadingId, setHealthLoadingId] = useState<string | null>(null)
   const [healthError, setHealthError] = useState('')
+  const healthRequestIdRef = useRef(0)
 
   // Retrieval Debug
   const [retrievalQuery, setRetrievalQuery] = useState('')
@@ -77,20 +78,31 @@ export const HealthProvider: React.FC<HealthProviderProps> = ({ children }) => {
 
   // Fetch Health
   const fetchHealth = useCallback(async (knowledgeBaseId: string) => {
+    const requestId = healthRequestIdRef.current + 1
+    healthRequestIdRef.current = requestId
     setHealthLoadingId(knowledgeBaseId)
     setHealthError('')
 
     try {
       const health = await fetchKnowledgeBaseHealth(knowledgeBaseId)
 
+      if (requestId !== healthRequestIdRef.current) {
+        return
+      }
+
       setHealthByKnowledgeBase(prev => ({
         ...prev,
         [knowledgeBaseId]: health,
       }))
     } catch (err) {
+      if (requestId !== healthRequestIdRef.current) {
+        return
+      }
       setHealthError(await getErrorMessage(err, '加载知识库健康度失败'))
     } finally {
-      setHealthLoadingId(null)
+      if (requestId === healthRequestIdRef.current) {
+        setHealthLoadingId(null)
+      }
     }
   }, [])
 

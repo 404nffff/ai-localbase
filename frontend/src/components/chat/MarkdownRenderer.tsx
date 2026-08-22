@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import MarkdownMermaid from './MarkdownMermaid'
 
 /**
  * 修复 LLM 输出的 Markdown 格式问题：
@@ -922,6 +923,25 @@ function normalizeMermaidSection(content: string): string {
   return normalized.join('\n')
 }
 
+interface ProtectedMarkdownCodeBlocks {
+  content: string
+  restore: (content: string) => string
+}
+
+function protectFencedCodeBlocks(content: string): ProtectedMarkdownCodeBlocks {
+  const blocks: string[] = []
+  const fencedBlockPattern = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$))/g
+  const protectedContent = content.replace(fencedBlockPattern, (block) => {
+    const index = blocks.push(block) - 1
+    return `__AI_LOCALBASE_CODE_BLOCK_${index}__`
+  })
+
+  return {
+    content: protectedContent,
+    restore: (value: string) => value.replace(/__AI_LOCALBASE_CODE_BLOCK_(\d+)__/g, (_, index: string) => blocks[Number(index)] ?? ''),
+  }
+}
+
 function normalizeSummarySections(content: string): string {
   let normalized = content
 
@@ -1727,6 +1747,12 @@ const AdviceCardBlock: React.FC<{ content: string }> = ({ content }) => {
 export function fixMarkdown(content: string): string {
   let fixed = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 
+  // Mermaid needs its own compact-output repair, while all other fenced code
+  // blocks must remain opaque to prose-oriented normalization rules.
+  fixed = normalizeMermaidSection(fixed)
+  const protectedCodeBlocks = protectFencedCodeBlocks(fixed)
+  fixed = protectedCodeBlocks.content
+
   fixed = fixed.replace(/<br\s*\/?>/gi, '\n')
   fixed = fixed.replace(/<\|im_start\|>.*?(?=\n|$)/g, '')
   fixed = fixed.replace(/<\|im_end\|>/g, '')
@@ -1812,102 +1838,8 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed.replace(/([：:])\s*[-*]\s+/g, '$1 ')
   fixed = fixed.replace(/\n{3,}/g, '\n\n')
   fixed = fixed.replace(/[ \t]+\n/g, '\n')
-  return fixed.trim()
+  return protectedCodeBlocks.restore(fixed).trim()
 }
-
-interface MermaidDiagramProps {
-  chart: string
-}
-
-const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
-  const [svg, setSvg] = useState<string>('')
-  const [error, setError] = useState<string>('')
-  const [isLoading, setIsLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    setSvg('')
-    setError('')
-    setIsLoading(true)
-
-    const renderChart = async () => {
-      try {
-        const { default: mermaid } = await import('mermaid')
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: 'default',
-        })
-        const id = `mermaid-${Math.random().toString(36).slice(2, 10)}`
-        const { svg: renderedSvg } = await mermaid.render(id, chart)
-
-        const hasSvgContent = Boolean(renderedSvg && renderedSvg.includes('<svg'))
-        const hasSyntaxError = /Syntax error in text|Parse error|Lexical error/i.test(renderedSvg)
-        const hasUnsafeSvg = /<script|on[a-z]+\s*=|javascript:/i.test(renderedSvg)
-        if (!hasSvgContent || hasSyntaxError || hasUnsafeSvg) {
-          throw new Error('invalid mermaid svg')
-        }
-
-        if (!cancelled) {
-          setSvg(renderedSvg)
-          setError('')
-          setIsLoading(false)
-        }
-      } catch {
-        if (!cancelled) {
-          setSvg('')
-          setError('流程图渲染失败，已降级显示源码')
-          setIsLoading(false)
-        }
-      }
-    }
-
-    void renderChart()
-
-    const timeout = window.setTimeout(() => {
-      if (!cancelled) {
-        setSvg('')
-        setError('流程图渲染超时，已降级显示源码')
-        setIsLoading(false)
-      }
-    }, 2500)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timeout)
-    }
-  }, [chart])
-
-  if (error) {
-    return (
-      <div className="md-mermaid-fallback">
-        <div className="md-mermaid-error">{error}</div>
-        <pre className="md-code-block">
-          <code>{chart}</code>
-        </pre>
-      </div>
-    )
-  }
-
-  if (isLoading) {
-    return <div className="md-mermaid-loading">流程图渲染中...</div>
-  }
-
-  if (!svg) {
-    return (
-      <div className="md-mermaid-fallback">
-        <div className="md-mermaid-error">流程图无有效输出，已降级显示源码</div>
-        <pre className="md-code-block">
-          <code>{chart}</code>
-        </pre>
-      </div>
-    )
-  }
-
-  return <div className="md-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
-}
-
-
 
 interface MarkdownRendererProps {
   content: string
@@ -1922,7 +1854,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
         const codeContent = String(children).replace(/\n$/, '')
 
         if (!isInline && className?.includes('language-mermaid')) {
-          return <MermaidDiagram chart={codeContent} />
+          return <MarkdownMermaid chart={codeContent} />
         }
 
         if (!isInline && className?.includes('language-advice-cards')) {

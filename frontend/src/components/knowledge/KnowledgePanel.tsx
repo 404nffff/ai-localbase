@@ -38,7 +38,7 @@ interface KnowledgePanelProps {
   selectedDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
-  onCreateKnowledgeBase: (name: string, description: string) => void
+  onCreateKnowledgeBase: (name: string, description: string, tags?: string[]) => void
   onDeleteKnowledgeBase: (knowledgeBaseId: string) => void
   onUploadFiles: (knowledgeBaseId: string, files: FileList | null) => void
   onUploadDirectory: (knowledgeBaseId: string, files: FileList | null) => void
@@ -123,6 +123,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
+  const [newTags, setNewTags] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [showUploadTaskDetails, setShowUploadTaskDetails] = useState(false)
   const [showFailedItems, setShowFailedItems] = useState(false)
@@ -312,16 +313,22 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const handleOpenCreate = () => {
     setNewName('')
     setNewDescription('')
+    setNewTags('')
     setShowCreateModal(true)
   }
 
   const handleConfirmCreate = () => {
     const trimmedName = newName.trim()
     if (!trimmedName) return
-    onCreateKnowledgeBase(trimmedName, newDescription.trim())
+    const tags = newTags
+      .split(/[,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+    onCreateKnowledgeBase(trimmedName, newDescription.trim(), tags)
     setShowCreateModal(false)
     setNewName('')
     setNewDescription('')
+    setNewTags('')
   }
 
   const selectedScopeLabel =
@@ -338,6 +345,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const canCancelUpload =
     directoryUploadTask.status === 'scanning' ||
     directoryUploadTask.status === 'uploading' ||
+    directoryUploadTask.status === 'indexing' ||
+    directoryUploadTask.status === 'polling-index' ||
     directoryUploadTask.status === 'canceling'
   const canContinueUpload =
     (
@@ -349,6 +358,8 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const isTaskActive =
     directoryUploadTask.status === 'scanning' ||
     directoryUploadTask.status === 'uploading' ||
+    directoryUploadTask.status === 'indexing' ||
+    directoryUploadTask.status === 'polling-index' ||
     directoryUploadTask.status === 'canceling'
 
   useEffect(() => {
@@ -505,12 +516,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         <CreateKnowledgeBaseDialog
           name={newName}
           description={newDescription}
+          tags={newTags}
           onNameChange={setNewName}
           onDescriptionChange={setNewDescription}
+          onTagsChange={setNewTags}
           onCancel={() => {
             setShowCreateModal(false)
             setNewName('')
             setNewDescription('')
+            setNewTags('')
           }}
           onConfirm={handleConfirmCreate}
         />

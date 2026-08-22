@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { extractErrorMessage, normalizeConversation, serializeConversation } from './api'
-import type { BackendConversation } from './api'
+import {
+  extractErrorMessage,
+  normalizeConversation,
+  normalizeKnowledgeBase,
+  serializeConversation,
+} from './api'
+import type { BackendConversation, BackendKnowledgeBase } from './api'
 
 describe('normalizeConversation', () => {
   it('filters only legacy operational assistant messages', () => {
@@ -121,5 +126,27 @@ describe('extractErrorMessage', () => {
     await expect(extractErrorMessage(response)).resolves.toBe(
       'uploaded file is too large, max size is 25.0 MiB',
     )
+  })
+})
+
+describe('normalizeKnowledgeBase', () => {
+  it('keeps governance metadata while tolerating legacy payloads', () => {
+    const backendKnowledgeBase: BackendKnowledgeBase = {
+      id: 'kb-1',
+      name: '产品文档',
+      description: '内部资料',
+      tags: ['产品', '内部'],
+      documents: [],
+      createdAt: '2026-08-22T00:00:00Z',
+      updatedAt: '2026-08-22T00:01:00Z',
+      currentIndexVersion: 2,
+    }
+
+    expect(normalizeKnowledgeBase(backendKnowledgeBase)).toMatchObject({
+      tags: ['产品', '内部'],
+      updatedAt: '2026-08-22T00:01:00Z',
+      currentIndexVersion: 2,
+    })
+    expect(normalizeKnowledgeBase({ ...backendKnowledgeBase, tags: undefined }).tags).toEqual([])
   })
 })
