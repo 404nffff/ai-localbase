@@ -331,6 +331,43 @@ func TestRouterDeleteDocumentRemovesMarkdownArchive(t *testing.T) {
 	if _, err := os.Stat(uploadResult.Uploaded.MarkdownPath); !os.IsNotExist(err) {
 		t.Fatalf("expected markdown archive %q to be removed, got err=%v", uploadResult.Uploaded.MarkdownPath, err)
 	}
+
+	// 暂停向量删除，在同一知识库插入文档，验证删除完成后不会覆盖并发新增。
+	deleteStarted := make(chan struct{})
+	resumeDelete := make(chan struct{})
+	qdrantHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/points/delete") {
+			close(deleteStarted)
+			<-resumeDelete
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"result":{"collections":[],"config":{"params":{"vectors":{"size":8,"distance":"Cosine"}}}},"status":"ok"}`)
+	}))
+	defer qdrantHTTP.Close()
+	serverConfig := model.ServerConfig{QdrantURL: qdrantHTTP.URL, QdrantVectorSize: 8}
+	concurrentService := service.NewAppService(service.NewQdrantService(serverConfig), service.NewAppStateStore(""), nil, serverConfig)
+	concurrentKB := concurrentService.ListKnowledgeBases()[0].ID
+	concurrentService.AddDocument(concurrentKB, model.Document{ID: "doc-remove", KnowledgeBaseID: concurrentKB})
+	deleteResult := make(chan error, 1)
+	go func() {
+		_, err := concurrentService.DeleteDocument(concurrentKB, "doc-remove")
+		deleteResult <- err
+	}()
+	select {
+	case <-deleteStarted:
+	case <-time.After(5 * time.Second):
+		close(resumeDelete)
+		t.Fatal("document deletion did not reach the vector service")
+	}
+	concurrentService.AddDocument(concurrentKB, model.Document{ID: "doc-keep", KnowledgeBaseID: concurrentKB})
+	close(resumeDelete)
+	if err := <-deleteResult; err != nil {
+		t.Fatalf("concurrent document delete failed: %v", err)
+	}
+	remainingDocuments, err := concurrentService.GetKnowledgeBaseDocuments(concurrentKB)
+	if err != nil || len(remainingDocuments) != 1 || remainingDocuments[0].ID != "doc-keep" {
+		t.Fatalf("concurrent upload was overwritten: documents=%v, error=%v", remainingDocuments, err)
+	}
 }
 
 func TestRouterDocumentDiagnosticsAndReindexE2E(t *testing.T) {
@@ -443,7 +480,7 @@ func TestRouterDocumentDiagnosticsReturnErrorsForMissingResources(t *testing.T) 
 }
 
 func TestRouterUploadRetrievalAndChatE2E(t *testing.T) {
-	engine, modelBaseURL, cleanup := newTestRouter(t)
+	engine, appService, modelBaseURL, cleanup := newTestRouterWithAccessTokenAndService(t, "")
 	defer cleanup()
 
 	listResp := performRequest(t, engine, http.MethodGet, "/api/knowledge-bases", nil, "")
@@ -541,6 +578,41 @@ Redis 支持过期时间设置，适合用作会话缓存或临时数据存储�
 	sources, ok := chatResult.Metadata["sources"].([]any)
 	if !ok || len(sources) == 0 {
 		t.Fatalf("expected retrieval sources in metadata, got %#v", chatResult.Metadata["sources"])
+	}
+
+	// 同一个问题先命中有文档的知识库，再切换空库和其他文档范围，不能复用越界片段。
+	appService.SetSemanticCache(service.NewSemanticCache(0, 0, 0))
+	emptyKB, err := appService.CreateKnowledgeBase(model.KnowledgeBaseInput{Name: "空白资料库"})
+	if err != nil {
+		t.Fatalf("create empty knowledge base: %v", err)
+	}
+	request := model.ChatCompletionRequest{
+		KnowledgeBaseID: knowledgeBaseID,
+		Messages:        []model.ChatMessage{{Role: "user", Content: "请说明 Redis 的核心特点"}},
+	}
+	chunks, err := appService.EvaluateRetrieve(request)
+	if err != nil || len(chunks) == 0 {
+		t.Fatalf("warm scoped retrieval cache: chunks=%d, error=%v", len(chunks), err)
+	}
+	request.KnowledgeBaseID = emptyKB.ID
+	chunks, err = appService.EvaluateRetrieve(request)
+	if err != nil || len(chunks) != 0 {
+		t.Errorf("cache crossed knowledge base scope: chunks=%d, error=%v", len(chunks), err)
+	}
+	request.KnowledgeBaseID = knowledgeBaseID
+	request.DocumentID = "doc-without-vectors"
+	chunks, err = appService.EvaluateRetrieve(request)
+	if err != nil || len(chunks) != 0 {
+		t.Errorf("cache crossed document scope: chunks=%d, error=%v", len(chunks), err)
+	}
+	// 删除文档后再次提问必须重新检索，不能继续返回仍在 TTL 内的已删除片段。
+	if _, err := appService.DeleteDocument(knowledgeBaseID, uploadResult.Uploaded.ID); err != nil {
+		t.Fatalf("delete cached document: %v", err)
+	}
+	request.DocumentID = ""
+	chunks, err = appService.EvaluateRetrieve(request)
+	if err != nil || len(chunks) != 0 {
+		t.Errorf("cache retained deleted document: chunks=%d, error=%v", len(chunks), err)
 	}
 }
 
@@ -679,6 +751,12 @@ func TestRouterProtectedRoutesRequireBearerToken(t *testing.T) {
 	configResp := performRequest(t, engine, http.MethodGet, "/api/config", nil, "")
 	if configResp.Code != http.StatusUnauthorized {
 		t.Fatalf("expected protected config route to require token, got %d, body=%s", configResp.Code, configResp.Body.String())
+	}
+
+	// 通用上传同样会写入知识库，必须在解析文件前拒绝未认证请求。
+	uploadResp := performRequest(t, engine, http.MethodPost, "/upload", nil, "")
+	if uploadResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected legacy upload route to require token, got %d", uploadResp.Code)
 	}
 
 	verifyResp := performRequest(t, engine, http.MethodGet, "/api/auth/verify", nil, "")

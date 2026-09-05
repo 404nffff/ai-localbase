@@ -361,6 +361,32 @@ func TestAppServiceRewriteDocumentContentRefreshesMarkdownArchive(t *testing.T) 
 	if strings.Contains(string(archivedContent), "初始内容用于写入 markdown 归档") {
 		t.Fatalf("expected markdown archive to drop stale content, got %q", string(archivedContent))
 	}
+
+	// 模拟旧向量已删除但新向量写入失败，必须记录可恢复的失败状态而不是继续显示已索引。
+	vectorHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/points/delete") {
+			_, _ = w.Write([]byte(`{"result":true,"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"vector store unavailable"}`))
+	}))
+	defer vectorHTTP.Close()
+	service.qdrant = NewQdrantService(model.ServerConfig{QdrantURL: vectorHTTP.URL, QdrantVectorSize: 8})
+	if _, err := service.RewriteDocumentContent(knowledgeBases[0].ID, indexed.ID, rewrittenContent); err == nil {
+		t.Fatal("expected rewrite indexing failure")
+	}
+	failed, err := service.GetDocument(knowledgeBases[0].ID, indexed.ID)
+	if err != nil || failed.Status != "failed" || failed.ChunkCount != 0 || failed.IndexedAt != "" || failed.IndexError == "" {
+		t.Fatalf("rewrite failure was not persisted: status=%s chunks=%d indexedAt=%s error=%s, load=%v", failed.Status, failed.ChunkCount, failed.IndexedAt, failed.IndexError, err)
+	}
+	// 上游恢复后使用保留的正文重建，失败标识必须清除。
+	service.qdrant = nil
+	recovered, err := service.ReindexDocument(knowledgeBases[0].ID, indexed.ID)
+	if err != nil || recovered.Status != "indexed" || recovered.IndexError != "" {
+		t.Fatalf("recover failed rewrite: status=%s, error=%v", recovered.Status, err)
+	}
 }
 
 func mustReadMarkdownPathFromDocument(t *testing.T, document model.Document) string {

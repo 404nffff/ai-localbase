@@ -56,6 +56,32 @@ func TestAppStateStoreSaveAndLoad(t *testing.T) {
 	if len(loaded.KnowledgeBases["kb-1"].Documents) != 1 {
 		t.Fatalf("expected persisted documents, got %d", len(loaded.KnowledgeBases["kb-1"].Documents))
 	}
+
+	// 同时保存到同一路径，验证临时文件不会被其他请求重命名或覆盖。
+	const writers = 32
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	for index := 0; index < writers; index++ {
+		go func() {
+			<-start
+			results <- store.Save(state)
+		}()
+	}
+	close(start)
+	for index := 0; index < writers; index++ {
+		if saveErr := <-results; saveErr != nil {
+			t.Errorf("concurrent state save failed: %v", saveErr)
+		}
+	}
+	// 最终文件必须是完整快照，保存过程也不能留下待替换文件。
+	loaded, err = store.Load()
+	if err != nil || loaded == nil {
+		t.Fatalf("load concurrent state snapshot: %v", err)
+	}
+	remaining, err := filepath.Glob(filepath.Join(filepath.Dir(statePath), "*.tmp"))
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("unexpected state temporary files: %v, error: %v", remaining, err)
+	}
 }
 
 func TestAppStateStoreLoadMissingFile(t *testing.T) {

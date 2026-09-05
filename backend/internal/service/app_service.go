@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -35,6 +36,10 @@ const (
 )
 
 type AppService struct {
+	// 快照与落盘必须处于同一串行区间，防止旧快照晚于新快照发布。
+	stateSaveMu sync.Mutex
+	// 数据或配置变化后推进版本，使尚在 TTL 内的旧检索条目立即不可复用。
+	retrievalRevision atomic.Uint64
 	state             *model.AppState
 	store             *AppStateStore
 	chatHistory       ChatHistoryStore
@@ -433,9 +438,16 @@ func syncIDCounterFromState(state *model.AppState) {
 }
 
 func (s *AppService) saveState() error {
-	if s == nil || s.store == nil {
+	if s == nil {
 		return nil
 	}
+	// 所有状态变更统一经过此处；内存模式也必须使语义缓存失效。
+	s.retrievalRevision.Add(1)
+	if s.store == nil {
+		return nil
+	}
+	s.stateSaveMu.Lock()
+	defer s.stateSaveMu.Unlock()
 
 	s.state.Mu.RLock()
 	state := persistentAppState{
@@ -985,22 +997,39 @@ func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content
 	if err := os.WriteFile(document.Path, []byte(content), 0o644); err != nil {
 		return model.Document{}, fmt.Errorf("rewrite document file: %w", err)
 	}
+	// 正文已更新，后续失败必须标记新内容尚不可检索，并保留正文供用户重建。
+	document.Size = int64(len([]byte(content)))
+	document.SizeLabel = util.FormatFileSize(document.Size)
+	document.ContentPreview = util.BuildContentPreviewFromText(content)
 
 	markdownPath, err := s.writeMarkdownArchive(document, content)
 	if err != nil {
+		if persistErr := s.persistReindexError(document, err, true); persistErr != nil {
+			return model.Document{}, fmt.Errorf("%w; persist rewrite error: %v", err, persistErr)
+		}
 		return model.Document{}, err
 	}
 	document.MarkdownPath = markdownPath
 
 	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
+		// 旧索引无法对应已更新的正文，不能继续对外宣称索引可用。
+		if persistErr := s.persistReindexError(document, err, true); persistErr != nil {
+			return model.Document{}, fmt.Errorf("%w; persist rewrite error: %v", err, persistErr)
+		}
 		return model.Document{}, err
 	}
 
-	document.Size = int64(len([]byte(content)))
-	document.SizeLabel = util.FormatFileSize(document.Size)
 	document.Status = "processing"
 
-	return s.reindexExistingDocument(document, content)
+	// 与手动重建共用失败状态契约，避免 MCP 更新失败后仍显示旧的 indexed 元数据。
+	indexed, err := s.reindexExistingDocument(document, content)
+	if err != nil {
+		if persistErr := s.persistReindexError(document, err, true); persistErr != nil {
+			return model.Document{}, fmt.Errorf("%w; persist rewrite error: %v", err, persistErr)
+		}
+		return model.Document{}, err
+	}
+	return indexed, nil
 }
 
 func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) model.Document {
@@ -1059,16 +1088,15 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 		return model.Document{}, fmt.Errorf("knowledge base not found")
 	}
 
-	filtered := make([]model.Document, 0, len(kb.Documents))
+	// 先确认目标存在；外部向量删除期间不能持有应用状态锁。
 	removed := false
 	var removedDocument model.Document
 	for _, document := range kb.Documents {
 		if document.ID == documentID {
 			removed = true
 			removedDocument = document
-			continue
+			break
 		}
-		filtered = append(filtered, document)
 	}
 
 	if !removed {
@@ -1082,16 +1110,38 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 	}
 
 	s.state.Mu.Lock()
-	kb = s.state.KnowledgeBases[knowledgeBaseID]
-	originalDocuments := kb.Documents
+	// 网络返回后重新读取并过滤最新列表，保留期间发生的新增、更新和其他删除。
+	kb, ok = s.state.KnowledgeBases[knowledgeBaseID]
+	if !ok {
+		s.state.Mu.Unlock()
+		return removedDocument, nil
+	}
+	filtered := make([]model.Document, 0, len(kb.Documents))
+	for _, document := range kb.Documents {
+		if document.ID != documentID {
+			filtered = append(filtered, document)
+		}
+	}
 	kb.Documents = filtered
 	s.state.KnowledgeBases[knowledgeBaseID] = kb
 	s.state.Mu.Unlock()
 
 	if err := s.saveState(); err != nil {
 		s.state.Mu.Lock()
-		kb.Documents = originalDocuments
-		s.state.KnowledgeBases[knowledgeBaseID] = kb
+		// 保存失败只恢复本次目标，不用旧快照覆盖其他请求的文档，也不复活已删除的知识库。
+		if currentKB, exists := s.state.KnowledgeBases[knowledgeBaseID]; exists {
+			restored := false
+			for _, document := range currentKB.Documents {
+				if document.ID == documentID {
+					restored = true
+					break
+				}
+			}
+			if !restored {
+				currentKB.Documents = append(currentKB.Documents, removedDocument)
+				s.state.KnowledgeBases[knowledgeBaseID] = currentKB
+			}
+		}
 		s.state.Mu.Unlock()
 		return model.Document{}, err
 	}
@@ -1551,7 +1601,23 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	ctx := context.Background()
 
 	var queryEmbedding []float32
+	// 范围、排序参数、模型及对话历史共同决定检索结果，不能只凭问题向量复用。
+	cacheScope := ""
 	if s.semanticCache != nil {
+		// 当前问题由向量相似度匹配；只有改写需要的前序历史才进入范围键。
+		var cacheHistory []string
+		if s.queryRewriter != nil {
+			for index := len(req.Messages) - 1; index >= 0; index-- {
+				if req.Messages[index].Role == "user" {
+					cacheHistory = recentConversationHistory(req.Messages[:index], 3)
+					break
+				}
+			}
+		}
+		embeddingConfig := s.resolveEmbeddingConfig(req)
+		cacheScope = fmt.Sprintf("%d|%q|%q|%v|%t|%t|%q|%q|%q|%q",
+			s.retrievalRevision.Load(), knowledgeBaseIDs, req.DocumentID, params, s.shouldUseHybridSearch(req), s.queryRewriter != nil,
+			embeddingConfig.Provider, embeddingConfig.BaseURL, embeddingConfig.Model, cacheHistory)
 		if len(queryVector) == 0 {
 			vectors, err := s.rag.EmbedTexts(ctx, s.resolveEmbeddingConfig(req), []string{query}, s.qdrantVectorSize())
 			if err != nil || len(vectors) == 0 {
@@ -1560,7 +1626,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 			queryVector = vectors[0]
 		}
 		queryEmbedding = float64ToFloat32(queryVector)
-		if entry, ok := s.semanticCache.Get(queryEmbedding); ok {
+		if entry, ok := s.semanticCache.Get(queryEmbedding, cacheScope); ok {
 			return entry.Chunks, nil
 		}
 	}
@@ -1636,7 +1702,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 		}
 
 		if s.semanticCache != nil && len(queryEmbedding) > 0 {
-			s.semanticCache.Set(queryEmbedding, query, selected)
+			s.semanticCache.Set(queryEmbedding, query, selected, cacheScope)
 		}
 		logRetrievalMetrics(req, query, params, candidates, selected)
 		return selected, nil
@@ -1674,7 +1740,7 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	}
 
 	if s.semanticCache != nil && len(queryEmbedding) > 0 {
-		s.semanticCache.Set(queryEmbedding, query, selected)
+		s.semanticCache.Set(queryEmbedding, query, selected, cacheScope)
 	}
 	logRetrievalMetrics(req, query, params, candidates, selected)
 	return selected, nil

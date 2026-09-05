@@ -4580,12 +4580,158 @@ body,
   min-width: 0;
 }
 
+/* 双栏详情需要受约束的列表高度，否则长列表会穿过面板并被工作区裁切。 */
+.knowledge-workspace-page .kb-detail-panel {
+  min-height: 0;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.knowledge-workspace-page .kb-detail-panel > :not(.kb-docs) {
+  flex-shrink: 0;
+}
+
+/* 桌面标题与操作同排，宽度不足时再自然换行，避免固定占用两行头部。 */
+.knowledge-workspace-page .kb-detail-header {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.knowledge-workspace-page .kb-detail-summary {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.knowledge-workspace-page .kb-card-info {
+  min-width: 0;
+}
+
+.knowledge-workspace-page .kb-card-desc {
+  overflow-wrap: anywhere;
+}
+
+.knowledge-workspace-page .kb-card-actions--detail {
+  width: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* 健康信息使用紧凑两行，移除旧样式与面板 gap 重复叠加的下边距。 */
+.knowledge-workspace-page .kb-health-summary {
+  gap: 12px;
+  margin: 0;
+  padding: 10px 12px;
+  border-color: var(--border-subtle);
+  background: var(--surface-muted);
+}
+
+.knowledge-workspace-page .kb-health-summary > div {
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+}
+
+/* 健康条和侧栏标题随主题使用语义文字色，避免旧的深蓝文字融入深色背景。 */
+.knowledge-workspace-page .kb-health-summary strong,
+.knowledge-workspace-page .kb-panel-heading h3 {
+  color: var(--text-primary);
+}
+
+.knowledge-workspace-page .kb-health-summary > div > span,
+.knowledge-workspace-page .kb-health-summary small,
+.knowledge-workspace-page .kb-panel-heading p,
+.knowledge-workspace-page .kb-search-field > span,
+.knowledge-workspace-page .kb-document-sort > span {
+  color: var(--text-secondary);
+}
+
+.knowledge-workspace-page .kb-health-summary small {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+/* 筛选栏按三列对齐，长聊天范围不会把搜索框推到页面中央或挤出排序控件。 */
+.knowledge-workspace-page .kb-detail-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr) 160px;
+  align-items: end;
+  gap: 12px;
+}
+
+.knowledge-workspace-page .kb-detail-toolbar .kb-search-field {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.knowledge-workspace-page .kb-detail-toolbar input,
+.knowledge-workspace-page .kb-detail-toolbar select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+}
+
+.knowledge-workspace-page .kb-current-scope {
+  min-width: 0;
+  min-height: 40px;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.knowledge-workspace-page .kb-current-scope-chip {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.knowledge-workspace-page .kb-docs {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+/* 分页在列表底部保持可见；文档行禁止被 flex 压缩成不可操作的高度。 */
+.knowledge-workspace-page .kb-document-pagination {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  min-height: 48px;
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+}
+
+/* 分页是文字按钮，覆盖旧文档区为图标按钮统一设置的 30px 宽度。 */
+.knowledge-workspace-page .kb-document-pagination button {
+  width: auto;
+  min-width: 68px;
+  height: 32px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.knowledge-workspace-page .kb-document-pagination strong {
+  white-space: nowrap;
+}
+
 /* 知识库列表仅允许纵向滚动，避免长路径触发底部横向滚动条。 */
 .knowledge-workspace-page .kb-side-list {
   overflow-x: hidden;
 }
 
 .knowledge-workspace-page .kb-doc-item {
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0;
@@ -4626,7 +4772,24 @@ body,
   }
 
   .knowledge-workspace-page .kb-sidebar-panel {
+    /* 详情有明确高度时，侧栏不能被网格剩余空间压缩到只剩标题。 */
+    height: 260px;
+    min-height: 260px;
     max-height: 260px;
+  }
+
+  /* 单栏时保留有限高度的文档滚动区，外层负责到达侧栏和详情区域。 */
+  .knowledge-workspace-page .kb-detail-panel {
+    height: min(760px, 90svh);
+    min-height: 560px;
+  }
+
+  .knowledge-workspace-page .kb-detail-toolbar {
+    grid-template-columns: minmax(0, 1fr) 150px;
+  }
+
+  .knowledge-workspace-page .kb-current-scope {
+    grid-column: 1 / -1;
   }
 }
 
@@ -4670,7 +4833,20 @@ body,
   }
 
   .knowledge-workspace-page .kb-detail-panel {
+    /* 手机详情随头部内容增长，为文档和操作按钮留出完整可滚动区域。 */
+    height: auto;
+    min-height: 0;
     padding: 14px;
+  }
+
+  /* 手机网格按内容分配行高，让外层滚动承担长详情，避免再次裁切内容。 */
+  .knowledge-workspace-page .kb-workspace {
+    grid-auto-rows: max-content;
+  }
+
+  .knowledge-workspace-page .kb-docs {
+    flex: 0 0 auto;
+    height: clamp(280px, 50svh, 420px);
   }
 
   .knowledge-workspace-page .kb-detail-header,
@@ -4686,5 +4862,12 @@ body,
   .knowledge-workspace-page .kb-doc-actions {
     justify-content: flex-end;
     padding: 0 12px 10px;
+  }
+
+  .knowledge-workspace-page .kb-doc-actions > button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 40px;
+    height: 32px;
   }
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"ai-localbase/internal/model"
 )
@@ -16,6 +17,8 @@ type persistentAppState struct {
 
 type AppStateStore struct {
 	path string
+	// 同一存储实例串行替换状态，避免并发写入争用目标文件。
+	mu sync.Mutex
 }
 
 func NewAppStateStore(path string) *AppStateStore {
@@ -56,6 +59,8 @@ func (s *AppStateStore) Save(state persistentAppState) error {
 	if s == nil || s.path == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create app state directory: %w", err)
 	}
@@ -65,11 +70,21 @@ func (s *AppStateStore) Save(state persistentAppState) error {
 		return fmt.Errorf("encode app state: %w", err)
 	}
 
-	tempFile := s.path + ".tmp"
-	if err := os.WriteFile(tempFile, content, 0o644); err != nil {
+	// 每次写入使用独立且仅当前用户可读的临时文件，失败时清理未发布的快照。
+	tempFile, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create app state temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	if _, err := tempFile.Write(content); err != nil {
+		_ = tempFile.Close()
 		return fmt.Errorf("write app state temp file: %w", err)
 	}
-	if err := os.Rename(tempFile, s.path); err != nil {
+	// Windows 替换文件前必须关闭句柄，确保新状态已经完整写入。
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close app state temp file: %w", err)
+	}
+	if err := os.Rename(tempFile.Name(), s.path); err != nil {
 		return fmt.Errorf("replace app state file: %w", err)
 	}
 	return nil

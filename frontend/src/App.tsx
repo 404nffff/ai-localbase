@@ -551,7 +551,8 @@ const resolveExportFilename = (contentDisposition: string | null, fallbackName: 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
-  const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
+  // 每个会话独立维护生成状态，远程模型并发时不能用后发请求覆盖先发请求。
+  const [streamingConversationIds, setStreamingConversationIds] = useState<string[]>([])
   const [backendReady, setBackendReady] = useState(false)
   const [backendWarmupRequired, setBackendWarmupRequired] = useState(true)
   const [conversations, setConversations] = useState<Conversation[]>(() => {
@@ -583,8 +584,9 @@ function App() {
   const [operationLogError, setOperationLogError] = useState<string | null>(null)
   const [directoryUploadPendingFiles, setDirectoryUploadPendingFiles] = useState<UploadQueueItem[]>([])
   const directoryUploadCancelRef = useRef(false)
-  const chatAbortControllerRef = useRef<AbortController | null>(null)
-  const activeChatRequestRef = useRef<{ requestId: string; conversationId: string } | null>(null)
+  // 请求身份和取消句柄按会话隔离，完成回调只清理自己持有的请求。
+  const chatAbortControllerRef = useRef<Map<string, AbortController>>(new Map())
+  const activeChatRequestRef = useRef<Map<string, string>>(new Map())
   const [accessToken, setAccessToken] = useState(() => {
     if (typeof window === 'undefined') {
       return ''
@@ -990,7 +992,7 @@ function App() {
     config.chat.provider === 'ollama' || config.embedding.provider === 'ollama'
 
   const generatingConversationTitle =
-    conversations.find((conversation) => conversation.id === streamingConversationId)?.title ?? '当前会话'
+    conversations.find((conversation) => conversation.id === streamingConversationIds[0])?.title ?? '当前会话'
 
   const handleCreateConversation = () => {
     const conversation = createWelcomeConversation({
@@ -1164,21 +1166,53 @@ function App() {
     }
   }
 
-  const handleClearConversation = () => {
+  // 已保存的会话先持久化空上下文，失败时保留页面历史，避免刷新后旧消息重新出现。
+  const handleClearConversation = async () => {
     if (!activeConversation) {
       return
     }
 
-    if (streamingConversationId === activeConversation.id) {
+    if (activeChatRequestRef.current.has(activeConversation.id)) {
       window.alert('当前会话仍在后台生成，请等待完成后再清空。')
       return
     }
 
+    // 清空提示也作为持久化消息，使现有保存接口继续遵循非空消息契约。
     const resetMessage: ChatMessage = {
       id: createId(),
       role: 'assistant',
       content: '当前会话已清空。你可以继续发起新的提问。',
       timestamp: new Date().toISOString(),
+    }
+
+    // 从未发送过用户消息的欢迎会话仅存在于当前页面，无需创建后台记录。
+    const isLocalOnly = activeConversation.messages.length > 0 && !activeConversation.messages.some((message) => message.role === 'user')
+    try {
+      if (!isLocalOnly) {
+        const response = await apiFetch(`/api/conversations/${activeConversation.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: activeConversation.id,
+            title: '新的对话',
+            knowledgeBaseId: activeConversation.knowledgeBaseId ?? '',
+            documentId: activeConversation.documentId ?? '',
+            messages: [{
+              id: resetMessage.id,
+              role: resetMessage.role,
+              content: resetMessage.content,
+              createdAt: resetMessage.timestamp,
+            }],
+          }),
+        })
+        // 只有后端确认保存成功，才替换当前页面的消息。
+        if (!response.ok) {
+          throw new Error(await extractErrorMessage(response))
+        }
+      }
+    } catch (error) {
+      window.alert(`清空会话失败：${error instanceof Error ? error.message : '请稍后重试。'}`)
+      return
     }
 
     setConversations((prev) =>
@@ -1737,7 +1771,11 @@ function App() {
       return
     }
 
-    if (isOllamaSingleFlightMode && streamingConversationId) {
+    // 同一会话始终串行，本地 Ollama 还需限制跨会话的模型并发。
+    if (activeChatRequestRef.current.has(activeConversation.id)) {
+      return
+    }
+    if (isOllamaSingleFlightMode && activeChatRequestRef.current.size > 0) {
       appendAssistantNotice(
         activeConversation.id,
         `当前模型正在后台处理会话「${generatingConversationTitle}」，请等待其完成后再发起新问题。`,
@@ -1760,11 +1798,11 @@ function App() {
     }
 
     const streamAbortController = new AbortController()
-    chatAbortControllerRef.current = streamAbortController
+    chatAbortControllerRef.current.set(activeConversation.id, streamAbortController)
 
     const conversationId = activeConversation.id
     const requestId = createId()
-    activeChatRequestRef.current = { requestId, conversationId }
+    activeChatRequestRef.current.set(conversationId, requestId)
     const timestamp = new Date().toISOString()
     const userMessage: ChatMessage = {
       id: createId(),
@@ -1796,8 +1834,8 @@ function App() {
     }
 
     const isCurrentRequestActive = () => {
-      const activeRequest = activeChatRequestRef.current
-      return activeRequest?.requestId === requestId && activeRequest.conversationId === conversationId
+      const activeRequest = activeChatRequestRef.current.get(conversationId)
+      return activeRequest === requestId
     }
 
     const updateAssistantMessage = (updater: (current: ChatMessage) => ChatMessage) => {
@@ -1946,7 +1984,7 @@ function App() {
     const requestWithFallback = async () => {
       if (backendWarmupRequired) {
         const warmupAbortController = new AbortController()
-        chatAbortControllerRef.current = warmupAbortController
+        chatAbortControllerRef.current.set(conversationId, warmupAbortController)
         await requestFallbackCompletion(warmupAbortController)
         setBackendWarmupRequired(false)
         return
@@ -1965,7 +2003,7 @@ function App() {
         })
       } catch {
         const fallbackAbortController = new AbortController()
-        chatAbortControllerRef.current = fallbackAbortController
+        chatAbortControllerRef.current.set(conversationId, fallbackAbortController)
         await requestFallbackCompletion(fallbackAbortController)
         return
       }
@@ -1976,7 +2014,7 @@ function App() {
           throw new Error(UNAUTHORIZED_ERROR_MESSAGE)
         }
         const fallbackAbortController = new AbortController()
-        chatAbortControllerRef.current = fallbackAbortController
+        chatAbortControllerRef.current.set(conversationId, fallbackAbortController)
         await requestFallbackCompletion(fallbackAbortController)
         return
       }
@@ -2082,7 +2120,7 @@ function App() {
       } catch (error) {
         if (!receivedFirstChunk && error instanceof DOMException && error.name === 'AbortError') {
           const fallbackAbortController = new AbortController()
-          chatAbortControllerRef.current = fallbackAbortController
+          chatAbortControllerRef.current.set(conversationId, fallbackAbortController)
           await requestFallbackCompletion(fallbackAbortController)
           return
         }
@@ -2098,7 +2136,7 @@ function App() {
       }
     }
 
-    setStreamingConversationId(conversationId)
+    setStreamingConversationIds((current) => [...current.filter((id) => id !== conversationId), conversationId])
     setConversations((prev) =>
       prev.map((conversation) => {
         if (conversation.id !== conversationId) {
@@ -2129,13 +2167,12 @@ function App() {
         content: buildFriendlyChatError(error),
       }))
     } finally {
-      const activeRequest = activeChatRequestRef.current
-      if (activeRequest?.requestId === requestId && activeRequest.conversationId === conversationId) {
-        activeChatRequestRef.current = null
-        chatAbortControllerRef.current = null
-        setStreamingConversationId((current) =>
-          current === conversationId ? null : current,
-        )
+      const activeRequest = activeChatRequestRef.current.get(conversationId)
+      // 后结束的旧回调不能清掉其他会话或同会话的新请求状态。
+      if (activeRequest === requestId) {
+        activeChatRequestRef.current.delete(conversationId)
+        chatAbortControllerRef.current.delete(conversationId)
+        setStreamingConversationIds((current) => current.filter((id) => id !== conversationId))
       }
     }
   }
@@ -2254,8 +2291,8 @@ function App() {
         selectedKnowledgeBase={selectedKnowledgeBase}
         selectedDocument={selectedDocument}
         config={config}
-        isLoading={streamingConversationId === activeConversation?.id}
-        isGlobalGenerating={Boolean(streamingConversationId)}
+        isLoading={streamingConversationIds.includes(activeConversation.id)}
+        isGlobalGenerating={streamingConversationIds.length > 0}
         generatingConversationTitle={generatingConversationTitle}
         enforceSingleFlight={isOllamaSingleFlightMode}
         onSelectKnowledgeBase={handleSelectChatKnowledgeBase}

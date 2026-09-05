@@ -255,5 +255,6 @@ func readProjectFile(t *testing.T, parts ...string) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", targetPath, err)
 	}
-	return string(content)
+	// Windows 检出使用 CRLF；配置内容断言应忽略平台换行差异。
+	return strings.ReplaceAll(string(content), "\r\n", "\n")
 }

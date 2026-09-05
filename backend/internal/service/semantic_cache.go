@@ -14,6 +14,8 @@ const (
 
 // SemanticCacheEntry 语义缓存条目
 type SemanticCacheEntry struct {
+	// Scope 包含检索范围与数据版本；空值保留独立缓存调用的兼容行为。
+	Scope          string
 	QueryEmbedding []float32
 	Query          string
 	Chunks         []RetrievedChunk
@@ -50,15 +52,20 @@ func NewSemanticCache(threshold float32, maxEntries int, ttl time.Duration) *Sem
 	}
 }
 
-// Get 查找语义相似的缓存条目
+// Get 在 scopes 指定的检索范围内查找语义相似条目，未传范围时兼容独立缓存调用。
 // 遍历所有 entries，计算 cosine similarity，返回第一个超过阈值的
 // 同时清理过期条目
-func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool) {
+func (c *SemanticCache) Get(queryEmbedding []float32, scopes ...string) (*SemanticCacheEntry, bool) {
 	if c == nil || len(queryEmbedding) == 0 {
 		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 检索调用必须传入完整范围，只有同一范围的条目才能参与语义相似度比较。
+	scope := ""
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
 
 	now := time.Now()
 	filtered := c.entries[:0]
@@ -74,7 +81,7 @@ func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool
 	c.entries = filtered
 
 	for _, entry := range c.entries {
-		if len(entry.QueryEmbedding) == 0 {
+		if entry.Scope != scope || len(entry.QueryEmbedding) == 0 {
 			continue
 		}
 		similarity := cosineSimilarityLocal(queryEmbedding, entry.QueryEmbedding)
@@ -87,9 +94,9 @@ func (c *SemanticCache) Get(queryEmbedding []float32) (*SemanticCacheEntry, bool
 	return nil, false
 }
 
-// Set 存入缓存条目
+// Set 存入检索条目并记录 scopes 指定的数据版本和范围，防止跨范围命中。
 // 若超过 maxEntries，移除最旧的条目（FIFO）
-func (c *SemanticCache) Set(queryEmbedding []float32, query string, chunks []RetrievedChunk) {
+func (c *SemanticCache) Set(queryEmbedding []float32, query string, chunks []RetrievedChunk, scopes ...string) {
 	if c == nil || len(queryEmbedding) == 0 {
 		return
 	}
@@ -109,7 +116,13 @@ func (c *SemanticCache) Set(queryEmbedding []float32, query string, chunks []Ret
 	}
 	c.entries = filtered
 
+	// 保存调用时的版本，进行中的旧检索不能覆盖变更后的缓存范围。
+	scope := ""
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
 	entry := &SemanticCacheEntry{
+		Scope:          scope,
 		QueryEmbedding: cloneFloat32Slice(queryEmbedding),
 		Query:          query,
 		Chunks:         cloneRetrievedChunks(chunks),
@@ -176,6 +189,7 @@ func cloneSemanticCacheEntry(entry *SemanticCacheEntry) *SemanticCacheEntry {
 		return nil
 	}
 	cloned := &SemanticCacheEntry{
+		Scope:          entry.Scope,
 		QueryEmbedding: cloneFloat32Slice(entry.QueryEmbedding),
 		Query:          entry.Query,
 		Chunks:         cloneRetrievedChunks(entry.Chunks),

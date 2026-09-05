@@ -17,7 +17,8 @@ func NewRouter(appHandler *handler.AppHandler, mcpHandler *handler.MCPHandler, a
 
 	r.GET("/", appHandler.Root)
 	r.GET("/health", appHandler.Health)
-	r.POST("/upload", appHandler.Upload)
+	// 兼容上传入口也会写入文件和索引，沿用 API 的令牌校验规则。
+	r.POST("/upload", authMiddleware(accessToken), appHandler.Upload)
 
 	api := r.Group("/api")
 	api.Use(authMiddleware(accessToken))

@@ -24,6 +24,18 @@ func TestSemanticCacheHit(t *testing.T) {
 	if stats["hits"].(int) != 1 {
 		t.Fatalf("expected hit count 1, got %v", stats["hits"])
 	}
+
+	// 范围隔离不应关闭语义相似命中，但不同知识库或数据版本必须未命中。
+	cache.Set(vecA, "query-a", chunks, "kb-one:version-1")
+	if _, ok := cache.Get(vecB, "kb-one:version-1"); !ok {
+		t.Fatal("similar query should hit within the same scope")
+	}
+	if _, ok := cache.Get(vecB, "kb-two:version-1"); ok {
+		t.Fatal("cache must not cross knowledge bases")
+	}
+	if _, ok := cache.Get(vecB, "kb-one:version-2"); ok {
+		t.Fatal("cache must not cross data revisions")
+	}
 }
 
 func TestSemanticCacheMiss(t *testing.T) {
