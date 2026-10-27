@@ -2592,11 +2592,33 @@ body,
   font-weight: 650;
 }
 
+.knowledge-workspace-page .kb-docs--droppable {
+  outline: 1px dashed transparent;
+}
+
+.knowledge-workspace-page .kb-docs--droppable:hover {
+  outline-color: var(--border-color);
+}
+
+.knowledge-workspace-page .kb-debug-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.knowledge-workspace-page .kb-debug-results {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .knowledge-workspace-page .kb-doc-actions {
   position: relative;
   display: flex;
   gap: 4px;
   align-items: center;
+  z-index: 1;
 }
 
 .knowledge-workspace-page .kb-doc-more,

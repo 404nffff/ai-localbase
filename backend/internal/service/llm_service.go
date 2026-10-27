@@ -189,7 +189,12 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	var result model.ChatCompletionResponse
-	err = retryModelCall(ctx, 3, 250*time.Millisecond, func() error {
+	// Wiki 的一次业务尝试对应一次模型请求，避免与任务重试相乘。
+	attempts := 3
+	if req.SingleAttempt {
+		attempts = 1
+	}
+	err = retryModelCall(ctx, attempts, 250*time.Millisecond, func() error {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create model request")
@@ -348,7 +353,12 @@ func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/api/chat"
 	var result model.ChatCompletionResponse
-	err = retryModelCall(ctx, 3, 250*time.Millisecond, func() error {
+	// Wiki 的一次业务尝试对应一次模型请求，避免与任务重试相乘。
+	attempts := 3
+	if req.SingleAttempt {
+		attempts = 1
+	}
+	err = retryModelCall(ctx, attempts, 250*time.Millisecond, func() error {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create model request")

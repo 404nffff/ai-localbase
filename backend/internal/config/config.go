@@ -12,10 +12,13 @@ func LoadServerConfig() model.ServerConfig {
 	return model.ServerConfig{
 		Port:                     getEnv("PORT", "8080"),
 		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
+		StagingDir:               getEnv("STAGING_DIR", "data/staging"),
 		StateFile:                getEnv("STATE_FILE", "data/app-state.json"),
 		ChatHistoryFile:          getEnv("CHAT_HISTORY_FILE", "data/chat-history.db"),
 		OperationLogFile:         getEnv("OPERATION_LOG_FILE", "data/operation-logs.db"),
 		AccessToken:              getEnv("APP_AUTH_TOKEN", ""),
+		CORSAllowedOrigins:       getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:4173,http://127.0.0.1:4173"),
+		MaxUploadBytes:           int64(getEnvAsInt("MAX_UPLOAD_BYTES", 25*1024*1024)),
 		QdrantURL:                getEnv("QDRANT_URL", "http://localhost:6333"),
 		QdrantAPIKey:             getEnv("QDRANT_API_KEY", ""),
 		QdrantCollectionPrefix:   getEnv("QDRANT_COLLECTION_PREFIX", "kb_"),

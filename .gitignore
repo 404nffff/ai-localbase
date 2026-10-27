@@ -103,3 +103,4 @@ logs/
 docs/
 .codex
 .mindfs/
+ollama_storage/

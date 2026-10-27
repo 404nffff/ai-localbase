@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"ai-localbase/internal/config"
 	"ai-localbase/internal/handler"
@@ -16,6 +17,11 @@ func main() {
 
 	if err := os.MkdirAll(serverConfig.UploadDir, 0o755); err != nil {
 		log.Fatalf("failed to create upload directory: %v", err)
+	}
+	if stagingDir := strings.TrimSpace(serverConfig.StagingDir); stagingDir != "" {
+		if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+			log.Fatalf("failed to create staging directory: %v", err)
+		}
 	}
 
 	qdrantService := service.NewQdrantService(serverConfig)
@@ -48,7 +54,7 @@ func main() {
 	appHandler := handler.NewAppHandler(serverConfig, appService, llmService)
 	mcpService := service.NewMCPService(appService, llmService)
 	mcpHandler := handler.NewMCPHandler(mcpService)
-	r := router.NewRouter(appHandler, mcpHandler, serverConfig.AccessToken)
+	r := router.NewRouter(appHandler, mcpHandler, serverConfig)
 
 	log.Printf("backend server listening on :%s", serverConfig.Port)
 	if err := r.Run(":" + serverConfig.Port); err != nil {

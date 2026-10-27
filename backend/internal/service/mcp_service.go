@@ -210,7 +210,7 @@ func (s *MCPService) ReadResource(params map[string]any) (map[string]any, error)
 
 // ToolsList 返回当前阶段已开放的 MCP tools 元数据。
 func (s *MCPService) ToolsList() []model.MCPTool {
-	return []model.MCPTool{
+	return append([]model.MCPTool{
 		newMCPTool(
 			"chat.ask",
 			"基于当前知识库上下文执行一次非流式问答",
@@ -400,7 +400,7 @@ func (s *MCPService) ToolsList() []model.MCPTool {
 				{Name: "conversation", Type: "object", Description: "完整会话及消息列表"},
 			},
 		),
-	}
+	}, wikiMCPTools()...)
 }
 
 func newMCPTool(name string, description string, parameters []model.MCPToolParameter, response []model.MCPToolResponse) model.MCPTool {
@@ -524,6 +524,13 @@ func (s *MCPService) handleToolCall(params map[string]any) (map[string]any, erro
 
 // CallTool 执行单个 MCP 工具并返回 MCP tool result 格式，供 JSON-RPC 与普通 API 入口复用。
 func (s *MCPService) CallTool(name string, arguments map[string]any) (map[string]any, error) {
+	if strings.HasPrefix(strings.TrimSpace(name), "wiki.") {
+		result, _, err := s.appService.CallWikiTool(strings.TrimSpace(name), arguments)
+		if err != nil {
+			return nil, err
+		}
+		return buildMCPToolResult(name, result)
+	}
 	switch strings.TrimSpace(name) {
 	case "chat.ask":
 		result, err := s.CallChatAsk(arguments)

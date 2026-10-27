@@ -76,8 +76,17 @@ ai-localbase/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查，返回 Qdrant 状态和配置概要 |
+| GET | `/livez` | 进程存活探活，不依赖下游 |
+| GET | `/readyz` | 应用就绪探活 |
 | GET | `/api/config` | 获取 Chat + Embedding 配置 |
 | PUT | `/api/config` | 更新 Chat + Embedding 配置 |
+| POST | `/api/config/test-chat-model` | 探测聊天模型连通性，不写配置 |
+| POST | `/api/config/test-embedding-model` | 探测 Embedding 连通性，不写配置 |
+| POST | `/api/uploads` | 暂存上传文件，返回 uploadId |
+| POST | `/api/knowledge-bases/:id/documents/batch-index` | 按 uploadId 异步批量索引 |
+| GET | `/api/jobs/:jobId` | 查询索引 Job |
+| POST | `/api/knowledge-bases/:id/retrieval/debug` | 检索调试召回 |
+| POST | `/api/knowledge-bases/:id/documents/:documentId/reindex` | 单文档重建索引 |
 | GET | `/api/knowledge-bases` | 列出所有知识库 |
 | POST | `/api/knowledge-bases` | 创建知识库 |
 | DELETE | `/api/knowledge-bases/:id` | 删除知识库（含 Qdrant 集合）|

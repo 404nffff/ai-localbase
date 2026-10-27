@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppConfig, ChatConfig, EmbeddingConfig } from '../../App'
 import AppIcon from '../common/AppIcon'
 import type { AppIconName } from '../common/AppIcon'
+import { testChatModel, testEmbeddingModel, type TestModelResponse } from '../../services/api'
 
 interface SettingsPanelProps {
   config: AppConfig
@@ -57,6 +58,10 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
   const [isSaving, setIsSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showCopySuccessHint, setShowCopySuccessHint] = useState(false)
+  const [chatProbe, setChatProbe] = useState<TestModelResponse | null>(null)
+  const [embeddingProbe, setEmbeddingProbe] = useState<TestModelResponse | null>(null)
+  const [isProbingChat, setIsProbingChat] = useState(false)
+  const [isProbingEmbedding, setIsProbingEmbedding] = useState(false)
   const saveNoticeTimerRef = useRef<number | null>(null)
   const copySuccessTimerRef = useRef<number | null>(null)
   const isDirty = useMemo(
@@ -238,6 +243,33 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
               <div className="settings-form-group"><label className="settings-form-label" htmlFor="chat-context-limit">上下文消息数量</label><input id="chat-context-limit" type="number" min="1" max="100" value={draftChatConfig.contextMessageLimit} onChange={(event) => updateChatConfig('contextMessageLimit', Number(event.target.value))} /><small>范围 1-100。</small></div>
             </div>
           </section>
+          <section className="settings-form-section">
+            <header><h4>连通性</h4><p>用当前草稿配置探测模型，不会写入后端。</p></header>
+            <button
+              type="button"
+              className="settings-action-btn"
+              disabled={isProbingChat}
+              onClick={() => {
+                setIsProbingChat(true)
+                void testChatModel(draftChatConfig)
+                  .then(setChatProbe)
+                  .catch((error: unknown) => setChatProbe({
+                    success: false,
+                    errorMessage: error instanceof Error ? error.message : '探测失败',
+                  }))
+                  .finally(() => setIsProbingChat(false))
+              }}
+            >
+              {isProbingChat ? '测试中…' : '测试聊天模型'}
+            </button>
+            {chatProbe && (
+              <small className={chatProbe.success ? undefined : 'kb-health-error'}>
+                {chatProbe.success
+                  ? `可用，耗时 ${chatProbe.latencyMs ?? 0}ms`
+                  : `失败：${chatProbe.errorMessage}`}
+              </small>
+            )}
+          </section>
         </section>
       ) : (
         <section className="settings-config-panel" aria-label="Embedding 模型配置">
@@ -253,6 +285,33 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
               <div className="settings-form-group"><label className="settings-form-label" htmlFor="embedding-model">Model</label><input id="embedding-model" value={draftEmbeddingConfig.model} onChange={(event) => updateEmbeddingConfig('model', event.target.value)} /></div>
               <div className="settings-form-group"><label className="settings-form-label" htmlFor="embedding-api-key">API Key</label><input id="embedding-api-key" type="password" value={draftEmbeddingConfig.apiKey} onChange={(event) => updateEmbeddingConfig('apiKey', event.target.value)} placeholder="选填" /></div>
             </div>
+          </section>
+          <section className="settings-form-section">
+            <header><h4>连通性</h4><p>用当前草稿配置探测 Embedding，不会写入后端。</p></header>
+            <button
+              type="button"
+              className="settings-action-btn"
+              disabled={isProbingEmbedding}
+              onClick={() => {
+                setIsProbingEmbedding(true)
+                void testEmbeddingModel(draftEmbeddingConfig)
+                  .then(setEmbeddingProbe)
+                  .catch((error: unknown) => setEmbeddingProbe({
+                    success: false,
+                    errorMessage: error instanceof Error ? error.message : '探测失败',
+                  }))
+                  .finally(() => setIsProbingEmbedding(false))
+              }}
+            >
+              {isProbingEmbedding ? '测试中…' : '测试 Embedding'}
+            </button>
+            {embeddingProbe && (
+              <small className={embeddingProbe.success ? undefined : 'kb-health-error'}>
+                {embeddingProbe.success
+                  ? `可用，向量维度 ${embeddingProbe.vectorSize ?? 0}`
+                  : `失败：${embeddingProbe.errorMessage}`}
+              </small>
+            )}
           </section>
         </section>
       )}

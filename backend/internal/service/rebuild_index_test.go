@@ -11,6 +11,8 @@ func TestDiscoverUploadFilesIncludesArchivesWhenRequested(t *testing.T) {
 	writeRebuildTestFile(t, filepath.Join(root, "a.md"), "A")
 	writeRebuildTestFile(t, filepath.Join(root, "skip.tmp"), "ignored")
 	writeRebuildTestFile(t, filepath.Join(root, "md", "kb-1", "doc-1.md"), "archive")
+	writeRebuildTestFile(t, filepath.Join(root, "wiki", "kb-1", "pages", "wiki-1", "1.md"), "知识页")
+	writeRebuildTestFile(t, filepath.Join(root, "wiki", "kb-1", "sources", "doc-1", "version.md"), "来源版本")
 
 	files, err := discoverUploadFiles(root, true)
 	if err != nil {
@@ -28,6 +30,7 @@ func TestDiscoverUploadFilesCanSkipGeneratedArchives(t *testing.T) {
 	root := t.TempDir()
 	writeRebuildTestFile(t, filepath.Join(root, "a.md"), "A")
 	writeRebuildTestFile(t, filepath.Join(root, "md", "kb-1", "doc-1.md"), "archive")
+	writeRebuildTestFile(t, filepath.Join(root, "wiki", "kb-1", "pages", "wiki-1", "1.md"), "知识页")
 
 	files, err := discoverUploadFiles(root, false)
 	if err != nil {

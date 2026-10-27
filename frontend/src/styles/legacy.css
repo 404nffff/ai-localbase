@@ -3755,7 +3755,8 @@
 
 .document-detail-backdrop {
   position: fixed;
-  z-index: 110;
+  /* 详情与全页知识库是同级节点，使用弹窗层级，避免被工作区遮住。 */
+  z-index: var(--z-modal-nested);
   inset: 0;
   display: flex;
   align-items: center;
@@ -3783,6 +3784,13 @@
   gap: 16px;
   padding: 18px 22px;
   border-bottom: 1px solid #e2e8f0;
+}
+
+.document-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .document-detail-header div {

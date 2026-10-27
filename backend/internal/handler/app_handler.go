@@ -51,6 +51,22 @@ func (h *AppHandler) Health(c *gin.Context) {
 	})
 }
 
+func (h *AppHandler) Liveness(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "alive",
+		"name":   "ai-localbase-backend",
+	})
+}
+
+func (h *AppHandler) Readiness(c *gin.Context) {
+	status := "ready"
+	if h.appService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": "app service unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": status})
+}
+
 func (h *AppHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, h.appService.GetConfig())
 }
@@ -354,7 +370,7 @@ func (h *AppHandler) GetDocumentDetail(c *gin.Context) {
 func (h *AppHandler) ReindexDocument(c *gin.Context) {
 	document, err := h.appService.ReindexDocument(c.Param("id"), c.Param("documentId"))
 	if err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
+		writeIndexError(c, err)
 		return
 	}
 
@@ -735,7 +751,7 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 		return
 	}
 
-	if err := validateUploadFile(file, h.appService.GetConfig()); err != nil {
+	if err := validateUploadFile(file, h.appService.GetConfig(), h.maxUploadBytes()); err != nil {
 		h.recordUploadLog(correlationID, model.OperationSourceWeb, model.OperationStatusFailed, "validate", candidateKnowledgeBaseID, file, startedAt, err)
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
@@ -778,7 +794,7 @@ func (h *AppHandler) handleUpload(c *gin.Context, candidateKnowledgeBaseID strin
 	uploaded, err := h.appService.IndexDocumentWithLog(document, model.OperationSourceWeb, correlationID)
 	if err != nil {
 		_ = os.Remove(destination)
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeIndexError(c, err)
 		return
 	}
 
@@ -820,7 +836,17 @@ func (h *AppHandler) recordUploadLog(correlationID string, source string, status
 	h.appService.RecordOperationLog(entry)
 }
 
-func validateUploadFile(file *multipart.FileHeader, cfg model.AppConfig) error {
+func (h *AppHandler) maxUploadBytes() int64 {
+	if h != nil && h.serverConfig.MaxUploadBytes > 0 {
+		return h.serverConfig.MaxUploadBytes
+	}
+	return 25 * 1024 * 1024
+}
+
+func validateUploadFile(file *multipart.FileHeader, cfg model.AppConfig, maxBytes int64) error {
+	if file != nil && maxBytes > 0 && file.Size > maxBytes {
+		return fmt.Errorf("file exceeds upload limit of %d bytes", maxBytes)
+	}
 	ext := strings.ToLower(filepath.Ext(file.Filename))
 	allowed := map[string]struct{}{
 		".txt": {},

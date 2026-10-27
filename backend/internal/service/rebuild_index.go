@@ -338,6 +338,10 @@ func discoverUploadFiles(root string, includeArchives bool) ([]string, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
+			// 知识页与来源版本是派生产物，即使包含归档也不能反向当作新资料。
+			if path == filepath.Join(root, "wiki") {
+				return filepath.SkipDir
+			}
 			if !includeArchives && path != root && isMarkdownArchivePath(root, path) {
 				return filepath.SkipDir
 			}

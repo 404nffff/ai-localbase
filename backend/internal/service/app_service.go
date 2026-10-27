@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -46,11 +47,19 @@ type AppService struct {
 	operationLogs     OperationLogStore
 	qdrant            *QdrantService
 	rag               *RagService
+	staging           *UploadStagingService
+	jobsMu            sync.Mutex
+	jobs              map[string]*indexJobState
 	serverConfig      model.ServerConfig
 	reranker          SemanticReranker
 	queryRewriter     QueryRewriter
 	semanticCache     *SemanticCache
 	contextCompressor ContextCompressor
+	// Wiki 执行队列由单一进程维护，持久任务仍存入库状态。
+	wikiRunMu   sync.Mutex
+	wikiRunning map[string]bool
+	wikiClosed  bool
+	wikiWorkers sync.WaitGroup
 }
 
 // KnowledgeBaseExportKnowledgeBase 描述导出包中的知识库元数据，避免暴露内部文档路径。
@@ -344,12 +353,18 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, chunks []Retriev
 }
 
 func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory ChatHistoryStore, serverConfig model.ServerConfig) *AppService {
+	stagingDir := strings.TrimSpace(serverConfig.StagingDir)
+	if stagingDir == "" {
+		stagingDir = "data/staging"
+	}
 	service := &AppService{
 		state:        defaultAppState(serverConfig),
 		store:        store,
 		chatHistory:  chatHistory,
 		qdrant:       qdrant,
 		rag:          NewRagService(),
+		staging:      NewUploadStagingService(stagingDir),
+		jobs:         map[string]*indexJobState{},
 		serverConfig: serverConfig,
 	}
 	service.rag.SetQdrantService(qdrant)
@@ -404,6 +419,12 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	syncIDCounterFromState(service.state)
 
 	for kbID := range service.state.KnowledgeBases {
+		// 仅为未设置的旧库补默认值，保留用户显式关闭的状态。
+		kb := service.state.KnowledgeBases[kbID]
+		if kb.Wiki == nil {
+			kb.Wiki = &model.WikiState{Enabled: true, RulesVersion: "1", PendingSources: map[string]string{}}
+			service.state.KnowledgeBases[kbID] = kb
+		}
 		if err := service.ensureKnowledgeBaseCollection(kbID); err != nil {
 			log.Printf("failed to ensure qdrant collection for knowledge base %s: %v", kbID, err)
 		}
@@ -411,11 +432,18 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if err := service.saveState(); err != nil {
 		log.Printf("failed to persist app state during startup: %v", err)
 	}
+	service.recoverWikiJobs()
 
 	return service
 }
 
 func (s *AppService) Close() error {
+	if s != nil {
+		s.wikiRunMu.Lock()
+		s.wikiClosed = true
+		s.wikiRunMu.Unlock()
+		s.wikiWorkers.Wait()
+	}
 	if s == nil || s.operationLogs == nil {
 		return nil
 	}
@@ -433,6 +461,12 @@ func syncIDCounterFromState(state *model.AppState) {
 		util.ObserveID(kb.ID)
 		for _, document := range kb.Documents {
 			util.ObserveID(document.ID)
+		}
+		// 未发布页面的任务 ID 也要参与恢复，防止重启后任务号碰撞。
+		if kb.Wiki != nil {
+			for _, job := range kb.Wiki.Jobs {
+				util.ObserveID(job.ID)
+			}
 		}
 	}
 }
@@ -468,6 +502,40 @@ func cloneKnowledgeBases(source map[string]model.KnowledgeBase) map[string]model
 	for id, kb := range source {
 		documents := make([]model.Document, len(kb.Documents))
 		copy(documents, kb.Documents)
+		// Wiki 的复合字段必须深拷贝，防止候选快照修改尚未发布的内存状态。
+		for i := range documents {
+			documents[i].SourceRevisions = append([]model.SourceRevision(nil), documents[i].SourceRevisions...)
+			if documents[i].Wiki != nil {
+				page := *documents[i].Wiki
+				page.Aliases = append([]string(nil), page.Aliases...)
+				page.SourceRefs = append([]model.WikiSourceRef(nil), page.SourceRefs...)
+				page.Links = append([]string(nil), page.Links...)
+				page.History = append([]model.WikiRevision(nil), page.History...)
+				for j := range page.History {
+					page.History[j].SourceRefs = append([]model.WikiSourceRef(nil), page.History[j].SourceRefs...)
+					page.History[j].Links = append([]string(nil), page.History[j].Links...)
+				}
+				documents[i].Wiki = &page
+			}
+		}
+		if kb.Wiki != nil {
+			wiki := *kb.Wiki
+			wiki.PendingSources = maps.Clone(wiki.PendingSources)
+			wiki.Jobs = append([]model.WikiJob(nil), wiki.Jobs...)
+			for i := range wiki.Jobs {
+				wiki.Jobs[i].DocumentIDs = append([]string(nil), wiki.Jobs[i].DocumentIDs...)
+				wiki.Jobs[i].ChangedPageIDs = append([]string(nil), wiki.Jobs[i].ChangedPageIDs...)
+				wiki.Jobs[i].SourceVersions = maps.Clone(wiki.Jobs[i].SourceVersions)
+				wiki.Jobs[i].BaseRevisions = maps.Clone(wiki.Jobs[i].BaseRevisions)
+				wiki.Jobs[i].Extracts = maps.Clone(wiki.Jobs[i].Extracts)
+			}
+			wiki.Issues = append([]model.WikiIssue(nil), wiki.Issues...)
+			for i := range wiki.Issues {
+				wiki.Issues[i].PageIDs = append([]string(nil), wiki.Issues[i].PageIDs...)
+				wiki.Issues[i].SourceRefs = append([]model.WikiSourceRef(nil), wiki.Issues[i].SourceRefs...)
+			}
+			kb.Wiki = &wiki
+		}
 		kb.Documents = documents
 		cloned[id] = kb
 	}
@@ -664,6 +732,7 @@ func (s *AppService) ListKnowledgeBases() []model.KnowledgeBase {
 	return knowledgeBases
 }
 
+// CreateKnowledgeBase 创建知识库并默认开启自动整理，未配置第三方模型时只入库原文。
 func (s *AppService) CreateKnowledgeBase(req model.KnowledgeBaseInput) (model.KnowledgeBase, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return model.KnowledgeBase{}, fmt.Errorf("knowledge base name is required")
@@ -675,6 +744,7 @@ func (s *AppService) CreateKnowledgeBase(req model.KnowledgeBaseInput) (model.Kn
 		Description: strings.TrimSpace(req.Description),
 		Documents:   []model.Document{},
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		Wiki:        &model.WikiState{Enabled: true, RulesVersion: "1", PendingSources: map[string]string{}},
 	}
 
 	s.state.Mu.Lock()
@@ -851,7 +921,24 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 	content, err := util.ExtractDocumentText(document.Path)
 	if err != nil {
 		indexErr := fmt.Errorf("extract uploaded document text: %w", err)
-		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, indexErr, nil)
+		document.IndexErrorCode = classifyIndexErrorCode(indexErr)
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, indexErr, map[string]any{
+			"errorCode": document.IndexErrorCode,
+		})
+		return model.Document{}, indexErr
+	}
+	document.ContentChecksum = hashDocumentContent(content)
+	document, err = s.snapshotWikiSource(document, content)
+	if err != nil {
+		return model.Document{}, fmt.Errorf("snapshot wiki source: %w", err)
+	}
+	if existing, duplicated := s.findDuplicateDocument(document.KnowledgeBaseID, document.ContentChecksum, document.ID); duplicated {
+		indexErr := &DuplicateDocumentError{Existing: existing}
+		document.IndexErrorCode = indexErrorDuplicate
+		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, indexErr, map[string]any{
+			"errorCode":          document.IndexErrorCode,
+			"existingDocumentId": existing.ID,
+		})
 		return model.Document{}, indexErr
 	}
 
@@ -878,6 +965,7 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 		document.IndexError = ""
 		indexSucceeded = true
 		added := s.AddDocument(document.KnowledgeBaseID, document)
+		s.enqueueWikiSource(added)
 		s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
 			"chunkCount": 0,
 		})
@@ -887,16 +975,20 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 	stage = "embed"
 	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
 	if err != nil {
+		document.IndexErrorCode = classifyIndexErrorCode(err)
 		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, err, map[string]any{
 			"chunkCount": len(chunks),
+			"errorCode":  document.IndexErrorCode,
 		})
 		return model.Document{}, err
 	}
 
 	stage = "qdrant_upsert"
 	if err := s.upsertDocumentChunks(document.KnowledgeBaseID, chunks, vectors); err != nil {
+		document.IndexErrorCode = classifyIndexErrorCode(err)
 		s.recordIndexDocumentLog(document, logContext, model.OperationStatusFailed, stage, "", startedAt, err, map[string]any{
 			"chunkCount": len(chunks),
+			"errorCode":  document.IndexErrorCode,
 		})
 		return model.Document{}, err
 	}
@@ -906,8 +998,10 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexErrorCode = ""
 	indexSucceeded = true
 	added := s.AddDocument(document.KnowledgeBaseID, document)
+	s.enqueueWikiSource(added)
 	s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
 		"chunkCount": len(chunks),
 	})
@@ -994,8 +1088,32 @@ func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content
 	if err != nil {
 		return model.Document{}, err
 	}
+	if document.Wiki != nil {
+		return model.Document{}, &WikiError{409, "wiki_revision_required", "wiki pages must be changed through a versioned compilation"}
+	}
+	// 覆盖前保留旧来源版本；新正文写入后立即使依赖页失效。
+	oldContent, err := util.ExtractDocumentText(document.Path)
+	if err != nil {
+		return model.Document{}, err
+	}
+	document, err = s.snapshotWikiSource(document, oldContent)
+	if err != nil {
+		return model.Document{}, err
+	}
 	if err := os.WriteFile(document.Path, []byte(content), 0o644); err != nil {
 		return model.Document{}, fmt.Errorf("rewrite document file: %w", err)
+	}
+	extracted, err := util.ExtractDocumentText(document.Path)
+	if err != nil {
+		return model.Document{}, err
+	}
+	document.ContentChecksum = hashDocumentContent(extracted)
+	document, err = s.snapshotWikiSource(document, extracted)
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := s.recordWikiSourceChange(document); err != nil {
+		return model.Document{}, err
 	}
 	// 正文已更新，后续失败必须标记新内容尚不可检索，并保留正文供用户重建。
 	document.Size = int64(len([]byte(content)))
@@ -1029,17 +1147,30 @@ func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content
 		}
 		return model.Document{}, err
 	}
+	s.enqueueWikiSource(indexed)
 	return indexed, nil
 }
 
+// AddDocument 保存原始资料；仅在启用整理且第三方模型已配置时登记待整理版本。
 func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document) model.Document {
 	s.state.Mu.Lock()
 	kb := s.state.KnowledgeBases[knowledgeBaseID]
+	if kb.Wiki != nil && kb.Wiki.Enabled && document.Wiki == nil && len(document.SourceRevisions) > 0 && wikiAutoCompileReady(s.state.Config.Chat) {
+		// 文档与待整理版本在同一次保存中落盘，重启可以补齐尚未排队的来源。
+		kb = cloneKnowledgeBases(map[string]model.KnowledgeBase{knowledgeBaseID: kb})[knowledgeBaseID]
+		if kb.Wiki.PendingSources == nil {
+			kb.Wiki.PendingSources = map[string]string{}
+		}
+		kb.Wiki.PendingSources[document.ID] = document.ContentChecksum
+	}
 	kb.Documents = append([]model.Document{document}, kb.Documents...)
 	s.state.KnowledgeBases[knowledgeBaseID] = kb
 	s.state.Mu.Unlock()
 	if err := s.saveState(); err != nil {
 		log.Printf("failed to persist document state: %v", err)
+	}
+	if err := s.recordWikiSourceChange(document); err != nil {
+		log.Printf("wiki source pending update failed for %s: %v", document.ID, err)
 	}
 	return document
 }
@@ -1123,6 +1254,20 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 		}
 	}
 	kb.Documents = filtered
+	// 原始资料删除后，旧知识页和缓存不得继续被当作有效证据。
+	if kb.Wiki != nil {
+		delete(kb.Wiki.PendingSources, documentID)
+		for i := range kb.Documents {
+			if kb.Documents[i].Wiki == nil {
+				continue
+			}
+			for _, ref := range kb.Documents[i].Wiki.SourceRefs {
+				if ref.DocumentID == documentID {
+					kb.Documents[i].Wiki.Freshness = "missing-source"
+				}
+			}
+		}
+	}
 	s.state.KnowledgeBases[knowledgeBaseID] = kb
 	s.state.Mu.Unlock()
 
@@ -1151,6 +1296,14 @@ func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.D
 // RemoveDocumentFiles 清理文档原文件与 Markdown 归档，避免删除后残留孤儿文件。
 func RemoveDocumentFiles(document model.Document) error {
 	paths := []string{document.Path, document.MarkdownPath}
+	for _, version := range document.SourceRevisions {
+		paths = append(paths, version.SnapshotPath)
+	}
+	if document.Wiki != nil {
+		for _, version := range document.Wiki.History {
+			paths = append(paths, version.Path)
+		}
+	}
 	for _, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			continue
@@ -1171,7 +1324,14 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	chunks = deduplicateRetrievedChunks(chunks)
 	query := latestUserMessage(req.Messages)
 	contextText, sources := s.rag.BuildContext(chunks)
-	if s.contextCompressor != nil && chunksTotalChars(chunks) > 2000 {
+	// 带 Wiki 的上下文必须保留逐条原始引文，不能被通用摘要压缩丢失。
+	hasWiki := false
+	for _, chunk := range chunks {
+		if chunk.Kind == "wiki" {
+			hasWiki = true
+		}
+	}
+	if s.contextCompressor != nil && !hasWiki && chunksTotalChars(chunks) > 2000 {
 		compressed, err := s.contextCompressor.Compress(context.Background(), query, chunks)
 		if err == nil && strings.TrimSpace(compressed) != "" {
 			contextText = compressed
@@ -1199,7 +1359,18 @@ func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]Retrie
 		queryVector = vectors[0]
 	}
 
-	return s.retrieveRelevantChunks(req, queryVector)
+	chunks, err := s.retrieveRelevantChunks(req, queryVector)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterWikiChunks(chunks, true), nil
+}
+
+func (s *AppService) EmbedProbe(ctx context.Context, cfg model.EmbeddingModelConfig) ([][]float64, error) {
+	if s == nil || s.rag == nil {
+		return nil, fmt.Errorf("rag service unavailable")
+	}
+	return s.rag.EmbedTexts(ctx, cfg, []string{"ping"}, s.qdrantVectorSize())
 }
 
 func (s *AppService) CurrentEmbeddingConfig() model.EmbeddingModelConfig {
@@ -1224,6 +1395,9 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, 
 		for _, kb := range s.state.KnowledgeBases {
 			for _, document := range kb.Documents {
 				if document.ID == req.DocumentID {
+					if document.Wiki != nil && !wikiPageUsable(kb, document, document.Wiki.Revision) {
+						return "所选知识页尚未完成索引或来源已失效，不能作为回答证据。", nil, nil
+					}
 					return fmt.Sprintf("当前问答范围为文档《%s》，所属知识库为“%s”。文档摘要：%s", document.Name, kb.Name, document.ContentPreview), []map[string]string{{
 						"knowledgeBaseId": kb.ID,
 						"documentId":      document.ID,
@@ -1244,6 +1418,9 @@ func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, 
 
 		sources := make([]map[string]string, 0, len(kb.Documents))
 		for _, document := range kb.Documents {
+			if document.Wiki != nil && !wikiPageUsable(kb, document, document.Wiki.Revision) {
+				continue
+			}
 			sources = append(sources, map[string]string{
 				"knowledgeBaseId": kb.ID,
 				"documentId":      document.ID,
@@ -1517,6 +1694,157 @@ func (s *AppService) DeleteConversation(id string) error {
 	return s.chatHistory.DeleteConversation(id)
 }
 
+func (s *AppService) EditMessage(conversationID, messageID, content string) (*model.Conversation, error) {
+	conversation, err := s.requireConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil, fmt.Errorf("message content is required")
+	}
+	found := false
+	for index := range conversation.Messages {
+		if conversation.Messages[index].ID != messageID {
+			continue
+		}
+		conversation.Messages[index].Content = trimmed
+		found = true
+		break
+	}
+	if !found {
+		return nil, fmt.Errorf("message not found")
+	}
+	conversation.UpdatedAt = util.NowRFC3339()
+	if err := s.chatHistory.SaveConversation(*conversation); err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
+func (s *AppService) DeleteMessage(conversationID, messageID string) (*model.Conversation, error) {
+	conversation, err := s.requireConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	keep := make([]model.StoredChatMessage, 0, len(conversation.Messages))
+	removing := false
+	for _, message := range conversation.Messages {
+		if message.ID == messageID {
+			removing = true
+		}
+		if removing {
+			continue
+		}
+		keep = append(keep, message)
+	}
+	if !removing {
+		return nil, fmt.Errorf("message not found")
+	}
+	if len(keep) == 0 {
+		return nil, fmt.Errorf("conversation messages cannot be empty")
+	}
+	conversation.Messages = keep
+	conversation.UpdatedAt = util.NowRFC3339()
+	if err := s.chatHistory.SaveConversation(*conversation); err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
+func (s *AppService) TruncateConversationFromMessage(conversationID, messageID string) (*model.Conversation, error) {
+	conversation, err := s.requireConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	keep := make([]model.StoredChatMessage, 0, len(conversation.Messages))
+	found := false
+	for _, message := range conversation.Messages {
+		if message.ID == messageID {
+			found = true
+			break
+		}
+		keep = append(keep, message)
+	}
+	if !found {
+		return nil, fmt.Errorf("message not found")
+	}
+	if len(keep) == 0 {
+		return nil, fmt.Errorf("conversation messages cannot be empty")
+	}
+	conversation.Messages = keep
+	conversation.UpdatedAt = util.NowRFC3339()
+	if err := s.chatHistory.SaveConversation(*conversation); err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
+func (s *AppService) ExportConversationMarkdown(conversationID string) (string, string, error) {
+	conversation, err := s.requireConversation(conversationID)
+	if err != nil {
+		return "", "", err
+	}
+	var builder strings.Builder
+	title := strings.TrimSpace(conversation.Title)
+	if title == "" {
+		title = conversation.ID
+	}
+	builder.WriteString("# " + title + "\n\n")
+	for _, message := range conversation.Messages {
+		role := "助手"
+		if message.Role == "user" {
+			role = "用户"
+		}
+		builder.WriteString("## " + role + "\n\n")
+		builder.WriteString(strings.TrimSpace(message.Content) + "\n\n")
+	}
+	fileName := util.SanitizeFilename(title) + ".md"
+	return fileName, builder.String(), nil
+}
+
+func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return model.RetrievalDebugResponse{}, fmt.Errorf("query is required")
+	}
+	chunks, err := s.EvaluateRetrieve(model.ChatCompletionRequest{
+		Messages:        []model.ChatMessage{{Role: "user", Content: query}},
+		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
+		DocumentID:      strings.TrimSpace(req.DocumentID),
+	})
+	if err != nil {
+		return model.RetrievalDebugResponse{}, err
+	}
+	items := make([]model.RetrievalDebugChunk, 0, len(chunks))
+	for index, chunk := range chunks {
+		items = append(items, model.RetrievalDebugChunk{
+			DocumentID:   chunk.DocumentID,
+			DocumentName: chunk.DocumentName,
+			ChunkID:      chunk.ID,
+			Text:         chunk.Text,
+			Score:        chunk.Score,
+			Index:        index,
+		})
+	}
+	return model.RetrievalDebugResponse{
+		Query:  query,
+		Count:  len(items),
+		Chunks: items,
+	}, nil
+}
+
+func (s *AppService) requireConversation(id string) (*model.Conversation, error) {
+	conversation, err := s.GetConversation(id)
+	if err != nil {
+		return nil, err
+	}
+	if conversation == nil {
+		return nil, fmt.Errorf("conversation not found")
+	}
+	return conversation, nil
+}
+
 func (s *AppService) SetReranker(reranker SemanticReranker) {
 	s.reranker = reranker
 }
@@ -1568,6 +1896,9 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 			Vector:       vectors[index],
 			SparseVector: BuildSparseVector(chunk.Text),
 			Payload: map[string]any{
+				"document_kind":     chunk.Kind,
+				"wiki_revision":     chunk.WikiRevision,
+				"source_checksum":   chunk.SourceChecksum,
 				"knowledge_base_id": chunk.KnowledgeBaseID,
 				"document_id":       chunk.DocumentID,
 				"document_name":     chunk.DocumentName,
@@ -1964,6 +2295,9 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 			seenChunkIDs[chunkID] = struct{}{}
 			results = append(results, RetrievedChunk{
 				DocumentChunk: DocumentChunk{
+					Kind:            payloadString(item.Payload, "document_kind", "source"),
+					WikiRevision:    payloadInt(item.Payload, "wiki_revision"),
+					SourceChecksum:  payloadString(item.Payload, "source_checksum", ""),
 					ID:              chunkID,
 					KnowledgeBaseID: payloadString(item.Payload, "knowledge_base_id", knowledgeBaseID),
 					DocumentID:      payloadString(item.Payload, "document_id", ""),
@@ -1975,7 +2309,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 			})
 		}
 	}
-	return results, nil
+	return s.filterWikiChunks(results, false), nil
 }
 
 func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string) []RetrievedChunk {

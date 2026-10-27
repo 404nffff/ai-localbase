@@ -112,6 +112,9 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 	if err != nil {
 		return model.Document{}, err
 	}
+	if document.Wiki != nil {
+		return s.indexWikiPage(knowledgeBaseID, documentID)
+	}
 	if strings.TrimSpace(document.Path) == "" {
 		return model.Document{}, fmt.Errorf("document path is empty")
 	}
@@ -122,6 +125,15 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 			return model.Document{}, fmt.Errorf("extract document text: %w; persist reindex error: %v", err, persistErr)
 		}
 		return model.Document{}, fmt.Errorf("extract document text: %w", err)
+	}
+	// 手工重建同样接入来源版本，不能让磁盘变化绕过知识页失效。
+	document.ContentChecksum = hashDocumentContent(content)
+	document, err = s.snapshotWikiSource(document, content)
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := s.recordWikiSourceChange(document); err != nil {
+		return model.Document{}, err
 	}
 	markdownPath, err := s.writeMarkdownArchive(document, content)
 	if err != nil {
@@ -150,6 +162,7 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 		}
 		return model.Document{}, err
 	}
+	s.enqueueWikiSource(indexed)
 	return indexed, nil
 }
 
@@ -159,6 +172,7 @@ func (s *AppService) persistReindexError(document model.Document, indexErr error
 		return nil
 	}
 	document.IndexError = indexErr.Error()
+	document.IndexErrorCode = classifyIndexErrorCode(indexErr)
 	if pointsDeleted {
 		document.Status = "failed"
 		document.ChunkCount = 0

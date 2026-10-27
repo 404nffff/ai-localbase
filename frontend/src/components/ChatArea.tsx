@@ -21,6 +21,12 @@ interface ChatAreaProps {
   onSelectDocument: (documentId: string | null) => void
   onSendMessage: (content: string) => Promise<void>
   onClearConversation: () => void
+  onExportConversation: () => Promise<void>
+  onEditMessage: (messageId: string, content: string) => Promise<void>
+  onDeleteMessage: (messageId: string) => Promise<void>
+  onRegenerateMessage: (messageId: string) => Promise<void>
+  /** 沉淀时由应用层指定当前会话与知识库。 */
+  onCaptureMessage: (messageId: string) => Promise<string>
 }
 
 const ALL_KNOWLEDGE_BASES_VALUE = '__all_knowledge_bases__'
@@ -46,6 +52,11 @@ const ChatArea = ({
   onSelectDocument,
   onSendMessage,
   onClearConversation,
+  onExportConversation,
+  onEditMessage,
+  onDeleteMessage,
+  onRegenerateMessage,
+  onCaptureMessage,
 }: ChatAreaProps) => {
   const [inputValue, setInputValue] = useState('')
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -154,6 +165,16 @@ const ChatArea = ({
             </span>
             <button
               type="button"
+              className="chat-topbar-action-btn"
+              onClick={() => void onExportConversation()}
+              disabled={isLoading || !hasMessages}
+              title="导出会话"
+              aria-label="导出会话"
+            >
+              <AppIcon name="download" size={17} />
+            </button>
+            <button
+              type="button"
               className="chat-topbar-action-btn chat-topbar-clear-btn"
               onClick={onClearConversation}
               disabled={isLoading}
@@ -190,6 +211,10 @@ const ChatArea = ({
                 isStreamingPlaceholder={isStreamingPlaceholder}
                 copiedMessageId={copiedMessageId}
                 onCopyMessage={handleCopyMessage}
+                onEditMessage={onEditMessage}
+                onDeleteMessage={onDeleteMessage}
+                onRegenerateMessage={onRegenerateMessage}
+                onCaptureMessage={!isLoading && selectedKnowledgeBase ? onCaptureMessage : undefined}
               />
             )
           })

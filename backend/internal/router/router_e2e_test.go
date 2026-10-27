@@ -51,6 +51,175 @@ type chatTestResponse struct {
 	} `json:"choices"`
 }
 
+func TestRouterLivenessAndJSONBodyLimit(t *testing.T) {
+	engine, _, cleanup := newTestRouter(t)
+	defer cleanup()
+
+	live := performRequest(t, engine, http.MethodGet, "/livez", nil, "")
+	if live.Code != http.StatusOK {
+		t.Fatalf("expected livez 200, got %d body=%s", live.Code, live.Body.String())
+	}
+	ready := performRequest(t, engine, http.MethodGet, "/readyz", nil, "")
+	if ready.Code != http.StatusOK {
+		t.Fatalf("expected readyz 200, got %d body=%s", ready.Code, ready.Body.String())
+	}
+
+	oversized := bytes.Repeat([]byte("a"), int(defaultJSONBodyLimit)+32)
+	resp := performRequest(t, engine, http.MethodPost, "/api/config/test-chat-model", bytes.NewReader(oversized), "application/json")
+	if resp.Code != http.StatusRequestEntityTooLarge && resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected oversized JSON to be rejected, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestWikiHTTPAndMCPWorkflow 通过真实 HTTP/MCP 接口验证整理、来源、体检和导出闭环。
+func TestWikiHTTPAndMCPWorkflow(t *testing.T) {
+	engine, app, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	defer cleanup()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req model.ChatCompletionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var input struct {
+			RelatedPages []struct {
+				PageID       string `json:"pageId"`
+				BaseRevision int    `json:"baseRevision"`
+			} `json:"relatedPages"`
+			Sources []struct {
+				DocumentID string `json:"documentId"`
+				Checksum   string `json:"checksum"`
+				Content    string `json:"content"`
+			} `json:"sources"`
+		}
+		_ = json.Unmarshal([]byte(req.Messages[len(req.Messages)-1].Content), &input)
+		if len(input.Sources) != 1 {
+			t.Error("missing source")
+			w.WriteHeader(400)
+			return
+		}
+		source := input.Sources[0]
+		plan := model.WikiPlan{Pages: []model.WikiPageChange{{Title: "退款期限", PageType: "topic", Markdown: source.Content, SourceRefs: []model.WikiSourceRef{{DocumentID: source.DocumentID, Checksum: source.Checksum, Quote: source.Content}}}}}
+		if len(input.RelatedPages) > 0 {
+			plan.Pages[0].PageID = input.RelatedPages[0].PageID
+			plan.Pages[0].BaseRevision = input.RelatedPages[0].BaseRevision
+		}
+		body, _ := json.Marshal(plan)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(body), "role": "assistant"}}}})
+	}))
+	defer modelServer.Close()
+	cfg := app.GetConfig()
+	cfg.Chat = model.ChatConfig{Provider: "openai-compatible", BaseURL: modelServer.URL, Model: "wiki-test"}
+	if _, err := app.UpdateConfig(model.ConfigUpdateRequest{Chat: cfg.Chat, Embedding: cfg.Embedding}); err != nil {
+		t.Fatal(err)
+	}
+	id := app.ListKnowledgeBases()[0].ID
+	root := "/api/knowledge-bases/" + id + "/wiki"
+	if response := performRequest(t, engine, http.MethodGet, root, nil, ""); response.Code != 200 || !strings.Contains(response.Body.String(), `"enabled":true`) || !strings.Contains(response.Body.String(), `"autoCompileReady":true`) {
+		t.Fatalf("default enabled: %d %s", response.Code, response.Body)
+	}
+	path := filepath.Join(t.TempDir(), "refund.md")
+	if err := os.WriteFile(path, []byte("退款期限为七天。"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app.AddDocument(id, model.Document{ID: "wiki-source", KnowledgeBaseID: id, Name: "退款规则", Path: path})
+	request, _ := json.Marshal(map[string]any{"arguments": map[string]any{"knowledgeBaseId": id, "documentIds": []string{"wiki-source"}, "requestKey": "e2e"}})
+	response := performRequest(t, engine, http.MethodPost, "/api/mcp/tools/wiki.ingest/call", bytes.NewReader(request), "application/json")
+	if response.Code != 200 {
+		t.Fatalf("MCP: %d %s", response.Code, response.Body)
+	}
+	var envelope struct {
+		StructuredContent struct {
+			Job model.WikiJob `json:"job"`
+		} `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	job := envelope.StructuredContent.Job
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, _ = app.GetWikiJob(id, job.ID)
+		if job.Status != "queued" && job.Status != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if job.Status != "succeeded" || len(job.ChangedPageIDs) != 1 {
+		t.Fatalf("job: %+v", job)
+	}
+	pageID := job.ChangedPageIDs[0]
+	response = performRequest(t, engine, http.MethodGet, root+"/pages/"+pageID, nil, "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "退款期限为七天") || strings.Contains(response.Body.String(), path) {
+		t.Fatalf("page: %d %s", response.Code, response.Body)
+	}
+	checksum := job.SourceVersions["wiki-source"]
+	response = performRequest(t, engine, http.MethodGet, root+"/sources/wiki-source/revisions/"+checksum+"?limit=2", nil, "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"nextOffset":2`) {
+		t.Fatalf("source: %d %s", response.Code, response.Body)
+	}
+	for _, target := range []string{root + "/pages?cursor=bad", root + "/pages?freshness=unknown", root + "/pages/" + pageID + "?limit=-1"} {
+		if result := performRequest(t, engine, http.MethodGet, target, nil, ""); result.Code != 400 {
+			t.Fatalf("invalid input accepted: %s %d", target, result.Code)
+		}
+	}
+	response = performRequest(t, engine, http.MethodGet, root+"/export", nil, "")
+	if response.Code != 200 || len(readZipEntries(t, response.Body.Bytes())) != 3 {
+		t.Fatalf("export: %d", response.Code)
+	}
+	// 网页与 MCP 上传都沿用默认开关，无需额外调用 wiki.configure。
+	for _, channel := range []string{"web", "mcp"} {
+		var uploaded *httptest.ResponseRecorder
+		if channel == "web" {
+			uploaded = performMultipartUpload(t, engine, http.MethodPost, "/api/knowledge-bases/"+id+"/documents", "web.md", "网页退款期限为十天。")
+		} else {
+			uploaded = performJSONRequest(t, engine, http.MethodPost, "/api/mcp/tools/document.upload/call", map[string]any{"arguments": map[string]any{"knowledgeBaseId": id, "filename": "mcp.md", "content": "MCP退款期限为十四天。"}})
+		}
+		if uploaded.Code < 200 || uploaded.Code >= 300 || strings.Contains(uploaded.Body.String(), `"isError":true`) {
+			t.Fatalf("%s upload: %d %s", channel, uploaded.Code, uploaded.Body)
+		}
+		kb, _ := app.WikiSnapshot(id)
+		autoJob := kb.Wiki.Jobs[len(kb.Wiki.Jobs)-1]
+		if !strings.HasPrefix(autoJob.RequestKey, "source:") {
+			t.Fatalf("%s did not queue automatically: %+v", channel, autoJob)
+		}
+		deadline = time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			autoJob, _ = app.GetWikiJob(id, autoJob.ID)
+			if autoJob.Status != "queued" && autoJob.Status != "running" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if autoJob.Status != "succeeded" {
+			t.Fatalf("%s auto compilation: %+v", channel, autoJob)
+		}
+	}
+	response = performRequest(t, engine, http.MethodPut, root, strings.NewReader(`null`), "application/json")
+	if response.Code != 400 {
+		t.Fatalf("null body: %d", response.Code)
+	}
+	response = performRequest(t, engine, http.MethodPut, root, strings.NewReader(`{"enabled":false}`), "application/json")
+	if response.Code != 200 {
+		t.Fatal(response.Body)
+	}
+	response = performRequest(t, engine, http.MethodPost, root+"/jobs", strings.NewReader(`{"kind":"ingest","documentIds":["wiki-source"],"requestKey":"disabled"}`), "application/json")
+	if response.Code != 409 {
+		t.Fatalf("disabled: %d %s", response.Code, response.Body)
+	}
+	// 浏览器验收显式启用本地夹具；普通测试不监听端口或等待人工。
+	if os.Getenv("WIKI_BROWSER_CHECK") == "1" {
+		_, err := app.SaveConversation(model.SaveConversationRequest{ID: "wiki-chat", Title: "退款知识验证", KnowledgeBaseID: id, Messages: []model.StoredChatMessage{{ID: "wiki-answer", Role: "assistant", Content: "退款期限为七天。", Metadata: map[string]any{"sources": []map[string]string{{"knowledgeBaseId": id, "documentId": "wiki-source", "documentName": "退款规则", "sourceChecksum": checksum, "quote": "退款期限为七天。", "pageId": pageID, "wikiRevision": "1", "kind": "source"}}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := &http.Server{Addr: "127.0.0.1:18080", Handler: engine, ReadHeaderTimeout: 5 * time.Second}
+		engine.HandleFunc("/__stop", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); go server.Close() })
+		t.Log("本地浏览器夹具：http://127.0.0.1:18080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestRouterConfigEndpoints(t *testing.T) {
 	engine, _, cleanup := newTestRouter(t)
 	defer cleanup()
@@ -1122,8 +1291,8 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 	if rpcResp.JSONRPC != "2.0" {
 		t.Fatalf("expected jsonrpc version 2.0, got %q", rpcResp.JSONRPC)
 	}
-	if len(rpcResp.Result.Tools) != 15 {
-		t.Fatalf("expected 15 tools, got %d", len(rpcResp.Result.Tools))
+	if len(rpcResp.Result.Tools) != 27 {
+		t.Fatalf("expected 27 tools, got %d", len(rpcResp.Result.Tools))
 	}
 	if rpcResp.Result.Tools[0].Name != "chat.ask" {
 		t.Fatalf("expected first tool chat.ask, got %q", rpcResp.Result.Tools[0].Name)
@@ -1157,6 +1326,8 @@ func TestMCPToolsListReturnsExpectedTools(t *testing.T) {
 		"knowledge_base.health",
 		"conversation.list",
 		"conversation.get",
+		"wiki.get", "wiki.configure", "wiki.ingest", "wiki.lint", "wiki.job.get", "wiki.job.retry",
+		"wiki.page.list", "wiki.page.get", "wiki.source.get", "wiki.capture", "wiki.issue.list", "wiki.issue.update",
 	}
 	for index, name := range additionalTools {
 		if rpcResp.Result.Tools[index+8].Name != name {
@@ -2357,7 +2528,7 @@ func newTestRouterWithAccessTokenAndService(t *testing.T, accessToken string) (*
 	appHandler := handler.NewAppHandler(serverConfig, appService, service.NewLLMService())
 	mcpService := service.NewMCPService(appService, service.NewLLMService())
 	mcpHandler := handler.NewMCPHandler(mcpService)
-	ginEngine := NewRouter(appHandler, mcpHandler, serverConfig.AccessToken)
+	ginEngine := NewRouter(appHandler, mcpHandler, serverConfig)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ginEngine)
@@ -2836,4 +3007,23 @@ func mustFindManifestReason(t *testing.T, documents []map[string]any, expectedDo
 
 	t.Fatalf("expected manifest to include reason for document id=%q name=%q, got %#v", expectedDocumentID, expectedDocumentName, documents)
 	return ""
+}
+
+// TestWikiUploadsWithoutThirdParty 验证默认开关不使无第三方模型的网页与 MCP 上传失败。
+func TestWikiUploadsWithoutThirdParty(t *testing.T) {
+	engine, app, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	defer cleanup()
+	id := app.ListKnowledgeBases()[0].ID
+	web := performMultipartUpload(t, engine, http.MethodPost, "/api/knowledge-bases/"+id+"/documents", "web.md", "网页上传的资料应正常入库。")
+	mcp := performJSONRequest(t, engine, http.MethodPost, "/api/mcp/tools/document.upload/call", map[string]any{"arguments": map[string]any{"knowledgeBaseId": id, "filename": "mcp.md", "content": "MCP上传的资料应正常入库。"}})
+	for _, response := range []*httptest.ResponseRecorder{web, mcp} {
+		if response.Code < 200 || response.Code >= 300 || strings.Contains(response.Body.String(), `"isError":true`) {
+			t.Fatalf("upload: %d %s", response.Code, response.Body)
+		}
+	}
+	kb, err := app.WikiSnapshot(id)
+	view, _ := app.WikiOverview(id)
+	if err != nil || !kb.Wiki.Enabled || len(kb.Documents) != 2 || len(kb.Wiki.Jobs) != 0 || len(kb.Wiki.PendingSources) != 0 || view["autoCompileReady"] != false {
+		t.Fatalf("unexpected automatic work: %+v %v", view, err)
+	}
 }

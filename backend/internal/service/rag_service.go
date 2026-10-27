@@ -128,6 +128,11 @@ func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversati
 }
 
 type DocumentChunk struct {
+	// 版本字段用于排除旧 Wiki 索引；原文引文供回答沉淀时重新核对。
+	Kind            string
+	WikiRevision    int
+	SourceChecksum  string
+	SourceRefs      []model.WikiSourceRef
 	ID              string
 	KnowledgeBaseID string
 	DocumentID      string
@@ -210,10 +215,15 @@ func (s *RagService) ChunkText(text string) []string {
 }
 
 func (s *RagService) BuildDocumentChunks(document model.Document, text string) []DocumentChunk {
+	revision := 0
+	if document.Wiki != nil {
+		revision = document.Wiki.Revision
+	}
 	parts := s.ChunkText(text)
 	chunks := make([]DocumentChunk, 0, len(parts))
 	for index, part := range parts {
 		chunks = append(chunks, DocumentChunk{
+			Kind: document.Kind, WikiRevision: revision, SourceChecksum: document.ContentChecksum,
 			ID:              fmt.Sprintf("%s-chunk-%d", document.ID, index),
 			KnowledgeBaseID: document.KnowledgeBaseID,
 			DocumentID:      document.ID,
@@ -306,7 +316,18 @@ func (s *RagService) BuildContext(chunks []RetrievedChunk) (string, []map[string
 			"documentName":    chunk.DocumentName,
 			"chunkId":         chunk.ID,
 			"score":           fmt.Sprintf("%.4f", chunk.Score),
+			"kind":            chunk.Kind,
+			"sourceChecksum":  chunk.SourceChecksum,
+			"quote":           chunk.Text,
 		})
+		if chunk.Kind == "wiki" {
+			source := sources[len(sources)-1]
+			source["pageId"], source["wikiRevision"] = chunk.DocumentID, fmt.Sprint(chunk.WikiRevision)
+			for _, ref := range chunk.SourceRefs {
+				lines = append(lines, fmt.Sprintf("[原始证据 %s] %s", ref.DocumentID, ref.Quote))
+				sources = append(sources, map[string]string{"knowledgeBaseId": chunk.KnowledgeBaseID, "documentId": ref.DocumentID, "sourceChecksum": ref.Checksum, "quote": ref.Quote, "anchor": ref.Anchor, "pageId": chunk.DocumentID, "wikiRevision": fmt.Sprint(chunk.WikiRevision), "kind": "source"})
+			}
+		}
 	}
 
 	return strings.Join(lines, "\n\n"), sources

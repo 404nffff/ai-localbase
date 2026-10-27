@@ -232,6 +232,32 @@ cp .env.example .env
 8. **已有文档按需维护**：过程记录优先 `append`；需要整篇替换时用 `update`；废弃文档用 `delete`
 9. **收尾时再统一整理**：过程里先保持增量沉淀，阶段收尾再做集中整理和归档
 
+## 知识页维护（LLM Wiki）
+
+服务端提供 `wiki.*` 工具后，通过已有 `call` 入口使用；先执行 `tools` 确认部署版本，不假定旧服务已经支持。所有操作显式传入当前主库真实 `knowledgeBaseId`，写入仍遵循会话授权。
+
+```bash
+./ai-localbase.sh call wiki.get '{"knowledgeBaseId":"kb-1"}'
+./ai-localbase.sh call wiki.configure '{"knowledgeBaseId":"kb-1","enabled":true}'
+./ai-localbase.sh call wiki.ingest '{"knowledgeBaseId":"kb-1","documentIds":["doc-1"],"requestKey":"ingest-doc-1-v1"}'
+./ai-localbase.sh call wiki.job.get '{"knowledgeBaseId":"kb-1","jobId":"wiki-job-1"}'
+./ai-localbase.sh call wiki.page.list '{"knowledgeBaseId":"kb-1","limit":20}'
+./ai-localbase.sh call wiki.page.get '{"knowledgeBaseId":"kb-1","pageId":"wiki-1","offset":0,"limit":20000}'
+./ai-localbase.sh call wiki.source.get '{"knowledgeBaseId":"kb-1","documentId":"doc-1","checksum":"从页面 sourceRefs 读取","offset":0}'
+./ai-localbase.sh call wiki.capture '{"knowledgeBaseId":"kb-1","conversationId":"conv-1","messageId":"msg-1","requestKey":"capture-msg-1"}'
+./ai-localbase.sh call wiki.lint '{"knowledgeBaseId":"kb-1","semantic":true,"requestKey":"lint-review-1"}'
+./ai-localbase.sh call wiki.issue.list '{"knowledgeBaseId":"kb-1","status":"open"}'
+./ai-localbase.sh call wiki.issue.update '{"knowledgeBaseId":"kb-1","issueId":"从列表读取","status":"resolved","reason":"已按原始资料核对并修订"}'
+```
+
+- 默认关闭；启用只处理后续新增/更新资料，历史资料按选择整理，每次最多 20 份。
+- 整理、回答沉淀和语义体检直接复用项目设置中的聊天模型，不接收独立模型连接或凭证参数。
+- 相同资料版本复用任务。失败后先核对错误，可调用 `wiki.job.retry`，最多三次执行；来源版本改变需新建任务。索引失败仅重试索引，不再次生成页面。
+- `wiki.page.get` / `wiki.source.get` 按 Unicode 码点分页，依据 `nextOffset` 继续读取，零表示完成；列表依据 `nextCursor` 翻页。
+- 过期、来源删除、索引未完成的页面不进入默认问答。无证据回答只能形成待核实页。
+- 体检 `partial` / `semanticStatus=unavailable` 表示覆盖不足，不能宣称全库健康。问题处理必须填写理由。
+- 知识页 ZIP 可在前端导出，或通过既有鉴权的 `GET /api/knowledge-bases/:id/wiki/export` 获取，不默认导出全部原始资料。
+
 ## 常见问题
 
 | 问题 | 原因与解决 |

@@ -5,10 +5,13 @@ import "sync"
 type ServerConfig struct {
 	Port                     string
 	UploadDir                string
+	StagingDir               string
 	StateFile                string
 	ChatHistoryFile          string
 	OperationLogFile         string
 	AccessToken              string
+	CORSAllowedOrigins       string
+	MaxUploadBytes           int64
 	QdrantURL                string
 	QdrantAPIKey             string
 	QdrantCollectionPrefix   string
@@ -63,6 +66,8 @@ type KnowledgeBase struct {
 	Description string     `json:"description"`
 	Documents   []Document `json:"documents"`
 	CreatedAt   string     `json:"createdAt"`
+	// Wiki 为可选知识维护状态，历史库缺省关闭。
+	Wiki *WikiState `json:"wiki,omitempty"`
 }
 
 type KnowledgeBaseInput struct {
@@ -84,6 +89,136 @@ type Document struct {
 	ChunkCount      int    `json:"chunkCount,omitempty"`
 	IndexedAt       string `json:"indexedAt,omitempty"`
 	IndexError      string `json:"indexError,omitempty"`
+	IndexErrorCode  string `json:"indexErrorCode,omitempty"`
+	ContentChecksum string `json:"contentChecksum,omitempty"`
+	// Kind 缺省为原始资料；wiki 文档通过版本发布维护。
+	Kind            string            `json:"kind,omitempty"`
+	SourceRevisions []SourceRevision  `json:"sourceRevisions,omitempty"`
+	Wiki            *WikiPageMetadata `json:"wiki,omitempty"`
+}
+
+// SourceRevision 保存原始资料的只读正文版本，不包含连接配置。
+type SourceRevision struct {
+	Checksum     string `json:"checksum"`
+	SnapshotPath string `json:"snapshotPath,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+// WikiSourceRef 将页面结论定位到原始资料版本和可核实引文。
+type WikiSourceRef struct {
+	DocumentID string `json:"documentId"`
+	// Checksum 基于提取后的完整正文；Quote 必须是该版本中的连续原文。
+	Checksum string `json:"checksum"`
+	// Anchor 可选，仅用于定位提示，不代替引文校验。
+	Anchor string `json:"anchor,omitempty"`
+	Quote  string `json:"quote"`
+}
+
+// WikiRevision 记录已发布页面历史；正文保存在独立 Markdown 文件。
+type WikiRevision struct {
+	Revision   int             `json:"revision"`
+	Path       string          `json:"path"`
+	Title      string          `json:"title"`
+	SourceRefs []WikiSourceRef `json:"sourceRefs"`
+	Links      []string        `json:"links"`
+	CreatedAt  string          `json:"createdAt"`
+}
+
+// WikiPageMetadata 保存知识页身份、证据、修订和索引可用性。
+type WikiPageMetadata struct {
+	PageID string `json:"pageId"`
+	Slug   string `json:"slug"`
+	// PageType 为 topic、decision、source-summary 或 question；无来源只允许 question。
+	PageType string   `json:"pageType"`
+	Aliases  []string `json:"aliases"`
+	Revision int      `json:"revision"`
+	// IndexedRevision 等于 Revision 才表示当前正文完成索引，零表示尚未索引。
+	IndexedRevision int             `json:"indexedRevision"`
+	SourceRefs      []WikiSourceRef `json:"sourceRefs"`
+	Links           []string        `json:"links"`
+	// Freshness 为 fresh、stale 或 missing-source；最后两者不能作为默认问答证据。
+	Freshness string         `json:"freshness"`
+	UpdatedAt string         `json:"updatedAt"`
+	History   []WikiRevision `json:"history"`
+}
+
+// WikiState 是库内可恢复维护状态，凭证只从运行配置读取。
+type WikiState struct {
+	Enabled      bool        `json:"enabled"`
+	RulesVersion string      `json:"rulesVersion"`
+	Jobs         []WikiJob   `json:"jobs"`
+	Issues       []WikiIssue `json:"issues"`
+	// PendingSources 将原始资料 ID 映射到待整理正文校验和，用于恢复入库后的排队缺口。
+	PendingSources map[string]string `json:"pendingSources"`
+}
+
+// WikiJob 记录持久任务输入和阶段；发布后的重试只补索引。
+type WikiJob struct {
+	ID              string `json:"id"`
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	Kind            string `json:"kind"`
+	// RequestKey 标识客户端动作；InputFingerprint 标识同库、同版本及规则下的整理输入。
+	RequestKey       string   `json:"requestKey"`
+	InputFingerprint string   `json:"inputFingerprint"`
+	DocumentIDs      []string `json:"documentIds"`
+	// SourceVersions 固定来源校验和；BaseRevisions 在实际读取页面时刷新，发布时复核。
+	SourceVersions map[string]string `json:"sourceVersions"`
+	BaseRevisions  map[string]int    `json:"baseRevisions"`
+	// Status 表示 queued/running/succeeded/failed/needs_split/canceled/partial。
+	Status string `json:"status"`
+	Stage  string `json:"stage"`
+	// Attempt 最多三次显式执行；ModelCalls 为累计实际模型请求数，上限 32。
+	Attempt           int `json:"attempt"`
+	ModelCalls        int `json:"modelCalls"`
+	TotalSegments     int `json:"totalSegments"`
+	ProcessedSegments int `json:"processedSegments"`
+	// Extracts 保留已成功提取的分段事实，失败重试不重复处理已完成分段。
+	Extracts       map[string]string `json:"extracts,omitempty"`
+	ChangedPageIDs []string          `json:"changedPageIds"`
+	Error          string            `json:"error,omitempty"`
+	Semantic       bool              `json:"semantic"`
+	// CheckedPages/TotalPages 描述本次读取覆盖；SemanticStatus 不得把部分结果表示为全库完成。
+	CheckedPages   int    `json:"checkedPages"`
+	TotalPages     int    `json:"totalPages"`
+	SemanticStatus string `json:"semanticStatus,omitempty"`
+	CaptureText    string `json:"captureText,omitempty"`
+	// TargetPageID 非空表示将保存回答沉淀到指定知识页；空值由整理计划决定页面。
+	TargetPageID string `json:"targetPageId,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+// WikiIssue 保存内容问题与处理理由；疑似矛盾不是事实裁决。
+type WikiIssue struct {
+	// EvidenceFingerprint 包含相关页面和库内来源版本，同证据保留人工处理状态。
+	EvidenceFingerprint string          `json:"evidenceFingerprint"`
+	ID                  string          `json:"id"`
+	Type                string          `json:"type"`
+	PageIDs             []string        `json:"pageIds"`
+	SourceRefs          []WikiSourceRef `json:"sourceRefs"`
+	Severity            string          `json:"severity"`
+	Status              string          `json:"status"`
+	Reason              string          `json:"reason"`
+}
+
+// WikiPageChange 是模型提出的页面更新，发布前核对来源和版本。
+type WikiPageChange struct {
+	PageID string `json:"pageId"`
+	// Key 是同批新页面互链的临时标识，发布时统一解析为服务端分配的 PageID。
+	Key          string          `json:"key,omitempty"`
+	PageType     string          `json:"pageType"`
+	Title        string          `json:"title"`
+	Aliases      []string        `json:"aliases"`
+	BaseRevision int             `json:"baseRevision"`
+	Markdown     string          `json:"markdown"`
+	SourceRefs   []WikiSourceRef `json:"sourceRefs"`
+	Links        []string        `json:"links"`
+}
+
+// WikiPlan 是一次完整发布的页面与问题集合。
+type WikiPlan struct {
+	Pages  []WikiPageChange `json:"pages"`
+	Issues []WikiIssue      `json:"issues"`
 }
 
 // DocumentChunkPreview 描述文档详情页可展示的单个分块，正文已由服务层限长。
@@ -249,6 +384,20 @@ type ChatCompletionRequest struct {
 	DocumentID      string               `json:"documentId"`
 	Config          ChatModelConfig      `json:"config"`
 	Embedding       EmbeddingModelConfig `json:"embedding"`
+	// SingleAttempt 仅供内部 Wiki 预算控制，外部请求不能覆盖模型重试策略。
+	SingleAttempt bool `json:"-"`
+}
+
+// WikiJobRequest 定义整理、体检和沉淀的业务输入，不允许传入模型连接。
+type WikiJobRequest struct {
+	// ExpectedVersions 仅供保存回答的证据校验使用，不接受客户端覆盖。
+	ExpectedVersions map[string]string `json:"-"`
+	Kind             string            `json:"kind"`
+	DocumentIDs      []string          `json:"documentIds"`
+	RequestKey       string            `json:"requestKey"`
+	Semantic         bool              `json:"semantic"`
+	CaptureText      string            `json:"-"`
+	TargetPageID     string            `json:"targetPageId,omitempty"`
 }
 
 type ChatCompletionChoice struct {
@@ -308,4 +457,94 @@ type SaveConversationRequest struct {
 
 type APIError struct {
 	Error string `json:"error"`
+}
+
+type TestChatModelRequest struct {
+	Provider    string  `json:"provider"`
+	BaseURL     string  `json:"baseUrl"`
+	Model       string  `json:"model"`
+	APIKey      string  `json:"apiKey"`
+	Temperature float64 `json:"temperature"`
+}
+
+type TestEmbeddingModelRequest struct {
+	Provider string `json:"provider"`
+	BaseURL  string `json:"baseUrl"`
+	Model    string `json:"model"`
+	APIKey   string `json:"apiKey"`
+}
+
+type TestModelResponse struct {
+	Success      bool   `json:"success"`
+	LatencyMs    int64  `json:"latencyMs,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	VectorSize   int    `json:"vectorSize,omitempty"`
+	ModelInfo    string `json:"modelInfo,omitempty"`
+}
+
+type EditMessageRequest struct {
+	Content string `json:"content"`
+}
+
+type RetrievalDebugRequest struct {
+	Query           string `json:"query"`
+	KnowledgeBaseID string `json:"knowledgeBaseId,omitempty"`
+	DocumentID      string `json:"documentId,omitempty"`
+}
+
+type RetrievalDebugChunk struct {
+	DocumentID   string  `json:"documentId"`
+	DocumentName string  `json:"documentName"`
+	ChunkID      string  `json:"chunkId"`
+	Text         string  `json:"text"`
+	Score        float64 `json:"score"`
+	Index        int     `json:"index"`
+}
+
+type RetrievalDebugResponse struct {
+	Query  string                `json:"query"`
+	Count  int                   `json:"count"`
+	Chunks []RetrievalDebugChunk `json:"chunks"`
+}
+
+type StagedUpload struct {
+	ID        string `json:"id"`
+	FileName  string `json:"fileName"`
+	Size      int64  `json:"size"`
+	SizeLabel string `json:"sizeLabel"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type StageUploadResponse struct {
+	Message  string       `json:"message"`
+	UploadID string       `json:"uploadId"`
+	Staged   StagedUpload `json:"staged"`
+}
+
+type BatchIndexRequest struct {
+	UploadIDs []string `json:"uploadIds"`
+	Async     bool     `json:"async"`
+}
+
+type IndexJobItem struct {
+	UploadID   string `json:"uploadId"`
+	FileName   string `json:"fileName"`
+	DocumentID string `json:"documentId,omitempty"`
+	Success    bool   `json:"success"`
+	ErrorCode  string `json:"errorCode,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+type IndexJob struct {
+	ID              string         `json:"id"`
+	KnowledgeBaseID string         `json:"knowledgeBaseId"`
+	Status          string         `json:"status"`
+	Total           int            `json:"total"`
+	Completed       int            `json:"completed"`
+	Failed          int            `json:"failed"`
+	CurrentFileName string         `json:"currentFileName,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Items           []IndexJobItem `json:"items,omitempty"`
+	CreatedAt       string         `json:"createdAt"`
+	UpdatedAt       string         `json:"updatedAt"`
 }

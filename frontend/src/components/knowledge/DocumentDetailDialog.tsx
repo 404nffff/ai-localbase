@@ -8,6 +8,9 @@ interface DocumentDetailDialogProps {
   detail: DocumentDetailResponse | null
   error: string | null
   loading: boolean
+  reindexing: boolean
+  reindexMessage?: string | null
+  onReindex: () => void
   onClose: () => void
 }
 
@@ -16,6 +19,9 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
   detail,
   error,
   loading,
+  reindexing,
+  reindexMessage,
+  onReindex,
   onClose,
 }) => {
   if (!loading && !error && !detail) return null
@@ -35,14 +41,33 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
             <span>文档详情</span>
             <h3>{detail?.document.name ?? '正在加载'}</h3>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭文档详情">
-            <KnowledgeIcon name="x" size={18} />
-          </button>
+          <div className="document-detail-header-actions">
+            {detail && (
+              <button
+                type="button"
+                className="kb-doc-reindex"
+                disabled={reindexing || loading}
+                onClick={() => onReindex()}
+                title="使用现有源文件重建索引"
+              >
+                {reindexing ? '重建中' : '重建索引'}
+              </button>
+            )}
+            <button type="button" onClick={onClose} aria-label="关闭文档详情">
+              <KnowledgeIcon name="x" size={18} />
+            </button>
+          </div>
         </header>
 
         <div className="document-detail-body">
           {loading && <div className="document-detail-state">正在读取文档详情…</div>}
           {error && <div className="document-detail-state document-detail-state--error">{error}</div>}
+
+          {reindexMessage && (
+            <div className={`document-detail-state${reindexMessage.includes('失败') ? ' document-detail-state--error' : ''}`}>
+              {reindexMessage}
+            </div>
+          )}
 
           {detail && !loading && (
             <>

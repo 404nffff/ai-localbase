@@ -4,11 +4,39 @@ import type { AccessTokenGateFeedback } from './components/AccessTokenGate'
 import ChatArea from './components/ChatArea'
 import Sidebar from './components/Sidebar'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  apiFetch,
+  cancelIndexJob,
+  deleteConversationMessage,
+  editConversationMessage,
+  exportConversationMarkdown,
+  extractErrorMessage,
+  fetchDocumentDetail,
+  fetchKnowledgeBaseHealth,
+  getIndexJob,
+  regenerateConversationMessage,
+  reindexKnowledgeBaseDocument,
+  setApiAccessToken,
+  stageUpload,
+  startBatchIndex,
+  wikiRequest,
+  UNAUTHORIZED_ERROR_MESSAGE,
+} from './services/api'
 
 export interface ChatMessageMetadata {
   degraded?: boolean
   fallbackStrategy?: string
   upstreamError?: string
+  sources?: Array<{
+    pageId?: string
+    wikiRevision?: string
+    sourceChecksum?: string
+    quote?: string
+    kind?: string
+    knowledgeBaseId?: string
+    documentId?: string
+    documentName: string
+  }>
 }
 
 export interface ChatMessage {
@@ -30,6 +58,8 @@ export interface Conversation {
 }
 
 export interface DocumentItem {
+  /** 缺省为原始资料，知识页从独立入口维护。 */
+  kind?: 'source' | 'wiki'
   id: string
   name: string
   size: number
@@ -175,10 +205,6 @@ interface ChatRequestBody {
   }>
 }
 
-interface ApiErrorResponse {
-  error?: string
-}
-
 interface StreamEventPayload {
   content?: string
   error?: string
@@ -190,19 +216,18 @@ interface HealthResponse {
   auth_required?: boolean
 }
 
-const API_BASE_PATH = ''
 const AI_CONFIG_STORAGE_KEY = 'ai-localbase:app-config'
 const APP_ACCESS_TOKEN_STORAGE_KEY = 'ai-localbase:access-token'
 const STREAM_FIRST_CHUNK_TIMEOUT_MS = 60000
 const STREAM_REQUEST_TIMEOUT_MS = 150000
 const FALLBACK_REQUEST_TIMEOUT_MS = 90000
-const UNAUTHORIZED_ERROR_MESSAGE = 'unauthorized'
 
 const createId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
 interface BackendDocumentItem {
   id: string
+  kind?: 'source' | 'wiki'
   name: string
   size?: number
   sizeLabel: string
@@ -384,6 +409,8 @@ const getFileExtension = (fileName: string) => {
 
 const normalizeDocument = (document: BackendDocumentItem): DocumentItem => ({
   id: document.id,
+  // 保留派生页面类型，避免资料列表与整理来源选择混入知识页。
+  kind: document.kind,
   name: document.name,
   size: document.size ?? 0,
   sizeLabel: document.sizeLabel,
@@ -450,15 +477,6 @@ const createWelcomeConversation = (scope?: {
         timestamp: now,
       },
     ],
-  }
-}
-
-const extractErrorMessage = async (response: Response) => {
-  try {
-    const errorBody = (await response.json()) as ApiErrorResponse
-    return errorBody.error || '请求失败'
-  } catch {
-    return '请求失败'
   }
 }
 
@@ -598,24 +616,6 @@ function App() {
   const [accessGateFeedback, setAccessGateFeedback] = useState<AccessTokenGateFeedback | null>(null)
   const [isAccessGateSubmitting, setIsAccessGateSubmitting] = useState(false)
   const [isEntryReady, setIsEntryReady] = useState(false)
-
-  const buildRequestHeaders = (headers?: HeadersInit, accessTokenOverride?: string) => {
-    const nextHeaders = new Headers(headers)
-    const normalizedAccessToken = (accessTokenOverride ?? accessToken).trim()
-    if (normalizedAccessToken) {
-      // 应用访问令牌独立于模型 API Key，只用于访问当前后端。
-      nextHeaders.set('Authorization', `Bearer ${normalizedAccessToken}`)
-    }
-    return nextHeaders
-  }
-
-  const apiFetch = (path: string, init: RequestInit = {}, accessTokenOverride?: string) => {
-    const nextHeaders = buildRequestHeaders(init.headers, accessTokenOverride)
-    return fetch(`${API_BASE_PATH}${path}`, {
-      ...init,
-      headers: nextHeaders,
-    })
-  }
 
   const loadOperationLogs = async (filters = operationLogFilters) => {
     setIsOperationLogLoading(true)
@@ -961,6 +961,7 @@ function App() {
     }
 
     window.localStorage.setItem(APP_ACCESS_TOKEN_STORAGE_KEY, accessToken)
+    setApiAccessToken(accessToken)
   }, [accessToken])
 
   const appendAssistantNotice = (conversationId: string, content: string) => {
@@ -1164,6 +1165,24 @@ function App() {
         error instanceof Error ? error.message : '删除会话失败，请稍后重试。'
       window.alert(`删除会话失败：${message}`)
     }
+  }
+
+  /** 按保存后的会话定位回答；流式临时消息 ID 不直接当作持久消息 ID。 */
+  const handleCaptureMessage = async (messageId: string): Promise<string> => {
+    const knowledgeBaseId = activeConversation.knowledgeBaseId
+    if (!knowledgeBaseId) throw new Error('请先选择一个知识库再沉淀回答。')
+    const index = activeConversation.messages.findIndex((message) => message.id === messageId)
+    const localMessage = activeConversation.messages[index]
+    const saved = await loadConversationDetail(activeConversation.id)
+    const savedMessage = saved.messages.find((message) => message.id === messageId) ?? saved.messages[index]
+    if (!localMessage || savedMessage?.role !== 'assistant' || savedMessage.content.trim() !== localMessage.content.trim()) {
+      throw new Error('回答尚未保存或已经变化，请重新打开会话后再沉淀。')
+    }
+    const result = await wikiRequest<{ job: { id: string; status: string; error?: string } }>(knowledgeBaseId, '/capture', 'POST', {
+      conversationId: saved.id, messageId: savedMessage.id, requestKey: `capture:${saved.id}:${savedMessage.id}`,
+    })
+    if (result.job.status === 'failed') throw new Error(result.job.error ?? '此回答的沉淀任务已失败，请在知识页中查看并重试。')
+    return `已提交沉淀任务 ${result.job.id}，可在“知识库 → 知识页”查看结果。`
   }
 
   // 已保存的会话先持久化空上下文，失败时保留页面历史，避免刷新后旧消息重新出现。
@@ -1382,19 +1401,6 @@ function App() {
     return normalizeDocument(data.uploaded)
   }
 
-  const appendUploadedDocument = (knowledgeBaseId: string, document: DocumentItem) => {
-    setKnowledgeBases((prev) =>
-      prev.map((knowledgeBase) =>
-        knowledgeBase.id === knowledgeBaseId
-          ? {
-              ...knowledgeBase,
-              documents: [document, ...knowledgeBase.documents],
-            }
-          : knowledgeBase,
-      ),
-    )
-  }
-
   const processDirectoryUploadQueue = async (
     knowledgeBaseId: string,
     queue: UploadQueueItem[],
@@ -1449,17 +1455,15 @@ function App() {
       }))
 
       try {
-        const uploaded = await uploadSingleKnowledgeBaseFile(knowledgeBaseId, item.file)
-        appendUploadedDocument(knowledgeBaseId, uploaded)
-
+        const staged = await stageUpload(item.file)
+        nextPendingQueue.push({ ...item, uploadId: staged.uploadId } as UploadQueueItem)
         setDirectoryUploadTask((prev) => ({
           ...prev,
-          successFiles: prev.successFiles + 1,
           processedFiles: prev.processedFiles + 1,
           pendingFiles: Math.max(queue.length - index - 1, 0),
         }))
       } catch (error) {
-        const reason = error instanceof Error ? error.message : '上传文档失败，请稍后重试。'
+        const reason = error instanceof Error ? error.message : '暂存文档失败，请稍后重试。'
         setDirectoryUploadTask((prev) => ({
           ...prev,
           failedFiles: prev.failedFiles + 1,
@@ -1470,7 +1474,54 @@ function App() {
       }
     }
 
-    setDirectoryUploadPendingFiles(nextPendingQueue)
+    const stagedIds = nextPendingQueue
+      .map((item) => (item as UploadQueueItem & { uploadId?: string }).uploadId)
+      .filter((value): value is string => Boolean(value))
+    if (!directoryUploadCancelRef.current && stagedIds.length > 0) {
+      try {
+        let job = await startBatchIndex(knowledgeBaseId, stagedIds)
+        while (job.status === 'queued' || job.status === 'running') {
+          if (directoryUploadCancelRef.current) {
+            job = await cancelIndexJob(job.id)
+            break
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 800))
+          job = await getIndexJob(job.id)
+          setDirectoryUploadTask((prev) => ({
+            ...prev,
+            currentFileName: job.currentFileName ?? prev.currentFileName,
+            successFiles: job.completed - job.failed,
+            failedFiles: job.failed,
+            pendingFiles: Math.max(job.total - job.completed, 0),
+          }))
+        }
+        const knowledgeBaseResponse = await apiFetch('/api/knowledge-bases')
+        if (knowledgeBaseResponse.ok) {
+          const knowledgeBaseData = (await knowledgeBaseResponse.json()) as KnowledgeBaseListResponse
+          setKnowledgeBases(knowledgeBaseData.items.map(normalizeKnowledgeBase))
+        }
+        const failedItems = (job.items ?? []).filter((item) => !item.success).map((item) => ({
+          name: item.fileName,
+          path: item.fileName,
+          reason: item.error || '索引失败',
+        }))
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          successFiles: job.completed - job.failed,
+          failedFiles: job.failed,
+          failedItems: [...prev.failedItems, ...failedItems],
+        }))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : '批量索引失败，请稍后重试。'
+        setDirectoryUploadTask((prev) => ({
+          ...prev,
+          failedFiles: prev.failedFiles + stagedIds.length,
+          failedItems: [...prev.failedItems, { name: 'batch-index', path: knowledgeBaseId, reason }],
+        }))
+      }
+    }
+
+    setDirectoryUploadPendingFiles(directoryUploadCancelRef.current ? queue : [])
 
     setDirectoryUploadTask((prev) => {
       let status: DirectoryUploadStatus = 'done'
@@ -1713,29 +1764,14 @@ function App() {
 
   // 诊断接口继续复用统一 apiFetch，确保沿用当前访问令牌与 401 处理链路。
   const handleFetchKnowledgeBaseHealth = async (knowledgeBaseId: string) => {
-    const response = await apiFetch(
-      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/health`,
-    )
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-    return (await response.json()) as KnowledgeBaseHealthResponse
+    return fetchKnowledgeBaseHealth(knowledgeBaseId)
   }
 
   const handleFetchDocumentDetail = async (
     knowledgeBaseId: string,
     documentId: string,
   ): Promise<DocumentDetailResponse> => {
-    const response = await apiFetch(
-      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}`,
-    )
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    const detail = (await response.json()) as Omit<DocumentDetailResponse, 'document'> & {
-      document: BackendDocumentItem
-    }
+    const detail = await fetchDocumentDetail(knowledgeBaseId, documentId)
     return {
       ...detail,
       document: normalizeDocument(detail.document),
@@ -1743,16 +1779,7 @@ function App() {
   }
 
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
-    const response = await apiFetch(
-      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}/reindex`,
-      { method: 'POST' },
-    )
-    if (!response.ok) {
-      throw new Error(await extractErrorMessage(response))
-    }
-
-    const result = (await response.json()) as { document: BackendDocumentItem }
-    const document = normalizeDocument(result.document)
+    const document = normalizeDocument(await reindexKnowledgeBaseDocument(knowledgeBaseId, documentId))
     setKnowledgeBases((current) => current.map((knowledgeBase) => (
       knowledgeBase.id === knowledgeBaseId
         ? {
@@ -1764,6 +1791,64 @@ function App() {
         : knowledgeBase
     )))
     return document
+  }
+
+  const applyConversationUpdate = (conversation: Conversation) => {
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conversation.id ? conversation : item)),
+    )
+  }
+
+  const handleExportConversation = async () => {
+    if (!activeConversation) return
+    try {
+      const result = await exportConversationMarkdown(activeConversation.id)
+      const downloadUrl = window.URL.createObjectURL(result.blob)
+      const downloadLink = document.createElement('a')
+      downloadLink.href = downloadUrl
+      downloadLink.download = `${activeConversation.title || 'conversation'}.md`
+      document.body.appendChild(downloadLink)
+      downloadLink.click()
+      downloadLink.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (error) {
+      window.alert(`导出会话失败：${error instanceof Error ? error.message : '请稍后重试。'}`)
+    }
+  }
+
+  const handleEditMessage = async (messageId: string, content: string) => {
+    if (!activeConversation) return
+    try {
+      const updated = await editConversationMessage(activeConversation.id, messageId, content)
+      applyConversationUpdate(normalizeConversation(updated as unknown as BackendConversation))
+    } catch (error) {
+      window.alert(`编辑消息失败：${error instanceof Error ? error.message : '请稍后重试。'}`)
+    }
+  }
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!activeConversation) return
+    try {
+      const updated = await deleteConversationMessage(activeConversation.id, messageId)
+      applyConversationUpdate(normalizeConversation(updated as unknown as BackendConversation))
+    } catch (error) {
+      window.alert(`删除消息失败：${error instanceof Error ? error.message : '请稍后重试。'}`)
+    }
+  }
+
+  const handleRegenerateMessage = async (messageId: string) => {
+    if (!activeConversation) return
+    try {
+      const truncated = await regenerateConversationMessage(activeConversation.id, messageId)
+      const normalized = normalizeConversation(truncated as unknown as BackendConversation)
+      applyConversationUpdate(normalized)
+      const lastUser = [...normalized.messages].reverse().find((message) => message.role === 'user')
+      if (lastUser) {
+        await handleSendMessage(lastUser.content)
+      }
+    } catch (error) {
+      window.alert(`重新生成失败：${error instanceof Error ? error.message : '请稍后重试。'}`)
+    }
   }
 
   const handleSendMessage = async (content: string) => {
@@ -1804,12 +1889,16 @@ function App() {
     const requestId = createId()
     activeChatRequestRef.current.set(conversationId, requestId)
     const timestamp = new Date().toISOString()
-    const userMessage: ChatMessage = {
-      id: createId(),
-      role: 'user',
-      content,
-      timestamp,
-    }
+    const lastMessage = activeConversation.messages.at(-1)
+    const reuseLastUser = lastMessage?.role === 'user' && lastMessage.content === content
+    const userMessage: ChatMessage = reuseLastUser
+      ? lastMessage
+      : {
+          id: createId(),
+          role: 'user',
+          content,
+          timestamp,
+        }
     const assistantMessageId = createId()
     const assistantTimestamp = new Date().toISOString()
     const assistantMessage: ChatMessage = {
@@ -1819,7 +1908,9 @@ function App() {
       timestamp: assistantTimestamp,
     }
 
-    const nextMessages = [...activeConversation.messages, userMessage]
+    const nextMessages = reuseLastUser
+      ? [...activeConversation.messages]
+      : [...activeConversation.messages, userMessage]
     const requestBody: ChatRequestBody = {
       conversationId,
       model: config.chat.model,
@@ -2303,6 +2394,11 @@ function App() {
         }}
         onSendMessage={handleSendMessage}
         onClearConversation={handleClearConversation}
+        onExportConversation={handleExportConversation}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
+        onRegenerateMessage={handleRegenerateMessage}
+        onCaptureMessage={handleCaptureMessage}
       />
     </div>
   )
