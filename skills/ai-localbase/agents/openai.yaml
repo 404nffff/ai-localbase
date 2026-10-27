@@ -1,7 +1,7 @@
 interface:
   display_name: "AI LocalBase"
-  short_description: "先列工具和知识库，再初始化 ai_localbase 项目知识库"
-  default_prompt: "在启用 ai_localbase 的项目中，每次会话启动先使用 $ai-localbase 调用 tools/list 罗列工具能力，再通过 knowledge_base.list 按项目名匹配已有知识库；没有匹配时才创建，然后按统一入口执行检索、问答和文档同步。"
+  short_description: "检索项目知识，按价值和来源筛选同步内容，核对上传与更新结果"
+  default_prompt: "使用 $ai-localbase 检索当前项目知识；写入前按 Skill 规则判断上传、提炼、更新、追加或跳过，核对主库和来源，成功后回读。只读任务不建库。"
 
 policy:
   allow_implicit_invocation: true

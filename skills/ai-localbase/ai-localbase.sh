@@ -104,8 +104,9 @@ load_env() {
   fi
 
   set -a
+  # 加载前去除 CRLF 的行尾回车，避免地址、认证头及空行混入不可见字符。
   # shellcheck disable=SC1090
-  source "$ENV_FILE"
+  source <(sed $'s/\r$//' "$ENV_FILE")
   set +a
 
   : "${MCP_API_BASE_URL:?错误: .env 中缺少 MCP_API_BASE_URL}"
@@ -208,11 +209,13 @@ try:
     data = json.loads(raw) if raw.strip() else {}
     if not isinstance(data, dict):
         data = {}
-    data = {
-        str(key): str(value)
-        for key, value in data.items()
-        if isinstance(value, str) and value
-    }
+    normalized = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            normalized[str(key)] = value
+        elif isinstance(value, str) and value:
+            normalized[str(key)] = value
+    data = normalized
 except Exception:
     data = recover_pairs(raw)
 
@@ -244,25 +247,31 @@ print(value)
 PY
 }
 
-write_cached_kb_id() {
+write_cached_kb_binding() {
   local dir="$1"
-  local id="$2"
+  local binding_json="$2"
 
-  python3 - "$KB_CONFIG" "$dir" "$id" <<'PY'
+  python3 - "$KB_CONFIG" "$dir" "$binding_json" <<'PY'
 import json
 import os
 import sys
 
 path = sys.argv[1]
 key = sys.argv[2]
-value = sys.argv[3]
+binding = json.loads(sys.argv[3])
 
 with open(path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 if not isinstance(data, dict):
     data = {}
 
-data[key] = value
+# 顶层保持旧格式字符串，避免历史脚本读取 map[项目名] 时拿到对象。
+data[key] = str(binding.get("primaryId") or "")
+bindings = data.get("_bindings")
+if not isinstance(bindings, dict):
+    bindings = {}
+bindings[key] = binding
+data["_bindings"] = bindings
 tmp_path = f"{path}.tmp"
 with open(tmp_path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
@@ -275,30 +284,33 @@ post_tool_call() {
   local tool_name="$1"
   local body="$2"
 
-  curl -s "$MCP_API_BASE_URL/tools/$tool_name/call" \
+  curl -sS "$MCP_API_BASE_URL/tools/$tool_name/call" \
     -H 'Content-Type: application/json' \
     -H "$MCP_AUTH_HEADER" \
     -d "$body"
 }
 
 post_tools_list() {
-  curl -s "$MCP_API_BASE_URL" \
+  curl -sS "$MCP_API_BASE_URL" \
     -H 'Content-Type: application/json' \
     -H "$MCP_AUTH_HEADER" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 }
 
-find_kb_id_by_name() {
+find_kb_binding_by_name() {
   local json="$1"
   local kb_name="$2"
+  local work_dir="$3"
 
-  JSON_INPUT="$json" KB_NAME_INPUT="$kb_name" python3 - <<'PY'
+  JSON_INPUT="$json" KB_NAME_INPUT="$kb_name" WORK_DIR_INPUT="$work_dir" python3 - <<'PY'
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 target = os.environ["KB_NAME_INPUT"]
 raw = os.environ["JSON_INPUT"]
+work_dir = os.environ["WORK_DIR_INPUT"].replace("/", "\\").lower()
 
 try:
     data = json.loads(raw)
@@ -309,17 +321,189 @@ items = data.get("structuredContent", {}).get("items", [])
 if not isinstance(items, list):
     sys.exit(1)
 
+def item_id(item):
+    value = item.get("knowledgeBaseId") or item.get("id")
+    return value if isinstance(value, str) and value else None
+
+def match_reason(item):
+    name = str(item.get("name") or "")
+    if name == target:
+        return "exact-name"
+    if name.startswith(target + ".") or name.startswith(target + "-"):
+        return "name-prefix"
+    description = str(item.get("description") or "").replace("/", "\\").lower()
+    if work_dir and work_dir in description:
+        return "description-path"
+    return None
+
+matches = []
 for item in items:
     if not isinstance(item, dict):
         continue
-    if item.get("name") != target:
+    kb_id = item_id(item)
+    reason = match_reason(item)
+    if not kb_id or not reason:
         continue
-    kb_id = item.get("knowledgeBaseId") or item.get("id")
-    if isinstance(kb_id, str) and kb_id:
-        print(kb_id)
-        sys.exit(0)
+    matches.append({
+        "id": kb_id,
+        "name": str(item.get("name") or ""),
+        "documentCount": int(item.get("documentCount") or 0),
+        "matchReason": reason,
+    })
 
-sys.exit(1)
+if not matches:
+    sys.exit(1)
+
+primary = next((item for item in matches if item["name"] == target), None)
+if primary is None:
+    primary = sorted(matches, key=lambda item: (-item["documentCount"], item["name"]))[0]
+
+ids = []
+for item in matches:
+    if item["id"] not in ids:
+        ids.append(item["id"])
+
+print(json.dumps({
+    "primaryId": primary["id"],
+    "knowledgeBaseIds": ids,
+    "boundKnowledgeBases": matches,
+    "updatedAt": datetime.now(timezone.utc).isoformat(),
+}, ensure_ascii=False, separators=(",", ":")))
+PY
+}
+
+binding_json_field() {
+  local binding_json="$1"
+  local field="$2"
+
+  BINDING_JSON="$binding_json" FIELD="$field" python3 - <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ["BINDING_JSON"])
+value = data.get(os.environ["FIELD"])
+if value is None:
+    sys.exit(1)
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+else:
+    print(str(value))
+PY
+}
+
+binding_json_ids_lines() {
+  local binding_json="$1"
+
+  BINDING_JSON="$binding_json" python3 - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["BINDING_JSON"])
+for kb_id in data.get("knowledgeBaseIds", []):
+    print(kb_id)
+PY
+}
+
+post_multi_search() {
+  local query="$1"
+  local top_k="$2"
+
+  KB_IDS_JSON="$KB_IDS_JSON" BOUND_KBS_JSON="$BOUND_KNOWLEDGE_BASES_JSON" PRIMARY_KB_ID="$KB_ID" QUERY_INPUT="$query" TOP_K_INPUT="$top_k" python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+api_base = os.environ["MCP_API_BASE_URL"].rstrip("/")
+token = os.environ["MCP_AUTH_TOKEN"]
+kb_ids = json.loads(os.environ["KB_IDS_JSON"])
+bound = json.loads(os.environ["BOUND_KBS_JSON"])
+query = os.environ["QUERY_INPUT"]
+top_k = int(os.environ["TOP_K_INPUT"])
+
+def call_tool(kb_id):
+    body = json.dumps({"arguments": {"knowledgeBaseId": kb_id, "query": query, "topK": top_k}}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{api_base}/tools/knowledge_base.search/call",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+responses = []
+items = []
+for kb_id in kb_ids:
+    response = call_tool(kb_id)
+    responses.append(response)
+    items.extend(response.get("structuredContent", {}).get("items", []) or [])
+
+items.sort(key=lambda item: item.get("score", 0), reverse=True)
+print(json.dumps({
+    "content": [{"type": "text", "text": f"共检索到 {len(items)} 条结果，覆盖 {len(kb_ids)} 个知识库"}],
+    "isError": False,
+    "name": "knowledge_base.search.multi",
+    "structuredContent": {
+        "knowledgeBaseIds": kb_ids,
+        "primaryKnowledgeBaseId": os.environ["PRIMARY_KB_ID"],
+        "boundKnowledgeBases": bound,
+        "items": items,
+        "responses": responses,
+    },
+}, ensure_ascii=False))
+PY
+}
+
+post_multi_chat() {
+  local message="$1"
+
+  KB_IDS_JSON="$KB_IDS_JSON" BOUND_KBS_JSON="$BOUND_KNOWLEDGE_BASES_JSON" PRIMARY_KB_ID="$KB_ID" MESSAGE_INPUT="$message" python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+api_base = os.environ["MCP_API_BASE_URL"].rstrip("/")
+token = os.environ["MCP_AUTH_TOKEN"]
+kb_ids = json.loads(os.environ["KB_IDS_JSON"])
+bound = json.loads(os.environ["BOUND_KBS_JSON"])
+message = os.environ["MESSAGE_INPUT"]
+
+def call_tool(kb_id):
+    body = json.dumps({"arguments": {"knowledgeBaseId": kb_id, "message": message}}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{api_base}/tools/chat.ask/call",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+if len(kb_ids) == 1:
+    print(json.dumps(call_tool(kb_ids[0]), ensure_ascii=False))
+    raise SystemExit(0)
+
+name_by_id = {item.get("id"): item.get("name") for item in bound if isinstance(item, dict)}
+items = []
+for kb_id in kb_ids:
+    items.append({
+        "knowledgeBaseId": kb_id,
+        "knowledgeBaseName": name_by_id.get(kb_id, ""),
+        "response": call_tool(kb_id),
+    })
+
+print(json.dumps({
+    "content": [{"type": "text", "text": f"共返回 {len(items)} 个知识库问答结果"}],
+    "isError": False,
+    "name": "chat.ask.multi",
+    "structuredContent": {
+        "knowledgeBaseIds": kb_ids,
+        "primaryKnowledgeBaseId": os.environ["PRIMARY_KB_ID"],
+        "boundKnowledgeBases": bound,
+        "items": items,
+    },
+}, ensure_ascii=False))
 PY
 }
 
@@ -354,11 +538,16 @@ ensure_kb_id() {
     exit 1
   fi
 
-  KB_ID="$(find_kb_id_by_name "$list_response" "$KB_NAME" || true)"
-  if [ -n "${KB_ID:-}" ]; then
-    write_cached_kb_id "$KB_NAME" "$KB_ID"
-    echo "匹配到已有知识库: $KB_NAME (ID: $KB_ID)"
+  KB_BINDING_JSON="$(find_kb_binding_by_name "$list_response" "$KB_NAME" "$WORK_DIR" || true)"
+  if [ -n "${KB_BINDING_JSON:-}" ]; then
+    KB_ID="$(binding_json_field "$KB_BINDING_JSON" "primaryId")"
+    KB_IDS_JSON="$(binding_json_field "$KB_BINDING_JSON" "knowledgeBaseIds")"
+    BOUND_KNOWLEDGE_BASES_JSON="$(binding_json_field "$KB_BINDING_JSON" "boundKnowledgeBases")"
+    write_cached_kb_binding "$KB_NAME" "$KB_BINDING_JSON"
+    echo "匹配到已有知识库: $KB_NAME (主ID: $KB_ID，绑定: $(binding_json_ids_lines "$KB_BINDING_JSON" | wc -l | tr -d ' ') 个)"
     export KB_ID
+    export KB_IDS_JSON
+    export BOUND_KNOWLEDGE_BASES_JSON
     return 0
   fi
 
@@ -374,9 +563,19 @@ ensure_kb_id() {
     exit 1
   fi
 
-  write_cached_kb_id "$KB_NAME" "$KB_ID"
+  KB_BINDING_JSON="$(printf '{"primaryId":"%s","knowledgeBaseIds":["%s"],"boundKnowledgeBases":[{"id":"%s","name":"%s","documentCount":0,"matchReason":"created"}]}' \
+    "$(json_escape "$KB_ID")" \
+    "$(json_escape "$KB_ID")" \
+    "$(json_escape "$KB_ID")" \
+    "$(json_escape "$KB_NAME")")"
+  KB_IDS_JSON="$(binding_json_field "$KB_BINDING_JSON" "knowledgeBaseIds")"
+  BOUND_KNOWLEDGE_BASES_JSON="$(binding_json_field "$KB_BINDING_JSON" "boundKnowledgeBases")"
+
+  write_cached_kb_binding "$KB_NAME" "$KB_BINDING_JSON"
   echo "知识库创建成功: $KB_NAME (ID: $KB_ID)"
   export KB_ID
+  export KB_IDS_JSON
+  export BOUND_KNOWLEDGE_BASES_JSON
 }
 
 cmd_tools() {
@@ -439,8 +638,8 @@ cmd_init() {
   local work_dir_input="${1:-$(pwd)}"
   prepare_context "$work_dir_input"
   ensure_kb_id
-  printf '{"workDir":"%s","knowledgeBaseName":"%s","knowledgeBaseId":"%s"}\n' \
-    "$(json_escape "$WORK_DIR")" "$(json_escape "$KB_NAME")" "$(json_escape "$KB_ID")"
+  printf '{"workDir":"%s","knowledgeBaseName":"%s","knowledgeBaseId":"%s","knowledgeBaseIds":%s,"boundKnowledgeBases":%s}\n' \
+    "$(json_escape "$WORK_DIR")" "$(json_escape "$KB_NAME")" "$(json_escape "$KB_ID")" "$KB_IDS_JSON" "$BOUND_KNOWLEDGE_BASES_JSON"
 }
 
 cmd_upload() {
@@ -536,9 +735,8 @@ cmd_search() {
   prepare_context "$work_dir_input"
   ensure_kb_id
 
-  echo "检索: $query (知识库: $KB_ID)"
-  response="$(post_tool_call "knowledge_base.search" "$(printf '{"arguments":{"knowledgeBaseId":"%s","query":"%s","topK":%s}}' \
-    "$(json_escape "$KB_ID")" "$(json_escape "$query")" "$(json_escape "$top_k")")")"
+  echo "检索: $query (主知识库: $KB_ID，绑定: $(binding_json_ids_lines "$KB_BINDING_JSON" | wc -l | tr -d ' ') 个)"
+  response="$(post_multi_search "$query" "$top_k")"
   printf '%s\n' "$response"
 }
 
@@ -550,9 +748,8 @@ cmd_chat() {
   prepare_context "$work_dir_input"
   ensure_kb_id
 
-  echo "问答: $message (知识库: $KB_ID)"
-  response="$(post_tool_call "chat.ask" "$(printf '{"arguments":{"knowledgeBaseId":"%s","message":"%s"}}' \
-    "$(json_escape "$KB_ID")" "$(json_escape "$message")")")"
+  echo "问答: $message (主知识库: $KB_ID，绑定: $(binding_json_ids_lines "$KB_BINDING_JSON" | wc -l | tr -d ' ') 个)"
+  response="$(post_multi_chat "$message")"
   printf '%s\n' "$response"
 }
 
@@ -604,4 +801,7 @@ main() {
   esac
 }
 
-main "$@"
+# macOS 入口引用本文件复用命令；直接执行时仍按原参数启动。
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

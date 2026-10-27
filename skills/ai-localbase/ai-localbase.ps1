@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $EnvFile = Join-Path $ScriptDir ".env"
 $KbConfig = Join-Path $ScriptDir "knowledge.json"
+$KbConfigLock = Join-Path $ScriptDir "knowledge.json.lock"
 
 function Show-Usage {
   @"
@@ -20,8 +21,11 @@ function Show-Usage {
   ./ai-localbase.ps1 call [工具名] [arguments JSON]
   ./ai-localbase.ps1 list
   ./ai-localbase.ps1 upload [文件名] [内容] [目录]
+  ./ai-localbase.ps1 upload-file [文件名] [内容文件] [目录]
   ./ai-localbase.ps1 append [documentId] [内容] [目录]
+  ./ai-localbase.ps1 append-file [documentId] [内容文件] [目录]
   ./ai-localbase.ps1 update [documentId] [内容] [目录]
+  ./ai-localbase.ps1 update-file [documentId] [内容文件] [目录]
   ./ai-localbase.ps1 delete [documentId] [目录]
   ./ai-localbase.ps1 search [关键词] [目录] [topK]
   ./ai-localbase.ps1 chat [问题] [目录]
@@ -31,9 +35,12 @@ function Show-Usage {
   - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
   - call: 通过工具名和 arguments JSON 调用任意已发现 MCP 工具
   - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
-  - upload: 上传文本内容到知识库
-  - append: 向已有文档追加文本内容
-  - update: 用新内容覆盖已有文档
+  - upload: 上传文本内容到知识库；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - upload-file: 从文件读取内容并上传，避免 PowerShell 转义多行 Markdown
+  - append: 向已有文档追加文本内容；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - append-file: 从文件读取内容并追加，避免 PowerShell 转义多行 Markdown
+  - update: 用新内容覆盖已有文档；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - update-file: 从文件读取内容并覆盖，避免 PowerShell 转义多行 Markdown
   - delete: 删除已有文档
   - search: 在知识库中检索片段
   - chat: 基于知识库上下文发起问答
@@ -93,6 +100,46 @@ function Resolve-WorkDir {
   }
 
   return [System.IO.Path]::GetFullPath($InputPath)
+}
+
+function Read-TextFileArgument {
+  param(
+    [string]$Path,
+    [string]$ParameterName = "内容文件"
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    throw "错误: $ParameterName 不能为空"
+  }
+
+  $resolvedPath = Resolve-WorkDir $Path
+  if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+    throw "错误: $ParameterName 不存在: $resolvedPath"
+  }
+
+  # 内容从文件读取，避免 PowerShell 命令行参数中的反引号、引号和换行被重新解析。
+  return Get-Content -LiteralPath $resolvedPath -Raw -Encoding UTF8
+}
+
+function Resolve-ContentArgument {
+  param(
+    [string]$Content,
+    [string]$ParameterName = "内容"
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Content)) {
+    return $Content
+  }
+
+  if ($Content.StartsWith("@") -and $Content.Length -gt 1) {
+    return Read-TextFileArgument -Path $Content.Substring(1) -ParameterName "$ParameterName 文件"
+  }
+
+  if ($Content.StartsWith("file:") -and $Content.Length -gt 5) {
+    return Read-TextFileArgument -Path $Content.Substring(5) -ParameterName "$ParameterName 文件"
+  }
+
+  return $Content
 }
 
 function Test-ProjectRoot {
@@ -168,19 +215,67 @@ function Read-KbMap {
     return @{}
   }
 
-  $obj = $raw | ConvertFrom-Json
+  try {
+    $obj = $raw | ConvertFrom-Json
+  } catch {
+    $stamp = Get-Date -Format "yyyyMMddHHmmss"
+    $backupPath = "$KbConfig.corrupt.$stamp"
+    Copy-Item -LiteralPath $KbConfig -Destination $backupPath -Force
+    throw "knowledge.json 解析失败，已备份到 $backupPath。请先修复缓存文件后重试。原始错误: $($_.Exception.Message)"
+  }
   $map = @{}
   foreach ($prop in $obj.PSObject.Properties) {
-    $map[$prop.Name] = [string]$prop.Value
+    $map[$prop.Name] = $prop.Value
   }
   return $map
+}
+
+function Invoke-WithKbConfigLock {
+  param([scriptblock]$Body)
+
+  $lockStream = $null
+  try {
+    for ($i = 0; $i -lt 50; $i++) {
+      try {
+        $lockStream = [System.IO.File]::Open(
+          $KbConfigLock,
+          [System.IO.FileMode]::OpenOrCreate,
+          [System.IO.FileAccess]::ReadWrite,
+          [System.IO.FileShare]::None
+        )
+        break
+      } catch [System.IO.IOException] {
+        Start-Sleep -Milliseconds 100
+      }
+    }
+
+    if (-not $lockStream) {
+      throw "获取 knowledge.json 写锁超时"
+    }
+
+    & $Body
+  } finally {
+    if ($lockStream) {
+      $lockStream.Dispose()
+    }
+  }
 }
 
 function Write-KbMap {
   param([hashtable]$Map)
 
-  $json = $Map | ConvertTo-Json -Depth 5 -Compress
-  $json | Set-Content -LiteralPath $KbConfig -Encoding utf8
+  Invoke-WithKbConfigLock {
+    $json = $Map | ConvertTo-Json -Depth 12 -Compress
+    $tempPath = "$KbConfig.tmp.$PID"
+    $backupPath = "$KbConfig.bak"
+    [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+
+    if (Test-Path -LiteralPath $KbConfig) {
+      [System.IO.File]::Replace($tempPath, $KbConfig, $backupPath, $true)
+    } else {
+      Move-Item -LiteralPath $tempPath -Destination $KbConfig -Force
+    }
+  }
 }
 
 function Invoke-AiLocalBaseTool {
@@ -209,7 +304,58 @@ function Invoke-KnowledgeBaseList {
   Invoke-AiLocalBaseTool -ToolName "knowledge_base.list" -ArgumentsMap @{}
 }
 
-function Find-KbIdByName {
+function Get-KbIdFromItem {
+  param([object]$Item)
+
+  if (-not $Item) {
+    return $null
+  }
+  if ($Item.PSObject.Properties.Name -contains "knowledgeBaseId" -and -not [string]::IsNullOrWhiteSpace([string]$Item.knowledgeBaseId)) {
+    return [string]$Item.knowledgeBaseId
+  }
+  if ($Item.PSObject.Properties.Name -contains "id" -and -not [string]::IsNullOrWhiteSpace([string]$Item.id)) {
+    return [string]$Item.id
+  }
+  return $null
+}
+
+function Test-KbItemMatchesProject {
+  param(
+    [object]$Item,
+    [string]$Name,
+    [string]$WorkDir
+  )
+
+  $itemName = [string]$Item.name
+  if ($itemName -eq $Name) {
+    return "exact-name"
+  }
+  if ($itemName.StartsWith("$Name.") -or $itemName.StartsWith("$Name-")) {
+    return "name-prefix"
+  }
+
+  $description = [string]$Item.description
+  if (-not [string]::IsNullOrWhiteSpace($description)) {
+    $descriptionPath = $description.Trim()
+    if ($descriptionPath.StartsWith("目录:")) {
+      $descriptionPath = $descriptionPath.Substring(3).Trim()
+    }
+
+    try {
+      $normalizedDescriptionPath = [System.IO.Path]::GetFullPath($descriptionPath).TrimEnd("\", "/").Replace("/", "\").ToLowerInvariant()
+      $normalizedWorkDir = [System.IO.Path]::GetFullPath($WorkDir).TrimEnd("\", "/").Replace("/", "\").ToLowerInvariant()
+      if ($normalizedDescriptionPath -eq $normalizedWorkDir) {
+        return "description-path"
+      }
+    } catch {
+      # description 可能是普通说明文本；无法解析为路径时不参与目录匹配。
+    }
+  }
+
+  return $null
+}
+
+function Find-KbBindingByName {
   param(
     [object]$ListResponse,
     [string]$Name
@@ -222,23 +368,166 @@ function Find-KbIdByName {
     return $null
   }
 
+  $matches = @()
   foreach ($item in @($ListResponse.structuredContent.items)) {
     if (-not $item) {
       continue
     }
-    if ([string]$item.name -ne $Name) {
+    $kbId = Get-KbIdFromItem $item
+    if ([string]::IsNullOrWhiteSpace($kbId)) {
       continue
     }
 
-    if ($item.PSObject.Properties.Name -contains "knowledgeBaseId" -and -not [string]::IsNullOrWhiteSpace([string]$item.knowledgeBaseId)) {
-      return [string]$item.knowledgeBaseId
+    $reason = Test-KbItemMatchesProject -Item $item -Name $Name -WorkDir $script:WorkDir
+    if ([string]::IsNullOrWhiteSpace($reason)) {
+      continue
     }
-    if ($item.PSObject.Properties.Name -contains "id" -and -not [string]::IsNullOrWhiteSpace([string]$item.id)) {
-      return [string]$item.id
+
+    $docCount = 0
+    if ($item.PSObject.Properties.Name -contains "documentCount") {
+      $docCount = [int]$item.documentCount
+    }
+    $matches += [pscustomobject]@{
+      id            = $kbId
+      name          = [string]$item.name
+      documentCount = $docCount
+      matchReason   = $reason
     }
   }
 
-  return $null
+  if ($matches.Count -eq 0) {
+    return $null
+  }
+
+  $primary = $matches | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+  if (-not $primary) {
+    $primary = $matches | Sort-Object -Property @{ Expression = "documentCount"; Descending = $true }, name | Select-Object -First 1
+  }
+
+  $ids = @($matches | Select-Object -ExpandProperty id -Unique)
+  return [pscustomobject]@{
+    primaryId          = [string]$primary.id
+    knowledgeBaseIds   = $ids
+    boundKnowledgeBases = @($matches)
+  }
+}
+
+function Convert-KbBindingForCache {
+  param([object]$Binding)
+
+  @{
+    primaryId          = [string]$Binding.primaryId
+    knowledgeBaseIds   = @($Binding.knowledgeBaseIds)
+    boundKnowledgeBases = @($Binding.boundKnowledgeBases)
+    updatedAt          = (Get-Date).ToUniversalTime().ToString("o")
+  }
+}
+
+function Write-KbBindingToMap {
+  param(
+    [hashtable]$Map,
+    [string]$Name,
+    [object]$Binding
+  )
+
+  # 顶层仍写旧格式字符串，兼容只读取 map[项目名] 的历史脚本。
+  $Map[$Name] = [string]$Binding.primaryId
+
+  $bindings = @{}
+  if ($Map.ContainsKey("_bindings") -and $Map["_bindings"]) {
+    if ($Map["_bindings"] -is [System.Collections.IDictionary]) {
+      foreach ($key in $Map["_bindings"].Keys) {
+        $bindings[[string]$key] = $Map["_bindings"][$key]
+      }
+    } else {
+      foreach ($prop in $Map["_bindings"].PSObject.Properties) {
+        $bindings[$prop.Name] = $prop.Value
+      }
+    }
+  }
+  $bindings[$Name] = Convert-KbBindingForCache $Binding
+  $Map["_bindings"] = $bindings
+}
+
+function Set-CurrentKbBinding {
+  param([object]$Binding)
+
+  $script:KbId = [string]$Binding.primaryId
+  $script:KbIds = @($Binding.knowledgeBaseIds)
+  $script:BoundKnowledgeBases = @($Binding.boundKnowledgeBases)
+}
+
+function Invoke-SearchAcrossBoundKnowledgeBases {
+  param(
+    [string]$Query,
+    [int]$TopK
+  )
+
+  $items = @()
+  $responses = @()
+  foreach ($kbId in @($script:KbIds)) {
+    $response = Invoke-AiLocalBaseTool -ToolName "knowledge_base.search" -ArgumentsMap @{
+      knowledgeBaseId = $kbId
+      query           = $Query
+      topK            = $TopK
+    }
+    $responses += $response
+    if ($response.PSObject.Properties.Name -contains "structuredContent" -and
+        $response.structuredContent -and
+        $response.structuredContent.PSObject.Properties.Name -contains "items") {
+      $items += @($response.structuredContent.items)
+    }
+  }
+
+  @{
+    content = @(@{ type = "text"; text = "共检索到 $($items.Count) 条结果，覆盖 $($script:KbIds.Count) 个知识库" })
+    isError = $false
+    name = "knowledge_base.search.multi"
+    structuredContent = @{
+      knowledgeBaseIds = @($script:KbIds)
+      primaryKnowledgeBaseId = $script:KbId
+      boundKnowledgeBases = @($script:BoundKnowledgeBases)
+      items = @($items | Sort-Object -Property @{ Expression = "score"; Descending = $true })
+      responses = @($responses)
+    }
+  }
+}
+
+function Invoke-ChatAcrossBoundKnowledgeBases {
+  param([string]$Message)
+
+  if (@($script:KbIds).Count -le 1) {
+    return Invoke-AiLocalBaseTool -ToolName "chat.ask" -ArgumentsMap @{
+      knowledgeBaseId = $script:KbId
+      message         = $Message
+    }
+  }
+
+  $items = @()
+  foreach ($kbId in @($script:KbIds)) {
+    $response = Invoke-AiLocalBaseTool -ToolName "chat.ask" -ArgumentsMap @{
+      knowledgeBaseId = $kbId
+      message         = $Message
+    }
+    $kbName = (@($script:BoundKnowledgeBases) | Where-Object { $_.id -eq $kbId } | Select-Object -First 1).name
+    $items += [pscustomobject]@{
+      knowledgeBaseId = $kbId
+      knowledgeBaseName = $kbName
+      response = $response
+    }
+  }
+
+  @{
+    content = @(@{ type = "text"; text = "共返回 $($items.Count) 个知识库问答结果" })
+    isError = $false
+    name = "chat.ask.multi"
+    structuredContent = @{
+      knowledgeBaseIds = @($script:KbIds)
+      primaryKnowledgeBaseId = $script:KbId
+      boundKnowledgeBases = @($script:BoundKnowledgeBases)
+      items = @($items)
+    }
+  }
 }
 
 function Prepare-Context {
@@ -266,12 +555,12 @@ function Ensure-KbId {
     throw "读取 knowledge_base.list 失败: 响应为空"
   }
 
-  $matchedKbId = Find-KbIdByName -ListResponse $listResponse -Name $script:KbName
-  if (-not [string]::IsNullOrWhiteSpace($matchedKbId)) {
-    $script:KbId = $matchedKbId
-    $map[$script:KbName] = $script:KbId
+  $binding = Find-KbBindingByName -ListResponse $listResponse -Name $script:KbName
+  if ($binding) {
+    Set-CurrentKbBinding $binding
+    Write-KbBindingToMap -Map $map -Name $script:KbName -Binding $binding
     Write-KbMap $map
-    Write-Host "匹配到已有知识库: $($script:KbName) (ID: $($script:KbId))"
+    Write-Host "匹配到已有知识库: $($script:KbName) (主ID: $($script:KbId)，绑定: $(@($script:KbIds).Count) 个)"
     return
   }
 
@@ -296,10 +585,20 @@ function Ensure-KbId {
     throw "创建知识库失败: $responseJson"
   }
 
-  $map[$script:KbName] = $kbId
+  $binding = [pscustomobject]@{
+    primaryId          = $kbId
+    knowledgeBaseIds   = @($kbId)
+    boundKnowledgeBases = @([pscustomobject]@{
+      id            = $kbId
+      name          = $script:KbName
+      documentCount = 0
+      matchReason   = "created"
+    })
+  }
+  Set-CurrentKbBinding $binding
+  Write-KbBindingToMap -Map $map -Name $script:KbName -Binding $binding
   Write-KbMap $map
 
-  $script:KbId = $kbId
   Write-Host "知识库创建成功: $($script:KbName) (ID: $kbId)"
 }
 
@@ -313,6 +612,8 @@ function Invoke-Init {
     workDir         = $script:WorkDir
     knowledgeBaseName = $script:KbName
     knowledgeBaseId = $script:KbId
+    knowledgeBaseIds = @($script:KbIds)
+    boundKnowledgeBases = @($script:BoundKnowledgeBases)
   } | ConvertTo-Json -Depth 5 -Compress
 }
 
@@ -462,13 +763,9 @@ function Invoke-Search {
 
   Prepare-Context $WorkDirInput
   Ensure-KbId
-  Write-Host "检索: $Query (知识库: $($script:KbId))"
+  Write-Host "检索: $Query (主知识库: $($script:KbId)，绑定: $(@($script:KbIds).Count) 个)"
 
-  $response = Invoke-AiLocalBaseTool -ToolName "knowledge_base.search" -ArgumentsMap @{
-    knowledgeBaseId = $script:KbId
-    query           = $Query
-    topK            = $TopK
-  }
+  $response = Invoke-SearchAcrossBoundKnowledgeBases -Query $Query -TopK $TopK
 
   $response | ConvertTo-Json -Depth 10
 }
@@ -481,12 +778,9 @@ function Invoke-Chat {
 
   Prepare-Context $WorkDirInput
   Ensure-KbId
-  Write-Host "问答: $Message (知识库: $($script:KbId))"
+  Write-Host "问答: $Message (主知识库: $($script:KbId)，绑定: $(@($script:KbIds).Count) 个)"
 
-  $response = Invoke-AiLocalBaseTool -ToolName "chat.ask" -ArgumentsMap @{
-    knowledgeBaseId = $script:KbId
-    message         = $Message
-  }
+  $response = Invoke-ChatAcrossBoundKnowledgeBases -Message $Message
 
   $response | ConvertTo-Json -Depth 10
 }
@@ -515,6 +809,18 @@ switch ($Action) {
     $filename = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "example.md" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "# 示例文档`n`n这是测试内容。" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "upload 内容"
+    Invoke-Upload $filename $content $workDir
+    break
+  }
+  "upload-file" {
+    $filename = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    if ([string]::IsNullOrWhiteSpace($filename)) {
+      throw "错误: upload-file 需要 [文件名] [内容文件] [目录]"
+    }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "upload-file 内容文件"
     Invoke-Upload $filename $content $workDir
     break
   }
@@ -522,6 +828,15 @@ switch ($Action) {
     $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "append 内容"
+    Invoke-Append $documentId $content $workDir
+    break
+  }
+  "append-file" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "append-file 内容文件"
     Invoke-Append $documentId $content $workDir
     break
   }
@@ -529,6 +844,15 @@ switch ($Action) {
     $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "update 内容"
+    Invoke-Update $documentId $content $workDir
+    break
+  }
+  "update-file" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "update-file 内容文件"
     Invoke-Update $documentId $content $workDir
     break
   }

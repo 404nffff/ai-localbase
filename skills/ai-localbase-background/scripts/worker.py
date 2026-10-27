@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -139,7 +139,7 @@ def write_json_atomic(path: Path, payload: Any) -> None:
     tmp_path.replace(path)
 
 
-def read_kb_map(paths: Dict[str, Path]) -> Dict[str, str]:
+def read_kb_map(paths: Dict[str, Path]) -> Dict[str, Any]:
     knowledge_path = paths["knowledge"]
     try:
         raw = read_json_file(knowledge_path, {})
@@ -157,14 +157,27 @@ def read_kb_map(paths: Dict[str, Path]) -> Dict[str, str]:
         write_json_atomic(knowledge_path, raw)
     if not isinstance(raw, dict):
         return {}
-    result: Dict[str, str] = {}
+    result: Dict[str, Any] = {}
     for key, value in raw.items():
+        if isinstance(value, dict):
+            result[str(key)] = value
+            continue
         result[str(key)] = str(value)
     return result
 
 
-def write_kb_map(paths: Dict[str, Path], mapping: Dict[str, str]) -> None:
+def write_kb_map(paths: Dict[str, Path], mapping: Dict[str, Any]) -> None:
     write_json_atomic(paths["knowledge"], mapping)
+
+
+def write_kb_binding_to_map(mapping: Dict[str, Any], kb_name: str, binding: Dict[str, Any]) -> None:
+    # 顶层保持旧格式字符串，兼容只读取 mapping[kb_name] 的历史脚本。
+    mapping[kb_name] = str(binding["primaryId"])
+    bindings = mapping.get("_bindings")
+    if not isinstance(bindings, dict):
+        bindings = {}
+    bindings[kb_name] = binding
+    mapping["_bindings"] = bindings
 
 
 def find_nested_value(payload: Any, field_name: str) -> Optional[Any]:
@@ -184,6 +197,10 @@ def find_nested_value(payload: Any, field_name: str) -> Optional[Any]:
 
 
 def post_tool_call(env: Dict[str, str], tool_name: str, arguments_map: Dict[str, Any]) -> Dict[str, Any]:
+    """调用 HTTP 工具并校验业务结果；网络、JSON 或 MCP 错误均抛出异常。
+
+    成功返回结构化结果供调用方检查；不代表文档回读或 Wiki 整理完成。
+    """
     url = env["MCP_API_BASE_URL"].rstrip("/") + f"/tools/{tool_name}/call"
     body = json.dumps({"arguments": arguments_map}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
@@ -206,9 +223,28 @@ def post_tool_call(env: Dict[str, str], tool_name: str, arguments_map: Dict[str,
         raise RuntimeError(f"请求失败: {exc}") from exc
 
     try:
-        return json.loads(content)
+        result = json.loads(content)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"响应不是合法 JSON: {content}") from exc
+
+    # HTTP 200 也可能携带业务失败，不能让队列将其记为成功或继续建库。
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{tool_name}: 工具结果必须是 JSON 对象")
+    is_error = result.get("isError", False)
+    if not isinstance(is_error, bool):
+        raise RuntimeError(f"{tool_name}: isError 必须是布尔值")
+    if is_error or result.get("error") is not None:
+        messages = []
+        blocks = result.get("content", [])
+        if isinstance(blocks, list):
+            for block in blocks:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    messages.append(block["text"])
+        detail = "；".join(messages) or "请核对服务端错误"
+        raise RuntimeError(f"{tool_name}: 工具返回业务失败：{detail[:500]}")
+    if not isinstance(result.get("structuredContent"), dict):
+        raise RuntimeError(f"{tool_name}: 缺少有效的 structuredContent")
+    return result
 
 
 def post_tools_list(env: Dict[str, str]) -> Dict[str, Any]:
@@ -242,7 +278,28 @@ def post_tools_list(env: Dict[str, str]) -> Dict[str, Any]:
         raise RuntimeError(f"响应不是合法 JSON: {content}") from exc
 
 
-def find_kb_id_by_name(list_response: Dict[str, Any], kb_name: str) -> Optional[str]:
+def kb_item_id(item: Dict[str, Any]) -> Optional[str]:
+    value = item.get("knowledgeBaseId") or item.get("id")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def kb_item_match_reason(item: Dict[str, Any], kb_name: str, workdir: Path) -> Optional[str]:
+    name = str(item.get("name") or "")
+    if name == kb_name:
+        return "exact-name"
+    if name.startswith(f"{kb_name}.") or name.startswith(f"{kb_name}-"):
+        return "name-prefix"
+
+    description = str(item.get("description") or "").replace("/", "\\").lower()
+    normalized_workdir = str(workdir).replace("/", "\\").lower()
+    if normalized_workdir and normalized_workdir in description:
+        return "description-path"
+    return None
+
+
+def find_kb_binding_by_name(list_response: Dict[str, Any], kb_name: str, workdir: Path) -> Optional[Dict[str, Any]]:
     structured = list_response.get("structuredContent")
     if not isinstance(structured, dict):
         return None
@@ -250,18 +307,60 @@ def find_kb_id_by_name(list_response: Dict[str, Any], kb_name: str) -> Optional[
     if not isinstance(items, list):
         return None
 
+    matches: List[Dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        if item.get("name") != kb_name:
+        kb_id = kb_item_id(item)
+        reason = kb_item_match_reason(item, kb_name, workdir)
+        if not kb_id or not reason:
             continue
-        kb_id = item.get("knowledgeBaseId") or item.get("id")
-        if isinstance(kb_id, str) and kb_id:
-            return kb_id
-    return None
+        matches.append(
+            {
+                "id": kb_id,
+                "name": str(item.get("name") or ""),
+                "documentCount": int(item.get("documentCount") or 0),
+                "matchReason": reason,
+            }
+        )
+
+    if not matches:
+        return None
+
+    primary = next((item for item in matches if item["name"] == kb_name), None)
+    if primary is None:
+        primary = sorted(matches, key=lambda item: (-item["documentCount"], item["name"]))[0]
+
+    kb_ids: List[str] = []
+    for item in matches:
+        if item["id"] not in kb_ids:
+            kb_ids.append(item["id"])
+
+    return {
+        "primaryId": primary["id"],
+        "knowledgeBaseIds": kb_ids,
+        "boundKnowledgeBases": matches,
+        "updatedAt": now_iso(),
+    }
 
 
-def ensure_kb_id(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> str:
+def created_kb_binding(kb_name: str, kb_id: str) -> Dict[str, Any]:
+    return {
+        "primaryId": kb_id,
+        "knowledgeBaseIds": [kb_id],
+        "boundKnowledgeBases": [
+            {
+                "id": kb_id,
+                "name": kb_name,
+                "documentCount": 0,
+                "matchReason": "created",
+            }
+        ],
+        "updatedAt": now_iso(),
+    }
+
+
+def ensure_kb_binding(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> Dict[str, Any]:
     kb_name = resolve_kb_name(workdir)
     mapping = read_kb_map(paths)
 
@@ -270,11 +369,11 @@ def ensure_kb_id(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> 
         raise RuntimeError("读取 tools/list 失败: 响应为空")
 
     list_response = post_tool_call(env, "knowledge_base.list", {})
-    matched_kb_id = find_kb_id_by_name(list_response, kb_name)
-    if matched_kb_id:
-        mapping[kb_name] = matched_kb_id
+    binding = find_kb_binding_by_name(list_response, kb_name, workdir)
+    if binding:
+        write_kb_binding_to_map(mapping, kb_name, binding)
         write_kb_map(paths, mapping)
-        return matched_kb_id
+        return binding
 
     response = post_tool_call(
         env,
@@ -285,20 +384,27 @@ def ensure_kb_id(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> 
     if not kb_id:
         raise RuntimeError(f"创建知识库失败: {json.dumps(response, ensure_ascii=False)}")
 
-    mapping[kb_name] = str(kb_id)
+    binding = created_kb_binding(kb_name, str(kb_id))
+    write_kb_binding_to_map(mapping, kb_name, binding)
     write_kb_map(paths, mapping)
-    return str(kb_id)
+    return binding
+
+
+def ensure_kb_id(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> str:
+    return str(ensure_kb_binding(env, workdir, paths)["primaryId"])
 
 
 def init_project(env: Dict[str, str], workdir: Path) -> Dict[str, Any]:
     paths = runtime_paths(workdir)
     ensure_runtime_dirs(paths)
-    kb_id = ensure_kb_id(env, workdir, paths)
+    binding = ensure_kb_binding(env, workdir, paths)
     return {
         "status": "ok",
         "workDir": str(workdir),
         "knowledgeBaseName": resolve_kb_name(workdir),
-        "knowledgeBaseId": kb_id,
+        "knowledgeBaseId": binding["primaryId"],
+        "knowledgeBaseIds": binding["knowledgeBaseIds"],
+        "boundKnowledgeBases": binding["boundKnowledgeBases"],
         "stateDir": str(paths["root"]),
         "envFile": env["_ENV_FILE"],
     }
@@ -448,7 +554,8 @@ def enqueue_job(
 ) -> Dict[str, Any]:
     paths = runtime_paths(workdir)
     ensure_runtime_dirs(paths)
-    kb_id = ensure_kb_id(env, workdir, paths)
+    binding = ensure_kb_binding(env, workdir, paths)
+    kb_id = str(binding["primaryId"])
 
     if action in {"upload", "append", "update"} and not str(payload.get("content", "")).strip():
         fail(f"{action} 任务缺少 content")
@@ -463,6 +570,8 @@ def enqueue_job(
         "action": action,
         "workDir": str(workdir),
         "knowledgeBaseId": kb_id,
+        "knowledgeBaseIds": binding["knowledgeBaseIds"],
+        "boundKnowledgeBases": binding["boundKnowledgeBases"],
         "payload": payload,
         "status": "queued",
         "createdAt": now_iso(),
@@ -477,6 +586,8 @@ def enqueue_job(
         "workDir": str(workdir),
         "queueFile": str(queue_path),
         "knowledgeBaseId": kb_id,
+        "knowledgeBaseIds": binding["knowledgeBaseIds"],
+        "boundKnowledgeBases": binding["boundKnowledgeBases"],
         "workerAutoStart": auto_start_worker,
     }
     if auto_start_worker:
