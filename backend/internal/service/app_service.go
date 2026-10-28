@@ -697,12 +697,13 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 
 	nextConfig := model.AppConfig{
 		Chat: model.ChatConfig{
-			Provider:            chatProvider,
-			BaseURL:             chatBaseURL,
-			Model:               chatModel,
-			APIKey:              strings.TrimSpace(req.Chat.APIKey),
-			Temperature:         req.Chat.Temperature,
-			ContextMessageLimit: contextMessageLimit,
+			Provider:              chatProvider,
+			UseDefaultTemperature: req.Chat.UseDefaultTemperature,
+			BaseURL:               chatBaseURL,
+			Model:                 chatModel,
+			APIKey:                strings.TrimSpace(req.Chat.APIKey),
+			Temperature:           req.Chat.Temperature,
+			ContextMessageLimit:   contextMessageLimit,
 		},
 		Embedding: model.EmbeddingConfig{
 			Provider: embedProvider,
@@ -1555,12 +1556,13 @@ func (s *AppService) currentChatConfig() model.ChatModelConfig {
 	}
 
 	return model.ChatModelConfig{
-		Provider:            strings.TrimSpace(s.state.Config.Chat.Provider),
-		BaseURL:             strings.TrimSpace(s.state.Config.Chat.BaseURL),
-		Model:               strings.TrimSpace(s.state.Config.Chat.Model),
-		APIKey:              strings.TrimSpace(s.state.Config.Chat.APIKey),
-		Temperature:         s.state.Config.Chat.Temperature,
-		ContextMessageLimit: contextMessageLimit,
+		Provider:              strings.TrimSpace(s.state.Config.Chat.Provider),
+		UseDefaultTemperature: s.state.Config.Chat.UseDefaultTemperature,
+		BaseURL:               strings.TrimSpace(s.state.Config.Chat.BaseURL),
+		Model:                 strings.TrimSpace(s.state.Config.Chat.Model),
+		APIKey:                strings.TrimSpace(s.state.Config.Chat.APIKey),
+		Temperature:           s.state.Config.Chat.Temperature,
+		ContextMessageLimit:   contextMessageLimit,
 	}
 }
 

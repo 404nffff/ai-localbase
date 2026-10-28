@@ -148,6 +148,8 @@ export interface KnowledgeBaseHealthResponse {
 }
 
 export interface ChatConfig {
+  /** 选中时省略 temperature，由模型决定默认值。 */
+  useDefaultTemperature?: boolean
   provider: 'ollama' | 'openai-compatible'
   baseUrl: string
   model: string

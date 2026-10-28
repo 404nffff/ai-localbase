@@ -71,6 +71,36 @@ func TestRouterLivenessAndJSONBodyLimit(t *testing.T) {
 	}
 }
 
+// TestWikiProgressHTTP 验证总进度经过真实路由、鉴权与分页参数校验。
+func TestWikiProgressHTTP(t *testing.T) {
+	engine, app, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	defer cleanup()
+	id := app.ListKnowledgeBases()[0].ID
+	for _, tc := range []struct {
+		path   string
+		status int
+	}{
+		{"/api/wiki/progress", 200},
+		{"/api/wiki/progress?knowledgeBaseId=" + id + "&status=failed&limit=20", 200},
+		{"/api/wiki/progress?knowledgeBaseId=missing", 404},
+		{"/api/wiki/progress?offset=bad", 400},
+		{"/api/wiki/progress?offset=-1", 400},
+		{"/api/wiki/progress?limit=101", 400},
+		{"/api/wiki/progress?status=invalid", 400},
+	} {
+		response := performRequest(t, engine, http.MethodGet, tc.path, nil, "")
+		if response.Code != tc.status {
+			t.Fatalf("%s: got %d, want %d: %s", tc.path, response.Code, tc.status, response.Body)
+		}
+	}
+	secured, _, _, closeSecured := newTestRouterWithAccessTokenAndService(t, "progress-test-token")
+	defer closeSecured()
+	response := performRequest(t, secured, http.MethodGet, "/api/wiki/progress", nil, "")
+	if response.Code != 401 {
+		t.Fatalf("missing auth accepted: %d", response.Code)
+	}
+}
+
 // TestWikiHTTPAndMCPWorkflow 通过真实 HTTP/MCP 接口验证整理、来源、体检和导出闭环。
 func TestWikiHTTPAndMCPWorkflow(t *testing.T) {
 	engine, app, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")

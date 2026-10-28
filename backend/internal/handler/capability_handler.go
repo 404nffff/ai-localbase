@@ -13,6 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// TestChatModel 用草稿配置实际调用模型，失败和本地降级回复均不算连通成功，不保存设置。
+// @Summary 测试聊天模型
+// @Param config body model.TestChatModelRequest true "当前草稿模型配置"
+// @Success 200 {object} model.TestModelResponse "success 表示真实模型调用结果"
+// @Failure 400 {object} map[string]string "请求格式错误"
+// @Router /api/config/test-chat-model [post]
 func (h *AppHandler) TestChatModel(c *gin.Context) {
 	var req model.TestChatModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -23,16 +29,22 @@ func (h *AppHandler) TestChatModel(c *gin.Context) {
 	response, err := h.llmService.Chat(model.ChatCompletionRequest{
 		Messages: []model.ChatMessage{{Role: "user", Content: "ping"}},
 		Config: model.ChatModelConfig{
-			Provider:    req.Provider,
-			BaseURL:     req.BaseURL,
-			Model:       req.Model,
-			APIKey:      req.APIKey,
-			Temperature: req.Temperature,
+			Provider:              req.Provider,
+			BaseURL:               req.BaseURL,
+			Model:                 req.Model,
+			APIKey:                req.APIKey,
+			Temperature:           req.Temperature,
+			UseDefaultTemperature: req.UseDefaultTemperature,
 		},
 	})
 	latency := time.Since(startedAt).Milliseconds()
 	if err != nil {
 		c.JSON(http.StatusOK, model.TestModelResponse{Success: false, LatencyMs: latency, ErrorMessage: err.Error()})
+		return
+	}
+	// 普通聊天的本地说明不是模型回复，必须保留上游失败给用户判断配置。
+	if degraded, _ := response.Metadata["degraded"].(bool); degraded {
+		c.JSON(http.StatusOK, model.TestModelResponse{Success: false, LatencyMs: latency, ErrorMessage: fmt.Sprint(response.Metadata["upstreamError"])})
 		return
 	}
 	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {

@@ -45,6 +45,9 @@ body,
   width: calc(var(--app-rail-width) + var(--conversation-sidebar-width));
 }
 
+/* 独立工作区拥有自己的目录，隐藏会话栏以避免覆盖 Wiki 的知识库与文档。 */
+.app-navigation:not(.workspace-chat) .conversation-sidebar { display: none; }
+
 .app-rail {
   position: absolute;
   inset: 0 auto 0 0;
@@ -4011,7 +4014,7 @@ body,
     display: grid;
     height: 100%;
     flex: 1;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0;
     margin: 0;
   }

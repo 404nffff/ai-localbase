@@ -126,6 +126,7 @@ export const testChatModel = async (config: ChatConfig) => {
       model: config.model,
       apiKey: config.apiKey,
       temperature: config.temperature,
+      useDefaultTemperature: config.useDefaultTemperature === true,
     }),
   }))
   return (await response.json()) as TestModelResponse
@@ -304,7 +305,26 @@ export interface WikiSourceRef { documentId: string; checksum: string; quote: st
 export interface WikiPage {
   id: string
   name: string
-  wiki: { pageType: string; freshness: string; revision: number; indexedRevision: number; updatedAt: string; sourceRefs: WikiSourceRef[] }
+  wiki: { pageType: string; freshness: string; revision: number; indexedRevision: number; updatedAt: string; sourceRefs: WikiSourceRef[]; history?: WikiRevision[] }
+}
+/** 页面已发布的历史修订；正文按所选版本单独读取。 */
+export interface WikiRevision { revision: number; title: string; createdAt: string }
+/** 全库实际发布记录，点击后读取记录对应的版本，来源数按文档去重。 */
+export interface WikiChange {
+  knowledgeBaseId: string
+  knowledgeBaseName: string
+  pageId: string
+  title: string
+  revision: number
+  createdAt: string
+  sourceCount: number
+}
+
+/** 全库历史通过服务端统一排序分页，避免只拼接各库首页造成遗漏。 */
+export async function fetchWikiChanges(knowledgeBaseId: string, offset: number, signal?: AbortSignal): Promise<WikiList<WikiChange>> {
+  const params = new URLSearchParams({ knowledgeBaseId, offset: String(offset), limit: '20' })
+  const response = await ensureOk(await apiFetch(`/api/wiki/changes?${params}`, { signal }))
+  return response.json() as Promise<WikiList<WikiChange>>
 }
 /** 持久整理任务及实际覆盖范围，不包含模型连接信息。 */
 export interface WikiJob {
@@ -357,4 +377,38 @@ export async function downloadWiki(knowledgeBaseId: string): Promise<void> {
   anchor.download = 'wiki.zip'
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+/** 单库全部任务统计；待整理资料数量与排队任务数量分别展示。 */
+export interface WikiLibraryProgress {
+  knowledgeBaseId: string
+  name: string
+  enabled: boolean
+  pendingCount: number
+  pageCount: number
+  total: number
+  counts: Record<string, number>
+  updatedAt: string
+}
+
+/** 全库汇总与指定库的任务分页，统计不受筛选和分页限制。 */
+export interface WikiProgressResponse {
+  items: WikiLibraryProgress[]
+  autoCompileReady: boolean
+  jobs: WikiList<WikiJob>
+}
+
+/** 读取整理总进度；可通过查询参数指定库、状态和偏移，保留服务端失败信息。 */
+export async function fetchWikiProgress(params: URLSearchParams, signal?: AbortSignal): Promise<WikiProgressResponse> {
+  const response = await ensureOk(await apiFetch(`/api/wiki/progress?${params}`, { signal }))
+  return response.json() as Promise<WikiProgressResponse>
+}
+
+/** 本库失败任务批量提交结果；submitted 只表示已排队，remaining 为中断后未提交项。 */
+export interface WikiRetryBatchResult {
+  total: number
+  submitted: number
+  skipped: number
+  remaining: number
+  failures: Array<{ jobId: string; error: string }>
 }

@@ -32,7 +32,7 @@ const (
 type openAIChatRequest struct {
 	Model       string              `json:"model"`
 	Messages    []model.ChatMessage `json:"messages"`
-	Temperature float64             `json:"temperature,omitempty"`
+	Temperature *float64            `json:"temperature,omitempty"` // nil 使用模型默认值；指针保留合法的零温度。
 }
 
 type openAIChatResponse struct {
@@ -53,7 +53,7 @@ type openAICompatibleErrorPayload struct {
 type openAIChatStreamRequest struct {
 	Model       string              `json:"model"`
 	Messages    []model.ChatMessage `json:"messages"`
-	Temperature float64             `json:"temperature,omitempty"`
+	Temperature *float64            `json:"temperature,omitempty"` // 流式与非流式采用相同传参规则。
 	Stream      bool                `json:"stream"`
 }
 
@@ -78,7 +78,7 @@ type ollamaChatRequest struct {
 }
 
 type ollamaOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
+	Temperature float64 `json:"temperature"` // 显式设置时保留 0；默认模式省略整个 options。
 }
 
 type ollamaChatResponse struct {
@@ -162,9 +162,12 @@ func (s *LLMService) StreamChat(req model.ChatCompletionRequest, onChunk func(st
 
 func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
 	payload := openAIChatRequest{
-		Model:       cfg.Model,
-		Messages:    req.Messages,
-		Temperature: cfg.Temperature,
+		Model:    cfg.Model,
+		Messages: req.Messages,
+	}
+	// 默认模式不发送该参数，避免不支持自定义温度的模型拒绝请求。
+	if !cfg.UseDefaultTemperature {
+		payload.Temperature = &cfg.Temperature
 	}
 
 	body, err := json.Marshal(payload)
@@ -229,10 +232,12 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest, onChunk func(string) error) error {
 	payload := openAIChatStreamRequest{
-		Model:       cfg.Model,
-		Messages:    req.Messages,
-		Temperature: cfg.Temperature,
-		Stream:      true,
+		Model:    cfg.Model,
+		Messages: req.Messages,
+		Stream:   true,
+	}
+	if !cfg.UseDefaultTemperature {
+		payload.Temperature = &cfg.Temperature
 	}
 
 	body, err := json.Marshal(payload)
@@ -327,7 +332,7 @@ func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, 
 		Messages: req.Messages,
 		Stream:   false,
 	}
-	if cfg.Temperature > 0 {
+	if !cfg.UseDefaultTemperature {
 		payload.Options = &ollamaOptions{Temperature: cfg.Temperature}
 	}
 
@@ -399,7 +404,7 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 		Messages: req.Messages,
 		Stream:   true,
 	}
-	if cfg.Temperature > 0 {
+	if !cfg.UseDefaultTemperature {
 		payload.Options = &ollamaOptions{Temperature: cfg.Temperature}
 	}
 
@@ -621,9 +626,7 @@ func normalizeChatConfig(req model.ChatCompletionRequest) (model.ChatModelConfig
 			cfg.BaseURL = "http://localhost:11434/v1"
 		}
 	}
-	if cfg.Temperature <= 0 {
-		cfg.Temperature = 0.7
-	}
+	// 0 是有效的显式温度，不再替换为 0.7；是否省略参数由默认温度选项决定。
 	if strings.TrimSpace(cfg.Provider) == "" {
 		cfg.Provider = "ollama"
 	}

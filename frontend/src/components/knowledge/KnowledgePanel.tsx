@@ -11,7 +11,6 @@ import {
   OperationLogListResponse,
 } from '../../App'
 import DocumentDetailDialog from './DocumentDetailDialog'
-import WikiPanel from './WikiPanel'
 import DocumentList from './DocumentList'
 import KnowledgeIcon from './KnowledgeIcon'
 import { getDocumentPage } from './documentListPagination'
@@ -54,9 +53,11 @@ interface KnowledgePanelProps {
   onOperationLogFiltersChange: (filters: OperationLogFilters) => void
   onRefreshOperationLogs: () => void
   onClose: () => void
+  /** 在独立工作区阅读当前知识库的整理结果。 */
+  onOpenWiki: () => void
 }
 
-type KnowledgePanelView = 'knowledge' | 'logs' | 'wiki'
+type KnowledgePanelView = 'knowledge' | 'logs'
 type DocumentSort = 'uploadedAt:desc' | 'uploadedAt:asc' | 'name:asc' | 'name:desc' | 'size:desc' | 'size:asc'
 
 const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
@@ -90,6 +91,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onOperationLogFiltersChange,
   onRefreshOperationLogs,
   onClose,
+  onOpenWiki,
 }) => {
   const [activeView, setActiveView] = useState<KnowledgePanelView>('knowledge')
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -498,7 +500,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 >
                   知识库
                 </button>
-                <button type="button" className={`kb-view-switch-btn${activeView === 'wiki' ? ' kb-view-switch-btn--active' : ''}`} onClick={() => setActiveView('wiki')}>知识页</button>
+                <button type="button" className="kb-view-switch-btn" onClick={onOpenWiki}>打开 Wiki ↗</button>
                 <button
                   type="button"
                   className={`kb-view-switch-btn${activeView === 'logs' ? ' kb-view-switch-btn--active' : ''}`}
@@ -518,20 +520,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
           {/* 内容区 */}
           <div className="kb-body">
-            {activeView === 'wiki' ? (
-              <section className="wiki-workspace-shell">
-                {/* Wiki 上传复用现有处理入口与进度，不另建上传流程。 */}
-                {selectedKnowledgeBase ? <WikiPanel
-                  key={selectedKnowledgeBase.id}
-                  knowledgeBaseId={selectedKnowledgeBase.id}
-                  knowledgeBaseName={selectedKnowledgeBase.name}
-                  documents={selectedKnowledgeBase.documents}
-                  libraryPicker={<label>当前知识库<select value={selectedKnowledgeBase.id} onChange={(event) => onSelectKnowledgeBase(event.target.value)}>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select></label>}
-                  onUploadFiles={(files) => onUploadFiles(selectedKnowledgeBase.id, files)}
-                  uploadState={knowledgeBaseFileUploadStates[selectedKnowledgeBase.id]}
-                /> : <div className="wiki-no-library"><KnowledgeIcon name="book" size={32} /><h3>选择一个知识库，开始阅读</h3><select aria-label="选择知识库" value="" onChange={(event) => onSelectKnowledgeBase(event.target.value)}><option value="" disabled>请选择知识库</option>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select>{!knowledgeBases.length && <button onClick={handleOpenCreate}>新建知识库</button>}</div>}
-              </section>
-            ) : activeView === 'logs' ? (
+            {activeView === 'logs' ? (
               <section className="kb-log-panel">
                 <div className="kb-log-toolbar">
                   <label className="kb-search-field kb-log-filter">

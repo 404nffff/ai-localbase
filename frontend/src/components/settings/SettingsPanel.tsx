@@ -244,8 +244,10 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
           </section>
           <section className="settings-form-section">
             <header><h4>生成</h4><p>控制回答随机性和上下文规模。</p></header>
+            <label className="settings-form-label"><input type="checkbox" checked={draftChatConfig.useDefaultTemperature === true} onChange={(event) => updateChatConfig('useDefaultTemperature', event.target.checked)} /> 使用模型默认温度</label>
+            <p>模型不支持自定义温度时请勾选。测试通过后点击底部“保存”，再重试失败任务。</p>
             <div className="settings-form-grid settings-form-grid-dense">
-              <div className="settings-form-group settings-form-group-full"><label className="settings-form-label settings-form-label-inline" htmlFor="chat-temperature"><span>Temperature</span><strong>{draftChatConfig.temperature.toFixed(1)}</strong></label><input id="chat-temperature" type="range" min="0" max="1" step="0.1" value={draftChatConfig.temperature} onChange={(event) => updateChatConfig('temperature', Number(event.target.value))} /></div>
+              <div className="settings-form-group settings-form-group-full"><label className="settings-form-label settings-form-label-inline" htmlFor="chat-temperature"><span>Temperature</span><strong>{draftChatConfig.useDefaultTemperature ? '模型默认' : draftChatConfig.temperature.toFixed(1)}</strong></label><input id="chat-temperature" type="range" min="0" max="1" step="0.1" disabled={draftChatConfig.useDefaultTemperature} value={draftChatConfig.temperature} onChange={(event) => updateChatConfig('temperature', Number(event.target.value))} /></div>
               <div className="settings-form-group"><label className="settings-form-label" htmlFor="chat-context-limit">上下文消息数量</label><input id="chat-context-limit" type="number" min="1" max="100" value={draftChatConfig.contextMessageLimit} onChange={(event) => updateChatConfig('contextMessageLimit', Number(event.target.value))} /><small>范围 1-100。</small></div>
             </div>
           </section>

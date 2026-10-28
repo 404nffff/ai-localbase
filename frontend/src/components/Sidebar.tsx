@@ -15,6 +15,10 @@ import AppIcon from './common/AppIcon'
 import ThemeToggle from './common/ThemeToggle'
 import KnowledgePanel from './knowledge/KnowledgePanel'
 import SettingsPanel from './settings/SettingsPanel'
+import WikiProgressPage from '../pages/WikiProgressPage'
+import WikiPanel from './knowledge/WikiPanel'
+import WikiHistoryPage from '../pages/WikiHistoryPage'
+import type { WikiChange } from '../services/api'
 
 interface SidebarProps {
   isOpen: boolean
@@ -71,12 +75,14 @@ const formatDateTime = (value: string) =>
     minute: '2-digit',
   })
 
-type WorkspaceId = 'chat' | 'knowledge' | 'settings'
+type WorkspaceId = 'chat' | 'knowledge' | 'settings' | 'progress' | 'wiki'
 
 const workspaceItems = [
   { id: 'chat', label: '会话', icon: 'message' },
   { id: 'knowledge', label: '知识库', icon: 'book' },
   { id: 'settings', label: '设置', icon: 'settings' },
+  { id: 'progress', label: '整理总进度', icon: 'clock' },
+  { id: 'wiki', label: 'Wiki', icon: 'file' },
 ] as const
 
 const Sidebar = ({
@@ -127,12 +133,23 @@ const Sidebar = ({
   const [editingTitle, setEditingTitle] = useState('')
   const [isComposingTitle, setIsComposingTitle] = useState(false)
   const [conversationFilter, setConversationFilter] = useState('')
+  const [progressLibraryId, setProgressLibraryId] = useState<string | null>(null)
+  const [progressVisit, setProgressVisit] = useState(0)
+  const [wikiOpen, setWikiOpen] = useState(false)
+  const [wikiHistoryOpen, setWikiHistoryOpen] = useState(false)
+  const [wikiTarget, setWikiTarget] = useState<WikiChange | null>(null)
+  const wikiLibrary = knowledgeBases.find((kb) => kb.id === (wikiTarget?.knowledgeBaseId ?? selectedKnowledgeBaseId)) ?? knowledgeBases[0]
 
-  const activeWorkspace: WorkspaceId = isSettingsOpen
-    ? 'settings'
-    : isKnowledgePanelOpen
-      ? 'knowledge'
-      : 'chat'
+  let activeWorkspace: WorkspaceId = 'chat'
+  if (wikiOpen) {
+    activeWorkspace = 'wiki'
+  } else if (progressLibraryId !== null) {
+    activeWorkspace = 'progress'
+  } else if (isSettingsOpen) {
+    activeWorkspace = 'settings'
+  } else if (isKnowledgePanelOpen) {
+    activeWorkspace = 'knowledge'
+  }
   const sortedKnowledgeBases = useMemo(() => knowledgeBases, [knowledgeBases])
   const filteredConversations = useMemo(() => {
     const query = conversationFilter.trim().toLowerCase()
@@ -147,8 +164,23 @@ const Sidebar = ({
     }))
   }
 
-  // 当前 App 仍分别维护两个弹窗开关，这里统一成工作区切换，避免知识库和设置同时打开。
+  /** 工作区互斥显示；整理总进度使用独立入口，保留知识库原有视图选择。 */
   const handleWorkspaceChange = (workspace: WorkspaceId) => {
+    setWikiHistoryOpen(false)
+    setWikiTarget(null)
+    setWikiOpen(workspace === 'wiki')
+    setProgressLibraryId(workspace === 'progress' ? '' : null)
+    if (workspace === 'wiki') {
+      if (isSettingsOpen) onToggleSettings()
+      if (isKnowledgePanelOpen) onToggleKnowledgePanel()
+      return
+    }
+    if (workspace === 'progress') {
+      setProgressVisit((visit) => visit + 1)
+      if (isSettingsOpen) onToggleSettings()
+      if (isKnowledgePanelOpen) onToggleKnowledgePanel()
+      return
+    }
     if (workspace === 'chat') {
       if (isSettingsOpen) onToggleSettings()
       if (isKnowledgePanelOpen) onToggleKnowledgePanel()
@@ -218,7 +250,7 @@ const Sidebar = ({
           </div>
         </div>
 
-        <section className="conversation-sidebar" aria-hidden={!isOpen}>
+        <section className="conversation-sidebar" aria-hidden={!isOpen || activeWorkspace !== 'chat'}>
           <header className="conversation-sidebar-header">
             <div>
               <span className="conversation-sidebar-kicker">AI LocalBase</span>
@@ -370,6 +402,34 @@ const Sidebar = ({
         <SettingsPanel config={config} onClose={onToggleSettings} onSaveConfig={onSaveConfig} />
       )}
 
+      {progressLibraryId !== null && <WikiProgressPage key={progressVisit} initialKnowledgeBaseId={progressLibraryId} onClose={() => handleWorkspaceChange('chat')} />}
+
+      {/* Wiki 独占主工作区，切库重建阅读状态，上传仍复用知识库入口。 */}
+      {wikiOpen && wikiHistoryOpen && <WikiHistoryPage knowledgeBases={knowledgeBases}
+        onClose={() => setWikiHistoryOpen(false)}
+        onOpenProgress={() => handleWorkspaceChange('progress')}
+        onOpenPage={(change) => {
+          onSelectKnowledgeBase(change.knowledgeBaseId)
+          setWikiTarget(change)
+          setWikiHistoryOpen(false)
+        }}
+      />}
+      {wikiOpen && !wikiHistoryOpen && <section className="wiki-workspace-page app-workspace" aria-label="Wiki 工作区">
+        {wikiLibrary ? <WikiPanel
+          key={wikiLibrary.id}
+          initialPageId={wikiTarget?.pageId}
+          initialRevision={wikiTarget?.revision}
+          onOpenHistory={() => setWikiHistoryOpen(true)}
+          knowledgeBaseId={wikiLibrary.id}
+          knowledgeBaseName={wikiLibrary.name}
+          documents={wikiLibrary.documents}
+          libraryPicker={<label>当前知识库<select aria-label="切换 Wiki 知识库" value={wikiLibrary.id} onChange={(event) => { setWikiTarget(null); onSelectKnowledgeBase(event.target.value) }}>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select></label>}
+          onUploadFiles={(files) => onUploadFiles(wikiLibrary.id, files)}
+          uploadState={knowledgeBaseFileUploadStates[wikiLibrary.id]}
+          onOpenProgress={() => { handleWorkspaceChange('progress'); setProgressLibraryId(wikiLibrary.id) }}
+        /> : <div className="wiki-no-library"><AppIcon name="book" size={32} /><h2>还没有知识库</h2><p>先创建知识库并上传资料，再查看整理后的知识页。</p><button onClick={() => handleWorkspaceChange('knowledge')}>打开知识库</button></div>}
+      </section>}
+
       <KnowledgePanel
         open={isKnowledgePanelOpen}
         knowledgeBases={sortedKnowledgeBases}
@@ -401,6 +461,7 @@ const Sidebar = ({
         onOperationLogFiltersChange={onOperationLogFiltersChange}
         onRefreshOperationLogs={onRefreshOperationLogs}
         onClose={onToggleKnowledgePanel}
+        onOpenWiki={() => handleWorkspaceChange('wiki')}
       />
     </>
   )

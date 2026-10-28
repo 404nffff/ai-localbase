@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"sort"
 	"strconv"
@@ -510,4 +511,59 @@ func wikiMCPTools() []model.MCPTool {
 		result = append(result, tool)
 	}
 	return result
+}
+
+// WikiRetryFailure 记录未能提交的任务及原因，不将提交失败混同为模型执行失败。
+type WikiRetryFailure struct {
+	JobID string `json:"jobId"`
+	Error string `json:"error"`
+}
+
+// WikiRetryBatchResult 汇总本库失败任务快照的提交结果，Submitted 不代表整理成功。
+type WikiRetryBatchResult struct {
+	Total     int                `json:"total"` // 点击时本库全部失败任务数，不受分页影响。
+	Submitted int                `json:"submitted"`
+	Skipped   int                `json:"skipped"`   // 已达到三次执行上限。
+	Remaining int                `json:"remaining"` // 因执行故障停止后尚未尝试提交的数量。
+	Failures  []WikiRetryFailure `json:"failures"`
+}
+
+// RetryFailedWikiJobs 对当前失败任务快照逐项提交一次，复用单条重试的来源和次数校验。
+// 部分提交不会回滚；业务冲突记录后继续，持久化等系统错误立即停止并返回已发生的结果。
+func (s *AppService) RetryFailedWikiJobs(kbID string) (WikiRetryBatchResult, error) {
+	result := WikiRetryBatchResult{Failures: []WikiRetryFailure{}}
+	kb, err := s.WikiSnapshot(kbID)
+	if err != nil {
+		return result, err
+	}
+	if kb.Wiki == nil || !kb.Wiki.Enabled {
+		return result, &WikiError{409, "disabled", "本库自动整理已关闭"}
+	}
+	for _, job := range kb.Wiki.Jobs {
+		if job.Status == "failed" {
+			result.Total++
+		}
+	}
+	result.Remaining = result.Total
+	for _, job := range kb.Wiki.Jobs {
+		if job.Status != "failed" {
+			continue
+		}
+		result.Remaining--
+		if job.Attempt >= 3 {
+			result.Skipped++
+			continue
+		}
+		_, err := s.RetryWikiJob(kbID, job.ID)
+		if err == nil {
+			result.Submitted++
+			continue
+		}
+		result.Failures = append(result.Failures, WikiRetryFailure{JobID: job.ID, Error: err.Error()})
+		var business *WikiError
+		if !errors.As(err, &business) || business.Status >= 500 {
+			break
+		}
+	}
+	return result, nil
 }

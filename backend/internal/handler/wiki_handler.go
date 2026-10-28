@@ -9,6 +9,37 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// WikiChanges 返回实际发布的文档修订；单库路径优先，全局路径可按库筛选。
+// @Summary 查看整理后的文档记录
+// @Tags Wiki
+// @Param id path string true "知识库 ID"
+// @Param knowledgeBaseId query string false "全局入口的可选知识库筛选"
+// @Param offset query int false "非负记录偏移，默认 0"
+// @Param limit query int false "每页 1–100 条，默认 6"
+// @Success 200 {object} map[string]interface{} "items、total、nextCursor"
+// @Failure 400 {object} map[string]interface{} "分页参数无效"
+// @Failure 404 {object} map[string]interface{} "知识库不存在"
+// @Router /api/knowledge-bases/{id}/wiki/changes [get]
+// @Router /api/wiki/changes [get]
+func (h *AppHandler) WikiChanges(c *gin.Context) {
+	offset, offsetErr := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, limitErr := strconv.Atoi(c.DefaultQuery("limit", "6"))
+	if offsetErr != nil || limitErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "分页参数必须为整数"})
+		return
+	}
+	kbID := c.Param("id")
+	if kbID == "" {
+		kbID = c.Query("knowledgeBaseId")
+	}
+	result, err := h.appService.WikiChanges(kbID, offset, limit)
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 // wikiRequest 将路径、查询和请求体统一交给业务契约；路径范围始终优先于请求体。
 func (h *AppHandler) wikiRequest(c *gin.Context, action string) {
 	arguments := map[string]any{}
@@ -183,4 +214,45 @@ func (h *AppHandler) WikiExport(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", `attachment; filename="wiki.zip"`)
 	c.Data(200, "application/zip", data)
+}
+
+// WikiProgress 返回全部库的整理统计，可选读取指定库的分页任务；不启动或重试任务。
+// @Summary 查看知识库整理总进度
+// @Produce json
+// @Param knowledgeBaseId query string false "指定库任务；留空仅返回全部库汇总"
+// @Param status query string false "queued/running/succeeded/failed/partial/needs_split/canceled"
+// @Param offset query int false "任务偏移，默认 0"
+// @Param limit query int false "每页任务数，默认 20，最多 100"
+// @Success 200 {object} map[string]interface{} "items 为全量库统计，jobs 为指定库任务分页"
+// @Failure 400,401,404 {object} map[string]interface{}
+// @Router /api/wiki/progress [get]
+func (h *AppHandler) WikiProgress(c *gin.Context) {
+	offset, offsetErr := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, limitErr := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if offsetErr != nil || limitErr != nil {
+		c.JSON(400, gin.H{"error": "分页参数必须为整数", "code": "invalid_page"})
+		return
+	}
+	result, err := h.appService.WikiProgress(c.Query("knowledgeBaseId"), c.Query("status"), offset, limit)
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// WikiRetryFailed 提交本库全部失败任务的重试，并明确返回部分提交与跳过原因。
+// @Summary 批量重试本库失败任务
+// @Param id path string true "知识库 ID"
+// @Success 200 {object} service.WikiRetryBatchResult "提交统计，不代表任务执行成功"
+// @Failure 404 {object} map[string]interface{} "知识库不存在"
+// @Failure 409 {object} map[string]interface{} "知识库未启用"
+// @Router /api/knowledge-bases/{id}/wiki/retry-failed [post]
+func (h *AppHandler) WikiRetryFailed(c *gin.Context) {
+	result, err := h.appService.RetryFailedWikiJobs(c.Param("id"))
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

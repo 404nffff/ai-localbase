@@ -40,12 +40,13 @@ type HealthResponse struct {
 }
 
 type ChatConfig struct {
-	Provider            string  `json:"provider"`
-	BaseURL             string  `json:"baseUrl"`
-	Model               string  `json:"model"`
-	APIKey              string  `json:"apiKey"`
-	Temperature         float64 `json:"temperature"`
-	ContextMessageLimit int     `json:"contextMessageLimit"`
+	UseDefaultTemperature bool    `json:"useDefaultTemperature"` // 为 true 时不传温度，由模型自行选择默认值。
+	Provider              string  `json:"provider"`
+	BaseURL               string  `json:"baseUrl"`
+	Model                 string  `json:"model"`
+	APIKey                string  `json:"apiKey"`
+	Temperature           float64 `json:"temperature"`
+	ContextMessageLimit   int     `json:"contextMessageLimit"`
 }
 
 type EmbeddingConfig struct {
@@ -373,12 +374,13 @@ type ChatMessage struct {
 }
 
 type ChatModelConfig struct {
-	Provider            string  `json:"provider"`
-	BaseURL             string  `json:"baseUrl"`
-	Model               string  `json:"model"`
-	APIKey              string  `json:"apiKey"`
-	Temperature         float64 `json:"temperature"`
-	ContextMessageLimit int     `json:"contextMessageLimit"`
+	UseDefaultTemperature bool    `json:"useDefaultTemperature"` // 普通聊天、Wiki和模型测试共用的温度传参模式。
+	Provider              string  `json:"provider"`
+	BaseURL               string  `json:"baseUrl"`
+	Model                 string  `json:"model"`
+	APIKey                string  `json:"apiKey"`
+	Temperature           float64 `json:"temperature"`
+	ContextMessageLimit   int     `json:"contextMessageLimit"`
 }
 
 type EmbeddingModelConfig struct {
@@ -474,11 +476,12 @@ type APIError struct {
 }
 
 type TestChatModelRequest struct {
-	Provider    string  `json:"provider"`
-	BaseURL     string  `json:"baseUrl"`
-	Model       string  `json:"model"`
-	APIKey      string  `json:"apiKey"`
-	Temperature float64 `json:"temperature"`
+	UseDefaultTemperature bool    `json:"useDefaultTemperature"` // 探测使用当前草稿的默认温度选项。
+	Provider              string  `json:"provider"`
+	BaseURL               string  `json:"baseUrl"`
+	Model                 string  `json:"model"`
+	APIKey                string  `json:"apiKey"`
+	Temperature           float64 `json:"temperature"`
 }
 
 type TestEmbeddingModelRequest struct {

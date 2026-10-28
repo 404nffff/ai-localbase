@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DocumentItem, KnowledgeBaseFileUploadState } from '../../App'
-import { downloadWiki, wikiRequest, type WikiIssue, type WikiJob, type WikiList, type WikiOverview, type WikiPage, type WikiPageContent, type WikiSourceContent, type WikiSourceRef } from '../../services/api'
+import { downloadWiki, wikiRequest, type WikiChange, type WikiIssue, type WikiJob, type WikiList, type WikiOverview, type WikiPage, type WikiPageContent, type WikiSourceContent, type WikiSourceRef } from '../../services/api'
 import MarkdownRenderer from '../chat/MarkdownRenderer'
 import AppIcon from '../common/AppIcon'
 import '../../styles/wiki.css'
@@ -22,7 +22,7 @@ export function formatWikiTime(value: string): string {
 }
 
 /** 浏览单页与来源版本；历史正文逐页加载，不把预览当全文。 */
-export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, onClose }: { knowledgeBaseId: string; pageId: string; initialRevision?: number; onClose: () => void }) {
+export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, showHistory = false, onClose }: { knowledgeBaseId: string; pageId: string; initialRevision?: number; /** 独立 Wiki 展示侧边历史，聊天引用保持紧凑阅读。 */ showHistory?: boolean; onClose: () => void }) {
   const [page, setPage] = useState<WikiPageContent | null>(null)
   const [selectedPage, setSelectedPage] = useState(pageId)
   const [revision, setRevision] = useState(initialRevision)
@@ -37,8 +37,8 @@ export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, o
     generation.current += 1
     setPage(null); setSource(null); setSourceRef(null); setError(''); setBusy(false)
     void wikiRequest<WikiPageContent>(knowledgeBaseId, `/pages/${encodeURIComponent(selectedPage)}?revision=${revision}`, 'GET', undefined, controller.signal)
-      .then(setPage).catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message) })
-    return () => controller.abort()
+      .then((result) => { if (!controller.signal.aborted) setPage(result) }).catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message) })
+    return () => { controller.abort(); generation.current += 1 }
   }, [knowledgeBaseId, selectedPage, revision])
 
   /** 读取指定来源版本；切换来源会替换正文，翻页仅追加同一版本。 */
@@ -66,13 +66,14 @@ export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, o
     finally { if (current === generation.current) setBusy(false) }
   }
 
-  return <section className="wiki-reader" aria-label="知识页详情">
+  return <section className={`wiki-reader${showHistory ? ' wiki-reader-with-history' : ''}`} aria-label="知识页详情">
+    <div className="wiki-reader-body">
     <div className="wiki-toolbar"><h3>{page?.title ?? '读取知识页…'}</h3><button type="button" onClick={onClose}>关闭详情</button></div>
     {error && <p role="alert" className="wiki-error">{error}</p>}
     {page && <>
-      <div className="wiki-toolbar"><span>{wikiStatusLabel(page.metadata.freshness)}</span><label>历史修订 <select value={revision} onChange={(event) => setRevision(Number(event.target.value))}>
+      <div className="wiki-toolbar"><span>{wikiStatusLabel(page.metadata.freshness)}</span><span>正在阅读修订 {page.revision}</span>{!showHistory && <label>历史修订 <select value={revision} onChange={(event) => setRevision(Number(event.target.value))}>
         <option value={0}>当前版本</option>{Array.from({ length: page.metadata.revision }, (_, index) => <option key={index + 1} value={index + 1}>修订 {index + 1}</option>)}
-      </select></label><span>共 {page.totalChars} 字符</span></div>
+      </select></label>}<span>共 {page.totalChars} 字符</span></div>
       <MarkdownRenderer content={page.markdown} />
       {page.nextOffset > 0 && <button disabled={busy} onClick={() => void morePage()}>加载后续正文</button>}
       <h4>原始来源</h4>
@@ -81,11 +82,28 @@ export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, o
       {source && <section className="wiki-source"><h4>{source.name} · 原始版本</h4><pre>{source.content}</pre>{source.nextOffset > 0 && sourceRef && <button disabled={busy} onClick={() => void readSource(sourceRef, source.nextOffset)}>加载后续来源</button>}</section>}
       {(page.links ?? []).length > 0 && <div className="wiki-toolbar"><span>关联知识页</span>{page.links.map((id) => <button key={id} onClick={() => { setSelectedPage(id); setRevision(0) }}>{id}</button>)}</div>}
     </>}
+    </div>
+    {showHistory && page && <aside className="wiki-revision-panel" aria-label="更新历史">
+      <h4><AppIcon name="clock" size={16} />更新历史</h4>
+      <p>点击修订，查看当时的整理正文。</p>
+      <button className={revision === 0 ? 'is-active' : ''} aria-pressed={revision === 0} onClick={() => setRevision(0)}>当前版本 · 修订 {page.metadata.revision}</button>
+      <ol>{[...(page.metadata.history ?? [])].sort((a, b) => b.revision - a.revision).map((item) => <li key={item.revision}>
+        <button className={revision === item.revision ? 'is-active' : ''} aria-pressed={revision === item.revision} onClick={() => setRevision(item.revision)}>
+          <strong>修订 {item.revision}</strong><time dateTime={item.createdAt}>{formatWikiTime(item.createdAt)}</time><span>{item.title}</span>
+        </button>
+      </li>)}</ol>
+      {!page.metadata.history?.length && <p>暂无可用的历史修订记录。</p>}
+    </aside>}
   </section>
 }
 
 /** 单库阅读工作区的宿主入口，上传沿用知识库原有处理与进度。 */
 interface WikiPanelProps {
+  /** 从全库历史进入时定位发布时的页面和修订。 */
+  initialPageId?: string
+  initialRevision?: number
+  /** 打开跨所有知识库的整理历史。 */
+  onOpenHistory?: () => void
   /** 当前知识库的服务端标识，用于所有 Wiki 请求。 */
   knowledgeBaseId: string
   /** 当前库名称，用于面包屑与文库首页。 */
@@ -98,6 +116,8 @@ interface WikiPanelProps {
   onUploadFiles: (files: FileList | null) => void
   /** 未上传时为空；上传期间禁用重复选择并显示完成数量。 */
   uploadState?: KnowledgeBaseFileUploadState
+  /** 打开统一整理进度页，定位当前库并查看完整任务历史。 */
+  onOpenProgress?: () => void
 }
 
 /**
@@ -105,12 +125,15 @@ interface WikiPanelProps {
  * 宿主负责当前库选择、原始文件上传及上传失败反馈；本组件回读 Wiki 状态，
  * 展示整理错误并轮询已运行任务。历史资料仍需显式选择，切换库由宿主 key 重建状态。
  */
-export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, documents, libraryPicker, onUploadFiles, uploadState }: WikiPanelProps) {
+export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, documents, libraryPicker, onUploadFiles, uploadState, onOpenProgress, onOpenHistory, initialPageId, initialRevision = 0 }: WikiPanelProps) {
   const [overview, setOverview] = useState<WikiOverview | null>(null)
   const [pages, setPages] = useState<WikiList<WikiPage>>({ items: [], total: 0, nextCursor: '' })
   const [issues, setIssues] = useState<WikiList<WikiIssue>>({ items: [], total: 0, nextCursor: '' })
   const [selected, setSelected] = useState<string[]>([])
-  const [pageId, setPageId] = useState<string | null>(null)
+  const [pageId, setPageId] = useState<string | null>(initialPageId ?? null)
+  const [pageRevision, setPageRevision] = useState(initialRevision)
+  const [changes, setChanges] = useState<WikiList<WikiChange>>({ items: [], total: 0, nextCursor: '' })
+  const [changeOffset, setChangeOffset] = useState(0)
   const [query, setQuery] = useState('')
   const [pageType, setPageType] = useState('')
   const [freshness, setFreshness] = useState('')
@@ -135,10 +158,12 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
       wikiRequest<WikiOverview>(knowledgeBaseId),
       wikiRequest<WikiList<WikiPage>>(knowledgeBaseId, `/pages?${pageParams}`),
       wikiRequest<WikiList<WikiIssue>>(knowledgeBaseId, `/issues?${issueParams}`),
+      wikiRequest<WikiList<WikiChange>>(knowledgeBaseId, `/changes?offset=${changeOffset}&limit=6`),
     ])
     if (current !== generation.current) return
     setOverview(results[0]); setPages(results[1]); setIssues(results[2])
-  }, [knowledgeBaseId, query, pageType, freshness, pageCursor, issueStatus, issueCursor])
+    setChanges(results[3])
+  }, [knowledgeBaseId, query, pageType, freshness, pageCursor, issueStatus, issueCursor, changeOffset])
 
   // 宿主上传后更新资料列表，同步回读新创建的整理任务和知识目录。
   useEffect(() => {
@@ -196,6 +221,14 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
   }[view]
   const hasFilters = Boolean(query || pageType || freshness)
 
+  /** 目录默认读最新正文；整理记录固定到当时发布的修订，切换时关闭手机目录。 */
+  function openPage(id: string, revision = 0) {
+    setPageId(id)
+    setPageRevision(revision)
+    setView('read')
+    setDirectoryOpen(false)
+  }
+
   return <section className="wiki-panel" aria-label="知识页维护">
     <aside className={`wiki-sidebar${directoryOpen ? ' is-open' : ''}`} aria-label="知识目录">
       <button className="wiki-mobile-toggle" aria-expanded={directoryOpen} onClick={() => setDirectoryOpen(!directoryOpen)}><AppIcon name="book" size={18} /><span>知识目录</span><AppIcon name={directoryOpen ? 'chevronUp' : 'chevronDown'} size={16} /></button>
@@ -247,9 +280,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
       </div>
       <nav className="wiki-page-tree" aria-label="知识页列表">
         {pages.items.map((page) => <button key={page.id} className={view === 'read' && pageId === page.id ? 'is-active' : ''} aria-current={view === 'read' && pageId === page.id ? 'page' : undefined} onClick={() => {
-          setPageId(page.id)
-          setView('read')
-          setDirectoryOpen(false)
+          openPage(page.id)
         }}><AppIcon name="file" size={15} /><span>{page.name}</span>{page.wiki.freshness !== 'fresh' && <AppIcon name="alert" size={13} />}</button>)}
         {!pages.items.length && <p className="wiki-directory-empty">{overview ? '知识页将在整理后出现在这里' : '正在读取目录…'}</p>}
       </nav>
@@ -268,6 +299,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
       <header className="wiki-topbar">
         <div className="wiki-breadcrumb"><span>{knowledgeBaseName}</span><AppIcon name="chevronRight" size={14} /><strong>{viewTitle}</strong></div>
         <div className="wiki-topbar-actions">
+          {onOpenHistory && <button onClick={onOpenHistory}><AppIcon name="clock" size={16} />全部整理历史</button>}
           <button className="wiki-icon-button" aria-label="刷新知识页" title="刷新" disabled={busy} onClick={() => void act(refresh)}><AppIcon name="refresh" size={16} /></button>
           <button className="wiki-export-button" disabled={busy} onClick={() => void act(() => downloadWiki(knowledgeBaseId))}><AppIcon name="download" size={16} /><span>导出 Markdown</span></button>
           <button className="wiki-primary" disabled={Boolean(uploadState)} onClick={() => fileInput.current?.click()}><AppIcon name="upload" size={16} />{uploadState ? `上传中 ${uploadState.completedFiles}/${uploadState.totalFiles}` : '上传资料'}</button>
@@ -278,12 +310,20 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
         }} />
         </div>
       </header>
+      <details className="wiki-recent-changes" open>
+        <summary><span><AppIcon name="sparkles" size={17} />整理后的文档记录</span><small>{changes.total} 次发布 · 点击查看整理内容</small></summary>
+        <div className="wiki-change-list">{changes.items.map((item) => <button key={`${item.pageId}-${item.revision}`} className={pageId === item.pageId && pageRevision === item.revision ? 'is-active' : ''} onClick={() => openPage(item.pageId, item.revision)}>
+          <strong>{item.title}</strong><span>修订 {item.revision} · {item.sourceCount} 份来源</span><time dateTime={item.createdAt}>{formatWikiTime(item.createdAt)}</time>
+        </button>)}</div>
+        {!changes.items.length && <p>{overview ? '暂无已发布的整理内容。可从左侧选择原始资料开始整理，或查看整理任务。' : '正在读取整理记录…'}</p>}
+        {(changeOffset > 0 || changes.nextCursor) && <nav className="wiki-change-pagination" aria-label="整理记录分页"><span>第 {Math.floor(changeOffset / 6) + 1} 页</span><button disabled={changeOffset === 0} onClick={() => setChangeOffset(Math.max(0, changeOffset - 6))}>较新记录</button><button disabled={!changes.nextCursor} onClick={() => setChangeOffset(Number(changes.nextCursor))}>更早记录</button></nav>}
+      </details>
       {error && <p className="wiki-error wiki-feedback" role="alert">{error}</p>}
       {notice && <p className="wiki-notice wiki-feedback" role="status">{notice}</p>}
       {uploadState && <p className="wiki-feedback" role="status">正在上传：{uploadState.currentFileName}。{wikiAutomationMessage(overview)}</p>}
 
       <div className="wiki-content">
-        {view === 'read' && (pageId ? <WikiPageViewer key={pageId} knowledgeBaseId={knowledgeBaseId} pageId={pageId} onClose={() => setPageId(null)} /> : <>
+        {view === 'read' && (pageId ? <WikiPageViewer key={`${pageId}-${pageRevision}`} knowledgeBaseId={knowledgeBaseId} pageId={pageId} initialRevision={pageRevision} showHistory onClose={() => setPageId(null)} /> : <>
           <div className="wiki-home-heading"><span className="wiki-eyebrow">KNOWLEDGE WIKI</span><h2>{knowledgeBaseName} 的知识文库</h2><p>让零散资料成为相互关联、随时可查的知识。</p></div>
           <div className="wiki-overview-strip"><span><strong>{overview?.counts.pages ?? '—'}</strong> 知识页</span><span><strong>{sourceDocuments.length}</strong> 原始资料</span><span><strong>{overview?.pendingCount ?? '—'}</strong> 待整理</span><span><strong>{overview?.counts.stale ?? '—'}</strong> 来源失效</span></div>
           {!overview && !error && <p className="wiki-loading" role="status">正在读取知识文库…</p>}
@@ -296,7 +336,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
             <p className="wiki-welcome-hint">{wikiAutomationMessage(overview)}</p>
           </section> : overview && <section className="wiki-page-index">
             <div className="wiki-section-heading"><h3>{hasFilters ? '筛选结果' : '浏览知识页'}</h3><span>{pages.total} 页</span></div>
-            {pages.items.map((page) => <button className="wiki-page-row" key={page.id} onClick={() => setPageId(page.id)}><AppIcon name="file" size={20} /><span><strong>{page.name}</strong><small>{wikiStatusLabel(page.wiki.pageType)} · {wikiStatusLabel(page.wiki.freshness)} · 修订 {page.wiki.revision}{page.wiki.indexedRevision !== page.wiki.revision && ' · 索引未完成'}</small></span><time>{formatWikiTime(page.wiki.updatedAt)}</time><AppIcon name="chevronRight" size={16} /></button>)}
+            {pages.items.map((page) => <button className="wiki-page-row" key={page.id} onClick={() => openPage(page.id)}><AppIcon name="file" size={20} /><span><strong>{page.name}</strong><small>{wikiStatusLabel(page.wiki.pageType)} · {wikiStatusLabel(page.wiki.freshness)} · 修订 {page.wiki.revision}{page.wiki.indexedRevision !== page.wiki.revision && ' · 索引未完成'}</small></span><time>{formatWikiTime(page.wiki.updatedAt)}</time><AppIcon name="chevronRight" size={16} /></button>)}
             {!pages.items.length && <p className="wiki-muted">暂无符合条件的知识页，请调整搜索或筛选条件。</p>}
           </section>}
           <div className="wiki-guide"><div><span>01 / 收集</span><h4>上传原始资料</h4><p>支持 TXT、Markdown、PDF、CSV 和 XLSX，也可通过 MCP 上传文本资料。</p></div><div><span>02 / 整理</span><h4>形成关联知识</h4><p>默认开启自动整理，未配置第三方模型则跳过；已有资料可选择补整理，每批最多 20 份。</p></div><div><span>03 / 使用</span><h4>阅读与追溯</h4><p>查看知识页、历史修订和原始出处；通过内容体检发现过期来源与疑点。</p></div></div>
@@ -314,8 +354,9 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
         </>}
 
         {view === 'jobs' && <>
-          <div className="wiki-section-heading"><div><span className="wiki-eyebrow">ACTIVITY</span><h2>整理任务</h2><p>查看资料整理、回答沉淀与内容体检的执行进度。</p></div>{running && <span className="wiki-status-pill">正在自动刷新</span>}</div>
-          {overview?.jobs.map((job) => <article className="wiki-job" key={job.id}><div className="wiki-section-heading"><strong>{job.kind === 'lint' ? '内容体检' : job.kind === 'capture' ? '回答沉淀' : '资料整理'}</strong><span className="wiki-status-pill" data-status={job.status}>{wikiStatusLabel(job.status)}</span></div><span>{wikiStatusLabel(job.stage)} · 第 {job.attempt} 次执行 · {formatWikiTime(job.updatedAt)}</span><span>资料段落 {job.processedSegments}/{job.totalSegments} · 页面覆盖 {job.checkedPages}/{job.totalPages}{job.semanticStatus && ` · 语义检查：${wikiStatusLabel(job.semanticStatus)}`}</span>{job.error && <p className="wiki-error">{job.error}</p>}{job.status === 'failed' && job.attempt < 3 && <button disabled={busy || !overview.enabled} onClick={() => void act(() => wikiRequest(knowledgeBaseId, `/jobs/${encodeURIComponent(job.id)}/retry`, 'POST'))}>重试失败阶段</button>}</article>)}
+          <div className="wiki-section-heading"><div><span className="wiki-eyebrow">ACTIVITY</span><h2>整理任务</h2><p>最近 50 个任务。查看全库进度、筛选失败任务和完整历史，请打开整理总进度。</p></div>{onOpenProgress && <button onClick={onOpenProgress}><AppIcon name="clock" size={17} />整理总进度<AppIcon name="chevronRight" size={16} /></button>}</div>
+          {running && <p className="wiki-muted">正在自动刷新任务进度</p>}
+          {overview && <WikiJobList jobs={overview.jobs} enabled={overview.enabled} busy={busy} onRetry={(job) => void act(() => wikiRequest(knowledgeBaseId, `/jobs/${encodeURIComponent(job.id)}/retry`, 'POST'))} />}
           {overview && !overview.jobs.length && <div className="wiki-simple-empty"><AppIcon name="clock" size={32} /><h3>还没有整理任务</h3><p>开启自动整理后上传资料，或选择已有资料开始整理。</p><button onClick={() => setView('sources')}>选择已有资料</button></div>}
         </>}
 
@@ -327,8 +368,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
         }}>{['open', 'resolved', 'dismissed', ''].map((value) => <option key={value} value={value}>{value ? wikiStatusLabel(value) : '全部问题'}</option>)}</select></div>
           {!overview?.enabled && <p className="wiki-muted">请先开启自动整理，再运行内容体检。</p>}
           {issues.items.map((issue) => <article className="wiki-issue" key={issue.id}><strong>{wikiStatusLabel(issue.type)} · {wikiStatusLabel(issue.status)}</strong><p>{issue.reason}</p><div className="wiki-toolbar">{issue.pageIds.map((id) => <button key={id} onClick={() => {
-          setPageId(id)
-          setView('read')
+          openPage(id)
         }}>查看关联页</button>)}{issue.status === 'open' ? <><button disabled={busy} onClick={() => handleIssue(issue, 'resolved')}>标记解决</button><button disabled={busy} onClick={() => handleIssue(issue, 'dismissed')}>忽略</button></> : <button disabled={busy} onClick={() => handleIssue(issue, 'open')}>重新打开</button>}</div></article>)}
           {issues.items.length === 0 && <div className="wiki-simple-empty"><AppIcon name="check" size={32} /><h3>暂无符合条件的问题</h3><p>体检覆盖范围以任务结果为准，尚未检查不代表没有问题。</p></div>}
           <div className="wiki-pagination">{issueCursor && <button onClick={() => setIssueCursor('')}>问题首页</button>}{issues.nextCursor && <button onClick={() => setIssueCursor(issues.nextCursor)}>下一页问题</button>}</div>
@@ -350,4 +390,61 @@ export function wikiAutomationMessage(overview: WikiOverview | null): string {
     return '未配置第三方聊天模型，已跳过自动整理；原始资料正常入库。'
   }
   return '自动整理已开启，网页或 MCP 新上传、更新的资料会在入库后排队整理。'
+}
+
+/**
+ * 展示真实任务阶段、处理覆盖与失败恢复入口，供单库文库和总进度页使用。
+ * 分段/页面覆盖只代表读取进度，不将其当作整个任务完成率；重试交给宿主调用原接口。
+ */
+export function WikiJobList({ jobs, enabled, busy, onRetry }: {
+  /** 当前页的任务，排序与分页由宿主负责。 */
+  jobs: WikiJob[]
+  /** 库关闭时不允许重试，但仍保留历史结果。 */
+  enabled: boolean
+  /** 正在提交或回读时禁止重复重试。 */
+  busy: boolean
+  /** 只对失败且未达到三次执行上限的任务触发。 */
+  onRetry: (job: WikiJob) => void
+}) {
+  return <div className="wiki-job-list">{jobs.map((job) => {
+    const steps = job.kind === 'lint'
+      ? ['structure', 'semantic', 'finalize']
+      : ['read_sources', 'extract', 'plan', 'validate', 'publish', 'index', 'finalize']
+    const stageIndex = steps.indexOf(job.stage)
+    const canRetry = job.status === 'failed' && job.attempt < 3 && enabled
+    let taskTitle = '资料整理'
+    if (job.kind === 'lint') {
+      taskTitle = '内容体检'
+    } else if (job.kind === 'capture') {
+      taskTitle = '回答沉淀'
+    }
+    return <article className="wiki-task-card" key={job.id}>
+      <header className="wiki-task-heading">
+        <div className="wiki-task-title"><span className="wiki-task-icon"><AppIcon name={job.kind === 'lint' ? 'check' : 'file'} size={20} /></span><div><h3>{taskTitle}</h3><small>{job.id}</small></div></div>
+        <span className="wiki-status-pill" data-status={job.status}>{wikiStatusLabel(job.status)}</span>
+      </header>
+      <div className="wiki-task-stage"><strong>{wikiStatusLabel(job.stage)}</strong><span>{job.attempt > 0 ? `第 ${job.attempt} / 3 次执行` : '等待执行'}</span></div>
+      <ol className="wiki-task-steps" aria-label="整理阶段">{steps.map((step, index) => {
+        // 成功任务全部标记完成，其他任务按服务端当前阶段区分已过、当前与等待。
+        let stepState = 'waiting'
+        if (job.status === 'succeeded' || index < stageIndex) {
+          stepState = 'done'
+        } else if (index === stageIndex) {
+          stepState = 'current'
+        }
+        return <li key={step} data-state={stepState} aria-current={step === job.stage ? 'step' : undefined}><span />{wikiStatusLabel(step)}</li>
+      })}</ol>
+      <div className="wiki-task-coverage">
+        {job.totalSegments > 0 && <label>资料段落 <strong>{job.processedSegments} / {job.totalSegments}</strong><progress aria-label="资料段落处理进度" value={job.processedSegments} max={job.totalSegments} /></label>}
+        {job.totalPages > 0 && <label>页面检查 <strong>{job.checkedPages} / {job.totalPages}</strong><progress aria-label="页面检查进度" value={job.checkedPages} max={job.totalPages} /></label>}
+      </div>
+      {job.semanticStatus && <p className="wiki-task-note">语义检查：{wikiStatusLabel(job.semanticStatus)}</p>}
+      {job.error && <div className="wiki-task-error"><AppIcon name="alert" size={18} /><div><strong>失败原因</strong><p>{job.error}</p></div></div>}
+      {job.status === 'partial' && <p className="wiki-task-note">只完成了部分检查，请查看覆盖范围；补充条件后重新发起体检。</p>}
+      {job.status === 'needs_split' && <p className="wiki-task-note">资料超出单次处理范围，请拆分资料后重新发起整理。</p>}
+      {job.status === 'failed' && job.attempt >= 3 && <p className="wiki-task-note">已达到 3 次执行上限，请处理失败原因后重新发起任务。</p>}
+      {job.status === 'failed' && job.attempt < 3 && !enabled && <p className="wiki-task-note">本库自动整理已关闭，开启后可重试。</p>}
+      <footer className="wiki-task-footer"><time dateTime={job.updatedAt}>更新于 {formatWikiTime(job.updatedAt)}</time>{canRetry && <button disabled={busy} onClick={() => onRetry(job)}><AppIcon name="refresh" size={15} />重试失败阶段</button>}</footer>
+    </article>
+  })}</div>
 }
