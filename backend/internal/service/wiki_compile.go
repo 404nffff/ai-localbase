@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"ai-localbase/internal/model"
 	"ai-localbase/internal/util"
@@ -27,7 +28,15 @@ func (s *AppService) wikiModelText(job *model.WikiJob, config model.ChatModelCon
 	if err := s.saveWikiJob(*job); err != nil {
 		return "", err
 	}
-	response, err := NewLLMService().Chat(model.ChatCompletionRequest{Config: config, SingleAttempt: true, Messages: []model.ChatMessage{{Role: "system", Content: instruction}, {Role: "user", Content: input}}})
+	// 每次请求使用本轮任务快照，避免仍被普通聊天的响应头或总时长限制截断。
+	timeoutSeconds := job.ModelTimeoutSeconds
+	if timeoutSeconds == 0 {
+		timeoutSeconds = model.DefaultWikiModelTimeoutSeconds
+	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	llm := newLLMServiceWithTimeout(timeout, timeout)
+	defer llm.client.CloseIdleConnections()
+	response, err := llm.Chat(model.ChatCompletionRequest{Config: config, SingleAttempt: true, Messages: []model.ChatMessage{{Role: "system", Content: instruction}, {Role: "user", Content: input}}})
 	if err != nil {
 		return "", err
 	}
@@ -38,6 +47,32 @@ func (s *AppService) wikiModelText(job *model.WikiJob, config model.ChatModelCon
 		return "", fmt.Errorf("model returned empty content")
 	}
 	return response.Choices[0].Message.Content, nil
+}
+
+// parseWikiPlan 检查模型计划的 JSON 结构和问题必填字段，发布时继续校验页面及来源。
+func parseWikiPlan(text string) (model.WikiPlan, error) {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "```json\n") && strings.HasSuffix(text, "\n```") {
+		text = strings.TrimSuffix(strings.TrimPrefix(text, "```json\n"), "\n```")
+	}
+	var plan model.WikiPlan
+	if err := json.Unmarshal([]byte(text), &plan); err != nil {
+		return plan, fmt.Errorf("invalid wiki plan JSON: %w", err)
+	}
+	if plan.Pages == nil {
+		return plan, fmt.Errorf("invalid wiki plan: pages must be an array")
+	}
+	for _, issue := range plan.Issues {
+		if !slices.Contains([]string{"broken-link", "orphan", "missing-source", "stale-source", "duplicate-title", "suspected-contradiction", "unsupported-claim"}, issue.Type) || len(issue.PageIDs) == 0 || strings.TrimSpace(issue.Reason) == "" {
+			return plan, fmt.Errorf("invalid wiki plan: issue type, pageIds and reason are required")
+		}
+		for _, id := range issue.PageIDs {
+			if strings.TrimSpace(id) == "" {
+				return plan, fmt.Errorf("invalid wiki plan: issue pageIds must not contain empty values")
+			}
+		}
+	}
+	return plan, nil
 }
 
 // compileWiki 完整读取所有指定来源，长文分段提取并保存进度，生成可校验的整批页面计划。
@@ -185,21 +220,22 @@ func (s *AppService) compileWiki(job *model.WikiJob, config model.ChatModelConfi
 		return model.WikiPlan{}, &WikiError{422, "needs_split", "combined context exceeds compilation budget"}
 	}
 	job.Stage = "plan"
-	text, err := s.wikiModelText(job, config, wikiRules, string(payload))
-	if err != nil {
-		return model.WikiPlan{}, err
-	}
-	// 只接受完整 JSON；允许去除一层完整代码围栏，不猜测或修复损坏响应。
-	text = strings.TrimSpace(text)
-	if strings.HasPrefix(text, "```json\n") && strings.HasSuffix(text, "\n```") {
-		text = strings.TrimSuffix(strings.TrimPrefix(text, "```json\n"), "\n```")
-	}
 	var plan model.WikiPlan
-	if err := json.Unmarshal([]byte(text), &plan); err != nil {
-		return plan, fmt.Errorf("invalid wiki plan JSON: %w", err)
-	}
-	if plan.Pages == nil {
-		return plan, fmt.Errorf("invalid wiki plan: pages must be an array")
+	instruction := wikiRules
+	for attempt := 0; attempt < 2; attempt++ {
+		text, callErr := s.wikiModelText(job, config, instruction, string(payload))
+		if callErr != nil {
+			return model.WikiPlan{}, callErr
+		}
+		plan, err = parseWikiPlan(text)
+		if err == nil {
+			break
+		}
+		if attempt == 1 {
+			return model.WikiPlan{}, fmt.Errorf("wiki plan still invalid after correction: %w", err)
+		}
+		// 仅格式错误请求模型重做一次，不丢弃问题或绕过发布校验。
+		instruction = wikiRules + "\n上次输出未通过格式检查：" + err.Error() + "。请重新根据原始输入生成完整且符合规则的 JSON，不要省略问题。"
 	}
 	if job.Kind == "capture" && len(job.DocumentIDs) == 0 {
 		for _, page := range plan.Pages {

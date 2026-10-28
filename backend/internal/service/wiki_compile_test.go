@@ -103,12 +103,16 @@ func TestWikiJobConfiguredModelAndIdempotency(t *testing.T) {
 		body, _ := json.Marshal(plan)
 		return string(body), 200
 	})
+	s.state.Config.Wiki.ModelTimeoutSeconds = 240
 	req := model.WikiJobRequest{Kind: "ingest", DocumentIDs: []string{doc.ID}, RequestKey: "one"}
 	job, created, err := s.StartWikiJob(id, req)
 	if err != nil || !created {
 		t.Fatalf("start: %v %v", created, err)
 	}
 	job = waitWikiJob(t, s, id, job.ID)
+	if job.ModelTimeoutSeconds != 240 {
+		t.Fatalf("task did not capture configured timeout: %d", job.ModelTimeoutSeconds)
+	}
 	if job.Status != "succeeded" || len(job.ChangedPageIDs) != 1 {
 		t.Fatalf("job: %+v", job)
 	}
@@ -145,10 +149,21 @@ func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 			}
 			for attempt := 1; attempt <= 3; attempt++ {
 				job = waitWikiJob(t, s, id, job.ID)
-				if job.Status != "failed" || calls.Load() != int32(attempt) {
+				if job.ModelTimeoutSeconds != 180+(attempt-1)*60 {
+					t.Fatalf("retry timeout snapshot: %d", job.ModelTimeoutSeconds)
+				}
+				callsPerAttempt := 2
+				if output == "http-failure" {
+					callsPerAttempt = 1
+				}
+				if job.Status != "failed" || calls.Load() != int32(attempt*callsPerAttempt) {
 					t.Fatalf("unexpected result %+v calls=%d", job, calls.Load())
 				}
 				if attempt < 3 {
+					// 显式重试必须重新读取设置，不能沿用首次执行的超时。
+					s.state.Mu.Lock()
+					s.state.Config.Wiki.ModelTimeoutSeconds = 180 + attempt*60
+					s.state.Mu.Unlock()
 					if _, err = s.RetryWikiJob(id, job.ID); err != nil {
 						t.Fatal(err)
 					}
@@ -160,6 +175,59 @@ func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 			kb, _ := s.WikiSnapshot(id)
 			if len(kb.Documents) != 1 {
 				t.Fatal("invalid output published")
+			}
+		})
+	}
+}
+
+// TestWikiPlanCorrectsInvalidIssues 验证问题格式错误只重做一次，并保留有效问题及其页面关联。
+func TestWikiPlanCorrectsInvalidIssues(t *testing.T) {
+	for _, invalid := range []string{
+		`{"pages":[],"issues":["格式错误"]}`,
+		`{"pages":[],"issues":[{"type":"unsupported-claim","reason":"缺少页面"}]}`,
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			var calls atomic.Int32
+			s, id, doc := wikiFixture(t, func(req model.ChatCompletionRequest) (string, int) {
+				if calls.Add(1) == 1 {
+					return invalid, 200
+				}
+				if !strings.Contains(req.Messages[0].Content, "上次输出未通过格式检查") {
+					t.Error("correction request missing validation error")
+				}
+				var input struct {
+					Sources []struct {
+						DocumentID string `json:"documentId"`
+						Checksum   string `json:"checksum"`
+						Content    string `json:"content"`
+					} `json:"sources"`
+				}
+				if err := json.Unmarshal([]byte(req.Messages[len(req.Messages)-1].Content), &input); err != nil || len(input.Sources) != 1 {
+					t.Error("correction request missing original source")
+					return "{}", 200
+				}
+				source := input.Sources[0]
+				plan := model.WikiPlan{
+					Pages:  []model.WikiPageChange{{Key: "refund", Title: "退款期限", PageType: "topic", Markdown: source.Content, SourceRefs: []model.WikiSourceRef{{DocumentID: source.DocumentID, Checksum: source.Checksum, Quote: source.Content}}}},
+					Issues: []model.WikiIssue{{Type: "unsupported-claim", PageIDs: []string{"refund"}, Reason: "需要补充依据"}},
+				}
+				body, _ := json.Marshal(plan)
+				return string(body), 200
+			})
+			job, _, err := s.StartWikiJob(id, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "correct-issues"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job = waitWikiJob(t, s, id, job.ID)
+			if job.Status != "succeeded" || calls.Load() != 2 || len(job.ChangedPageIDs) != 1 {
+				t.Fatalf("job: %+v calls=%d", job, calls.Load())
+			}
+			kb, err := s.WikiSnapshot(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(kb.Wiki.Issues) != 1 || len(kb.Wiki.Issues[0].PageIDs) != 1 || kb.Wiki.Issues[0].PageIDs[0] != job.ChangedPageIDs[0] {
+				t.Fatalf("issues: %+v", kb.Wiki.Issues)
 			}
 		})
 	}

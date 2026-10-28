@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { AppConfig } from '../../App'
-import { getSettingsConfigFingerprint, hasSettingsConfigChanges } from './SettingsPanel'
+import { getSettingsConfigFingerprint, hasSettingsConfigChanges, validateSettingsConfig } from './SettingsPanel'
 
 const createConfig = (): AppConfig => ({
+  wiki: { modelTimeoutSeconds: 180 },
   chat: {
     provider: 'ollama',
     baseUrl: 'http://localhost:11434/v1',
@@ -20,6 +21,21 @@ const createConfig = (): AppConfig => ({
 })
 
 describe('SettingsPanel draft state', () => {
+  it('validates Wiki timeout and detects unsaved changes', () => {
+    const baseline = createConfig()
+    const draft = createConfig()
+    expect(validateSettingsConfig(draft)).toBeNull()
+    draft.wiki.modelTimeoutSeconds = 300
+    expect(hasSettingsConfigChanges(baseline, draft)).toBe(true)
+    for (const value of [30, 1800]) {
+      draft.wiki.modelTimeoutSeconds = value
+      expect(validateSettingsConfig(draft)).toBeNull()
+    }
+    for (const value of [0, 29, 1801, 30.5, NaN, Infinity]) {
+      draft.wiki.modelTimeoutSeconds = value
+      expect(validateSettingsConfig(draft)).toContain('整数秒')
+    }
+  })
   it('treats identical values as saved', () => {
     const baseline = createConfig()
     const draft = createConfig()

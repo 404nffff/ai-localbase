@@ -416,6 +416,10 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if len(service.state.KnowledgeBases) == 0 {
 		service.state = defaultAppState(serverConfig)
 	}
+	// 旧状态未保存 Wiki 超时时补齐默认值，并随启动快照持久化。
+	if service.state.Config.Wiki.ModelTimeoutSeconds == 0 {
+		service.state.Config.Wiki.ModelTimeoutSeconds = model.DefaultWikiModelTimeoutSeconds
+	}
 	syncIDCounterFromState(service.state)
 
 	for kbID := range service.state.KnowledgeBases {
@@ -552,6 +556,7 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 	}
 	return &model.AppState{
 		Config: model.AppConfig{
+			Wiki: model.WikiConfig{ModelTimeoutSeconds: model.DefaultWikiModelTimeoutSeconds},
 			Chat: model.ChatConfig{
 				Provider:            "ollama",
 				BaseURL:             ollamaBaseURL,
@@ -609,6 +614,9 @@ func (s *AppService) GetConfig() model.AppConfig {
 	if cfg.Chat.ContextMessageLimit <= 0 {
 		cfg.Chat.ContextMessageLimit = 12
 	}
+	if cfg.Wiki.ModelTimeoutSeconds == 0 {
+		cfg.Wiki.ModelTimeoutSeconds = model.DefaultWikiModelTimeoutSeconds
+	}
 	return cfg
 }
 
@@ -649,7 +657,11 @@ func (s *AppService) defaultBaseURL(provider string) string {
 	return s.serverConfig.OllamaBaseURL + "/v1"
 }
 
+// UpdateConfig 校验并持久化完整设置；旧客户端省略 Wiki 时保留已保存值。
 func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfig, error) {
+	if req.Wiki != nil && (req.Wiki.ModelTimeoutSeconds < 30 || req.Wiki.ModelTimeoutSeconds > 1800) {
+		return model.AppConfig{}, fmt.Errorf("Wiki 模型调用超时需要在 30 到 1800 秒之间")
+	}
 	chatProvider := strings.TrimSpace(req.Chat.Provider)
 	chatBaseURL := strings.TrimSpace(req.Chat.BaseURL)
 	chatModel := strings.TrimSpace(req.Chat.Model)
@@ -705,6 +717,12 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 
 	s.state.Mu.Lock()
 	previousConfig := s.state.Config
+	nextConfig.Wiki = previousConfig.Wiki
+	if req.Wiki != nil {
+		nextConfig.Wiki = *req.Wiki
+	} else if nextConfig.Wiki.ModelTimeoutSeconds == 0 {
+		nextConfig.Wiki.ModelTimeoutSeconds = model.DefaultWikiModelTimeoutSeconds
+	}
 	s.state.Config = nextConfig
 	s.state.Mu.Unlock()
 

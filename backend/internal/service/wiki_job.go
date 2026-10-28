@@ -250,6 +250,7 @@ func (s *AppService) runWikiJob(job model.WikiJob) error {
 	started := time.Now()
 	job.Status, job.Error = "running", ""
 	job.Attempt++
+	job.ModelTimeoutSeconds = s.GetConfig().Wiki.ModelTimeoutSeconds
 	if err := s.saveWikiJob(job); err != nil {
 		return err
 	}

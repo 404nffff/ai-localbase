@@ -3027,3 +3027,30 @@ func TestWikiUploadsWithoutThirdParty(t *testing.T) {
 		t.Fatalf("unexpected automatic work: %+v %v", view, err)
 	}
 }
+
+// TestWikiTimeoutConfigAPI 验证真实配置路由的默认值、保存回读及非法 JSON 数值拒绝。
+func TestWikiTimeoutConfigAPI(t *testing.T) {
+	engine, app, _, cleanup := newTestRouterWithAccessTokenAndService(t, "")
+	defer cleanup()
+	response := performRequest(t, engine, http.MethodGet, "/api/config", nil, "")
+	var cfg model.AppConfig
+	if err := json.Unmarshal(response.Body.Bytes(), &cfg); err != nil || response.Code != 200 || cfg.Wiki.ModelTimeoutSeconds != 180 {
+		t.Fatalf("default config: %d %s", response.Code, response.Body)
+	}
+	for _, value := range []any{300, 29, 1801, 30.5, "300", nil} {
+		response = performJSONRequest(t, engine, http.MethodPut, "/api/config", map[string]any{
+			"chat": cfg.Chat, "embedding": cfg.Embedding, "wiki": map[string]any{"modelTimeoutSeconds": value},
+		})
+		want := http.StatusBadRequest
+		if value == 300 {
+			want = http.StatusOK
+		}
+		if response.Code != want || app.GetConfig().Wiki.ModelTimeoutSeconds != 300 {
+			t.Fatalf("value %v: %d %s", value, response.Code, response.Body)
+		}
+	}
+	response = performRequest(t, engine, http.MethodGet, "/api/config", nil, "")
+	if err := json.Unmarshal(response.Body.Bytes(), &cfg); err != nil || cfg.Wiki.ModelTimeoutSeconds != 300 {
+		t.Fatalf("saved timeout not returned: %s", response.Body)
+	}
+}

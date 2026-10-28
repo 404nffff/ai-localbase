@@ -10,7 +10,7 @@ interface SettingsPanelProps {
   onSaveConfig: (value: AppConfig) => Promise<AppConfig>
 }
 
-type SettingsTab = 'overview' | 'models' | 'mcp'
+type SettingsTab = 'overview' | 'models' | 'mcp' | 'wiki'
 type ModelSection = 'chat' | 'embedding'
 
 const settingsNavItems: Array<{
@@ -22,6 +22,7 @@ const settingsNavItems: Array<{
   { id: 'overview', label: '概览', description: '运行状态与当前配置', icon: 'info' },
   { id: 'models', label: '模型', description: '聊天与 Embedding', icon: 'brain' },
   { id: 'mcp', label: '接入', description: 'MCP HTTP 配置', icon: 'key' },
+  { id: 'wiki', label: 'Wiki 整理', description: '超时与批量处理', icon: 'book' },
 ]
 
 // 使用稳定序列化值判断是否存在未保存更改，供组件与单元测试共同复用。
@@ -31,7 +32,12 @@ export const hasSettingsConfigChanges = (baseline: AppConfig, draft: AppConfig) 
   getSettingsConfigFingerprint(baseline) !== getSettingsConfigFingerprint(draft)
 )
 
-const validateSettingsConfig = (config: AppConfig) => {
+// validateSettingsConfig 在保存前校验草稿，避免发送不完整或越界设置。
+export const validateSettingsConfig = (config: AppConfig) => {
+  const timeout = config.wiki.modelTimeoutSeconds
+  if (!Number.isInteger(timeout) || timeout < 30 || timeout > 1800) {
+    return 'Wiki 模型调用超时需要是 30 到 1800 之间的整数秒'
+  }
   if (!config.chat.baseUrl.trim()) return '请填写聊天模型 Base URL'
   if (!config.chat.model.trim()) return '请填写聊天模型名称'
   if (!config.embedding.baseUrl.trim()) return '请填写 Embedding 模型 Base URL'
@@ -340,7 +346,7 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
   return (
     <section className="settings-workspace app-workspace" aria-labelledby="settings-workspace-title">
       <header className="workspace-page-header settings-workspace-header">
-        <div><span className="workspace-page-kicker">AI LocalBase</span><h2 id="settings-workspace-title">设置</h2><p>管理本地模型与 MCP 接入。</p></div>
+        <div><span className="workspace-page-kicker">AI LocalBase</span><h2 id="settings-workspace-title">设置</h2><p>管理模型、MCP 接入与 Wiki 整理。</p></div>
         <button className="workspace-page-back" onClick={handleClose} aria-label="返回聊天" title="返回聊天" type="button"><AppIcon name="chevronLeft" size={20} /></button>
       </header>
 
@@ -364,7 +370,40 @@ http_headers = { "Authorization" = "Bearer your-app-access-token" }`
           </header>
           <section className="settings-content-scroll" key={activeTab} role="region" tabIndex={0}>
             {saveNotice && <div className={`settings-save-notice ${saveNotice.type}`}>{saveNotice.text}</div>}
-            {activeTab === 'overview' ? renderOverview() : activeTab === 'models' ? renderModels() : renderMcp()}
+            {activeTab === 'overview' && renderOverview()}
+            {activeTab === 'models' && renderModels()}
+            {activeTab === 'mcp' && renderMcp()}
+            {activeTab === 'wiki' && (
+              <div className="settings-tab-content">
+                <section className="settings-config-panel" aria-label="Wiki 整理配置">
+                  <header className="settings-config-panel-header">
+                    <div><span className="settings-config-panel-icon"><AppIcon name="book" size={18} /></span><div><h3>Wiki 整理</h3><p>使用「模型」中保存的聊天模型，上传后在后台整理。</p></div></div>
+                  </header>
+                  <section className="settings-form-section">
+                    <header><h4>模型调用超时</h4><p>适用于资料整理、回答沉淀和语义体检。</p></header>
+                    <div className="settings-form-grid settings-form-grid-dense">
+                      <div className="settings-form-group">
+                        <label className="settings-form-label" htmlFor="wiki-model-timeout">超时时间（秒）</label>
+                        <input id="wiki-model-timeout" type="number" min={30} max={1800} step={1}
+                          value={Number.isNaN(draftConfig.wiki.modelTimeoutSeconds) ? '' : draftConfig.wiki.modelTimeoutSeconds}
+                          onChange={(event) => {
+                            setSaveNotice(null)
+                            setDraftConfig((current) => ({ ...current, wiki: { modelTimeoutSeconds: event.target.valueAsNumber } }))
+                          }} />
+                        <small>默认 180 秒，范围 30–1800 秒。限制每次模型调用，不包含排队等待；整个任务可能包含多次调用。</small>
+                      </div>
+                    </div>
+                    <p>保存后，新开始的任务和手动重试使用新值，正在执行的任务继续使用原值。</p>
+                  </section>
+                  <section className="settings-form-section">
+                    <header><h4>上传较多资料时</h4><p>上传成功后自动排队，每个知识库依次整理，关闭页面不影响后台任务。</p></header>
+                    <p>自动整理默认开启，可在各知识库中关闭。未配置第三方聊天模型时，只保存原文，跳过自动整理。</p>
+                    <p>长文会分段提取；历史资料手动整理每批最多 20 份。提示「需拆分」时，减少本批资料或拆分长文后再整理。</p>
+                    <p>进度与错误可在 Wiki 的「任务」中查看。失败后可手动重试，含首次最多 3 次，已完成的分段会保留。</p>
+                  </section>
+                </section>
+              </div>
+            )}
           </section>
 
           <footer className={`settings-save-bar ${saveNotice?.type === 'error' ? 'has-error' : ''}`}>

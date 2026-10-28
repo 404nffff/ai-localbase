@@ -58,7 +58,17 @@ type EmbeddingConfig struct {
 type AppConfig struct {
 	Chat      ChatConfig      `json:"chat"`
 	Embedding EmbeddingConfig `json:"embedding"`
+	Wiki      WikiConfig      `json:"wiki"`
 }
+
+// WikiConfig 控制知识整理，模型连接继续复用 Chat 配置。
+type WikiConfig struct {
+	// ModelTimeoutSeconds 是每次模型调用的上限，不含任务排队时间，范围 30–1800 秒。
+	ModelTimeoutSeconds int `json:"modelTimeoutSeconds"`
+}
+
+// DefaultWikiModelTimeoutSeconds 用于新安装及缺少 Wiki 配置的旧状态。
+const DefaultWikiModelTimeoutSeconds = 180
 
 type KnowledgeBase struct {
 	ID          string     `json:"id"`
@@ -154,9 +164,11 @@ type WikiState struct {
 
 // WikiJob 记录持久任务输入和阶段；发布后的重试只补索引。
 type WikiJob struct {
-	ID              string `json:"id"`
-	KnowledgeBaseID string `json:"knowledgeBaseId"`
-	Kind            string `json:"kind"`
+	// ModelTimeoutSeconds 记录本次执行的超时快照；显式重试时读取最新配置。
+	ModelTimeoutSeconds int    `json:"modelTimeoutSeconds,omitempty"`
+	ID                  string `json:"id"`
+	KnowledgeBaseID     string `json:"knowledgeBaseId"`
+	Kind                string `json:"kind"`
 	// RequestKey 标识客户端动作；InputFingerprint 标识同库、同版本及规则下的整理输入。
 	RequestKey       string   `json:"requestKey"`
 	InputFingerprint string   `json:"inputFingerprint"`
@@ -417,6 +429,8 @@ type ChatCompletionResponse struct {
 type ConfigUpdateRequest struct {
 	Chat      ChatConfig      `json:"chat"`
 	Embedding EmbeddingConfig `json:"embedding"`
+	// Wiki 缺省时保留当前设置，兼容仅保存模型连接的客户端。
+	Wiki *WikiConfig `json:"wiki,omitempty"`
 }
 
 type Conversation struct {

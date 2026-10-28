@@ -91,40 +91,25 @@ type ollamaChatResponse struct {
 
 // ── Constructor ──────────────────────────────────────────────────────────────
 
+// NewLLMService 保留普通聊天的总时长和流式响应头默认限制。
 func NewLLMService() *LLMService {
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          32,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: defaultStreamHeaderTimeout,
-		DisableCompression:    false,
-	}
-
-	return &LLMService{
-		client: &http.Client{
-			Timeout:   defaultChatRequestTimeout,
-			Transport: transport,
-		},
-		streamClient: &http.Client{
-			Transport: transport.Clone(),
-		},
-	}
+	return newLLMServiceWithTimeout(defaultChatRequestTimeout, defaultStreamHeaderTimeout)
 }
 
 // ── Public methods ───────────────────────────────────────────────────────────
 
+// Chat 使用客户端对应的总时长创建请求上下文；未设超时的测试客户端沿用聊天默认值。
 func (s *LLMService) Chat(req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
 	cfg, err := normalizeChatConfig(req)
 	if err != nil {
 		return model.ChatCompletionResponse{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultChatRequestTimeout)
+	requestTimeout := s.client.Timeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultChatRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 
 	if cfg.Provider == "ollama" {
@@ -657,4 +642,31 @@ func buildModelFallbackMessage(req model.ChatCompletionRequest) string {
 	}
 
 	return fmt.Sprintf("⚠️ AI 模型调用已降级\n\n%s\n\n若 Ollama 一直在运行，建议优先检查当前问题是否触发了较重的检索/总结链路，或先切换更轻量模型后重试。", hint)
+}
+
+// newLLMServiceWithTimeout 为独立调用方创建客户端，同时设置总时长和响应头限制。
+// 参数仅由内部业务提供，不修改其他调用方共享的 Transport。
+func newLLMServiceWithTimeout(requestTimeout, headerTimeout time.Duration) *LLMService {
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: headerTimeout,
+		DisableCompression:    false,
+	}
+
+	return &LLMService{
+		client: &http.Client{
+			Timeout:   requestTimeout,
+			Transport: transport,
+		},
+		streamClient: &http.Client{
+			Transport: transport.Clone(),
+		},
+	}
 }

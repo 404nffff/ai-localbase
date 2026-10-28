@@ -160,6 +160,15 @@ func (h *AppHandler) DeleteConversation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "conversation deleted", "id": c.Param("id")})
 }
 
+// UpdateConfig 保存模型与 Wiki 设置；省略 wiki 保留当前值，超时单位为整数秒（30–1800）。
+// @Summary 保存应用设置
+// @Tags config
+// @Accept json
+// @Produce json
+// @Param config body model.ConfigUpdateRequest true "应用配置，wiki 可选"
+// @Success 200 {object} model.AppConfig
+// @Failure 400 {object} map[string]string "请求格式或配置值无效"
+// @Router /api/config [put]
 func (h *AppHandler) UpdateConfig(c *gin.Context) {
 	var req model.ConfigUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

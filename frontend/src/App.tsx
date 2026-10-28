@@ -166,6 +166,8 @@ export interface EmbeddingConfig {
 export interface AppConfig {
   chat: ChatConfig
   embedding: EmbeddingConfig
+  // Wiki 每次模型调用的超时秒数；连接仍使用 chat。
+  wiki: { modelTimeoutSeconds: number }
 }
 
 interface ChatCompletionResponse {
@@ -254,6 +256,7 @@ interface KnowledgeBaseListResponse {
 interface ConfigResponse {
   chat: ChatConfig
   embedding: EmbeddingConfig
+  wiki: AppConfig['wiki']
 }
 
 interface BackendConversationListItem {
@@ -693,6 +696,7 @@ function App() {
   }
   const [config, setConfig] = useState<AppConfig>(() => {
     const defaultConfig: AppConfig = {
+      wiki: { modelTimeoutSeconds: 180 },
       chat: {
         provider: 'ollama',
         baseUrl: 'http://localhost:11434/v1',

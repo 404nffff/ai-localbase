@@ -170,7 +170,10 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
 
   /** 请求键只标识本次动作，重复资料版本由服务端判定为已有任务。 */
   async function start(kind: 'ingest' | 'lint', semantic = false) {
-    const result = await wikiRequest<{ job: WikiJob }>(knowledgeBaseId, '/jobs', 'POST', { kind, semantic, documentIds: kind === 'ingest' ? selected : [], requestKey: crypto.randomUUID() })
+    // HTTP 部署不提供 randomUUID；使用支持 HTTP 的随机字节生成本次请求的唯一标识。
+    const randomBytes = crypto.getRandomValues(new Uint8Array(16))
+    const requestKey = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    const result = await wikiRequest<{ job: WikiJob }>(knowledgeBaseId, '/jobs', 'POST', { kind, semantic, documentIds: kind === 'ingest' ? selected : [], requestKey })
     if (result.job.status === 'failed') throw new Error(`该版本已有失败任务，请在任务列表重试：${result.job.error ?? ''}`)
     setSelected([])
   }
