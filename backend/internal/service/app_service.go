@@ -60,6 +60,9 @@ type AppService struct {
 	wikiRunning map[string]bool
 	wikiClosed  bool
 	wikiWorkers sync.WaitGroup
+	// ponytail: 当前服务的Wiki共用一个名额；多实例部署时需重新评估跨实例并发。
+	wikiModelGate chan struct{} // 容量1，仅限制Wiki调用，不限制普通聊天或外部客户端。
+	wikiStop      chan struct{} // 关闭时广播，唤醒等待模型名额的任务。
 }
 
 // KnowledgeBaseExportKnowledgeBase 描述导出包中的知识库元数据，避免暴露内部文档路径。
@@ -352,20 +355,24 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, chunks []Retriev
 	return ranked, nil
 }
 
+// NewAppService 组装文档与模型服务，加载保存的状态并恢复可排队的Wiki任务。
+// 每个服务实例独立持有Wiki模型名额；状态加载或启动持久化错误沿用日志报告，返回已初始化服务。
 func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory ChatHistoryStore, serverConfig model.ServerConfig) *AppService {
 	stagingDir := strings.TrimSpace(serverConfig.StagingDir)
 	if stagingDir == "" {
 		stagingDir = "data/staging"
 	}
 	service := &AppService{
-		state:        defaultAppState(serverConfig),
-		store:        store,
-		chatHistory:  chatHistory,
-		qdrant:       qdrant,
-		rag:          NewRagService(),
-		staging:      NewUploadStagingService(stagingDir),
-		jobs:         map[string]*indexJobState{},
-		serverConfig: serverConfig,
+		state:         defaultAppState(serverConfig),
+		store:         store,
+		chatHistory:   chatHistory,
+		qdrant:        qdrant,
+		rag:           NewRagService(),
+		staging:       NewUploadStagingService(stagingDir),
+		jobs:          map[string]*indexJobState{},
+		serverConfig:  serverConfig,
+		wikiModelGate: make(chan struct{}, 1),
+		wikiStop:      make(chan struct{}),
 	}
 	service.rag.SetQdrantService(qdrant)
 	if strings.TrimSpace(serverConfig.OperationLogFile) != "" {
@@ -441,10 +448,19 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	return service
 }
 
+// Close 停止接收Wiki任务并唤醒等待者，等待当前请求退出后关闭操作日志。
+// 当前模型请求沿用任务超时结束；重复关闭不重复关闭通知channel，日志关闭错误直接返回。
 func (s *AppService) Close() error {
 	if s != nil {
 		s.wikiRunMu.Lock()
 		s.wikiClosed = true
+		if s.wikiStop != nil {
+			select {
+			case <-s.wikiStop:
+			default:
+				close(s.wikiStop)
+			}
+		}
 		s.wikiRunMu.Unlock()
 		s.wikiWorkers.Wait()
 	}

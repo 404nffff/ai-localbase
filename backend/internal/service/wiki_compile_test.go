@@ -192,7 +192,7 @@ func TestWikiPlanCorrectsInvalidIssues(t *testing.T) {
 				if calls.Add(1) == 1 {
 					return invalid, 200
 				}
-				if !strings.Contains(req.Messages[0].Content, "上次输出未通过格式检查") {
+				if !strings.Contains(req.Messages[0].Content, "上次输出未通过格式或来源检查") {
 					t.Error("correction request missing validation error")
 				}
 				var input struct {
@@ -277,7 +277,7 @@ func TestWikiLongSourceReadsTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	job = waitWikiJob(t, s, id, job.ID)
-	if job.Status != "succeeded" || job.ProcessedSegments != 3 || job.ModelCalls != 4 || !sawTail.Load() {
+	if job.Status != "succeeded" || job.ProcessedSegments != 7 || job.ModelCalls != 8 || !sawTail.Load() {
 		t.Fatalf("incomplete coverage: %+v", job)
 	}
 }
@@ -407,5 +407,201 @@ func TestWikiIndexFailureRetriesWithoutModel(t *testing.T) {
 	page, _ = s.GetDocument(id, job.ChangedPageIDs[0])
 	if job.Status != "succeeded" || calls.Load() != 1 || page.Wiki.Revision != 1 || page.Wiki.IndexedRevision != 1 {
 		t.Fatalf("retry regenerated: %+v calls=%d page=%+v", job, calls.Load(), page.Wiki)
+	}
+}
+
+// TestWikiSourceSegmentsCoverage 验证多字节原文在段边界无遗漏、重复或非法字符。
+func TestWikiSourceSegmentsCoverage(t *testing.T) {
+	for _, size := range []int{4000, 4001, 11999, 12000, 12001, 24001} {
+		body := []rune(strings.Repeat("中🙂", size/2) + strings.Repeat("尾", size%2))
+		segments := wikiSourceSegments("doc", "version", body, nil)
+		var joined strings.Builder
+		keys := map[string]bool{}
+		for _, segment := range segments {
+			if len([]rune(segment.text)) > 4000 || keys[segment.key] {
+				t.Fatalf("invalid segment for size %d: %s", size, segment.key)
+			}
+			keys[segment.key] = true
+			joined.WriteString(segment.text)
+		}
+		if joined.String() != string(body) {
+			t.Fatalf("source coverage changed for size %d", size)
+		}
+	}
+}
+
+// TestWikiExtractionResumesLegacyAndRangeCache 验证升级后复用两种已完成缓存，只请求剩余原文。
+func TestWikiExtractionResumesLegacyAndRangeCache(t *testing.T) {
+	var calls atomic.Int32
+	s, id, doc := wikiFixture(t, func(req model.ChatCompletionRequest) (string, int) {
+		calls.Add(1)
+		input := req.Messages[len(req.Messages)-1].Content
+		if strings.HasPrefix(req.Messages[0].Content, "提取") {
+			if input != "尾部条款" {
+				t.Errorf("completed segment requested again, length=%d", len([]rune(input)))
+			}
+			return `[{"claim":"尾部条款","quote":"尾部条款"}]`, 200
+		}
+		for _, quote := range []string{"甲", "乙", "尾部条款"} {
+			if !strings.Contains(input, quote) {
+				t.Errorf("cached evidence missing: %s", quote)
+			}
+		}
+		return `{"pages":[],"issues":[]}`, 200
+	})
+	s.wikiClosed = true
+	body := strings.Repeat("甲", 12000) + strings.Repeat("乙", 4000) + "尾部条款"
+	if err := os.WriteFile(doc.Path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := s.StartWikiJob(id, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "resume-segments"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := doc.ID + ":" + job.SourceVersions[doc.ID] + ":"
+	job.Extracts[prefix+"0"] = `[{"claim":"甲","quote":"甲"}]`
+	job.Extracts[prefix+"runes:12000:16000"] = `[{"claim":"乙","quote":"乙"}]`
+	job.ModelCalls = 2
+	if err := s.runWikiJob(job); err != nil {
+		t.Fatal(err)
+	}
+	job, _ = s.GetWikiJob(id, job.ID)
+	if job.Status != "succeeded" || calls.Load() != 2 || job.ModelCalls != 4 || job.ProcessedSegments != 3 {
+		t.Fatalf("cache recovery failed: %+v new calls=%d", job, calls.Load())
+	}
+}
+
+// TestWikiExtractionCorrectsQuote 验证伪造引文必须纠正，且纠正后仍覆盖尾段。
+func TestWikiExtractionCorrectsQuote(t *testing.T) {
+	var extracts atomic.Int32
+	var corrected atomic.Bool
+	s, id, doc := wikiFixture(t, func(req model.ChatCompletionRequest) (string, int) {
+		input := req.Messages[len(req.Messages)-1].Content
+		if strings.HasPrefix(req.Messages[0].Content, "提取") {
+			if extracts.Add(1) == 1 {
+				return `[{"claim":"不存在的条款","quote":"伪造引文"}]`, 200
+			}
+			if strings.Contains(req.Messages[0].Content, "上次提取未通过校验") {
+				corrected.Store(true)
+			}
+			quote := string([]rune(input)[:1])
+			b, _ := json.Marshal([]map[string]string{{"claim": quote, "quote": quote}})
+			return string(b), 200
+		}
+		if !strings.Contains(input, "乙") {
+			t.Error("tail was skipped after correction")
+		}
+		return `{"pages":[],"issues":[]}`, 200
+	})
+	if err := os.WriteFile(doc.Path, []byte(strings.Repeat("甲", 4000)+"乙"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := s.StartWikiJob(id, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "correct-extract"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitWikiJob(t, s, id, job.ID)
+	if job.Status != "succeeded" || extracts.Load() != 3 || !corrected.Load() || job.ProcessedSegments != 2 {
+		t.Fatalf("extraction correction failed: %+v", job)
+	}
+}
+
+// TestWikiExtractionKeepsRequestBudget 验证缩小分段不会重置累计预算，预算耗尽前的成果仍持久保存。
+func TestWikiExtractionKeepsRequestBudget(t *testing.T) {
+	var calls atomic.Int32
+	s, id, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+		calls.Add(1)
+		return `[{"claim":"甲","quote":"甲"}]`, 200
+	})
+	s.wikiClosed = true
+	if err := os.WriteFile(doc.Path, []byte(strings.Repeat("甲", 4000)+"乙"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := s.StartWikiJob(id, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "segment-budget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.ModelCalls = 31
+	if err := s.runWikiJob(job); err != nil {
+		t.Fatal(err)
+	}
+	job, _ = s.GetWikiJob(id, job.ID)
+	if job.Status != "needs_split" || job.ModelCalls != 32 || calls.Load() != 1 || len(job.Extracts) != 1 || job.ProcessedSegments != 1 {
+		t.Fatalf("budget or completed cache was lost: %+v", job)
+	}
+}
+
+// TestWikiModelGateAcrossLibraries 验证两个知识库共享模型名额，等待不计次数，服务关闭能唤醒等待任务。
+func TestWikiModelGateAcrossLibraries(t *testing.T) {
+	for _, stopWhileWaiting := range []bool{false, true} {
+		name := "serial"
+		if stopWhileWaiting {
+			name = "close"
+		}
+		t.Run(name, func(t *testing.T) {
+			entered := make(chan struct{}, 2)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			s, firstKB, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+				entered <- struct{}{}
+				<-release
+				return `{"pages":[],"issues":[]}`, 200
+			})
+			secondKB, err := s.CreateKnowledgeBase(model.KnowledgeBaseInput{Name: "并发验证"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondDoc := doc
+			secondDoc.ID, secondDoc.KnowledgeBaseID = "second-source", secondKB.ID
+			s.AddDocument(secondKB.ID, secondDoc)
+			first, _, err := s.StartWikiJob(firstKB, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "gate-first"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("first request did not start")
+			}
+			second, _, err := s.StartWikiJob(secondKB.ID, model.WikiJobRequest{DocumentIDs: []string{secondDoc.ID}, RequestKey: "gate-second"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+				t.Fatal("parallel model request escaped shared gate")
+			case <-time.After(100 * time.Millisecond):
+			}
+			waiting, _ := s.GetWikiJob(secondKB.ID, second.ID)
+			if waiting.ModelCalls != 0 {
+				t.Fatal("waiting consumed request budget")
+			}
+			if stopWhileWaiting {
+				closed := make(chan struct{})
+				go func() { _ = s.Close(); close(closed) }()
+				second = waitWikiJob(t, s, secondKB.ID, second.ID)
+				if second.Status != "failed" || second.ModelCalls != 0 || !strings.Contains(second.Error, "closing") {
+					t.Fatalf("waiting request did not stop: %+v", second)
+				}
+				unblock()
+				select {
+				case <-closed:
+				case <-time.After(time.Second):
+					t.Fatal("service close did not finish")
+				}
+			} else {
+				unblock()
+				second = waitWikiJob(t, s, secondKB.ID, second.ID)
+				if second.Status != "succeeded" || second.ModelCalls != 1 {
+					t.Fatalf("queued model request failed: %+v", second)
+				}
+			}
+			first = waitWikiJob(t, s, firstKB, first.ID)
+			if first.Status != "succeeded" {
+				t.Fatalf("in-flight request failed: %+v", first)
+			}
+		})
 	}
 }
