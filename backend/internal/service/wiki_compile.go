@@ -251,6 +251,8 @@ func validateWikiPlanSources(plan model.WikiPlan, documents []model.Document) er
 
 // indexWikiPage 对已发布修订建立索引；成功前保留 indexedRevision 不一致状态。
 func (s *AppService) indexWikiPage(kbID, pageID string) (model.Document, error) {
+	unlock := s.lockDocument(kbID, pageID)
+	defer unlock()
 	document, err := s.GetDocument(kbID, pageID)
 	if err != nil {
 		return document, err
@@ -258,6 +260,11 @@ func (s *AppService) indexWikiPage(kbID, pageID string) (model.Document, error) 
 	if document.Wiki == nil {
 		return document, &WikiError{400, "not_wiki", "document is not a wiki page"}
 	}
+	finish, err := s.beginIndexGeneration(&document, true)
+	if err != nil {
+		return document, err
+	}
+	defer finish()
 	revision := document.Wiki.Revision
 	body, err := os.ReadFile(document.Path)
 	if err != nil {
@@ -265,9 +272,6 @@ func (s *AppService) indexWikiPage(kbID, pageID string) (model.Document, error) 
 	}
 	chunks := s.rag.BuildDocumentChunks(document, string(body))
 	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
-	if err == nil {
-		err = s.deleteDocumentChunks(kbID, pageID)
-	}
 	if err == nil {
 		err = s.upsertDocumentChunks(kbID, chunks, vectors)
 	}
@@ -284,6 +288,7 @@ func (s *AppService) indexWikiPage(kbID, pageID string) (model.Document, error) 
 			if indexErr != nil {
 				doc.Status, doc.IndexError, doc.IndexErrorCode = "failed", indexErr.Error(), "index_failed"
 			} else {
+				doc.IndexGeneration = document.IndexGeneration
 				doc.Status, doc.IndexError, doc.IndexErrorCode = "indexed", "", ""
 				doc.Wiki.IndexedRevision, doc.ChunkCount, doc.IndexedAt = revision, len(chunks), util.NowRFC3339()
 			}

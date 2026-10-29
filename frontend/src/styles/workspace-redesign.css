@@ -476,6 +476,11 @@ body,
 }
 
 /* Chat workspace */
+/* 工作区覆盖聊天时同步移出键盘与无障碍树，保留已输入草稿和流式状态。 */
+.chat-page:has(.app-workspace) > .chat-area {
+  display: none;
+}
+
 .chat-area,
 .chat-area.sidebar-open,
 .chat-area.sidebar-closed {

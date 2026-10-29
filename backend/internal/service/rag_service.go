@@ -128,6 +128,7 @@ func (r *LLMQueryRewriter) Rewrite(ctx context.Context, query string, conversati
 }
 
 type DocumentChunk struct {
+	IndexGeneration string
 	// 版本字段用于排除旧 Wiki 索引；原文引文供回答沉淀时重新核对。
 	Kind            string
 	WikiRevision    int
@@ -223,7 +224,7 @@ func (s *RagService) BuildDocumentChunks(document model.Document, text string) [
 	chunks := make([]DocumentChunk, 0, len(parts))
 	for index, part := range parts {
 		chunks = append(chunks, DocumentChunk{
-			Kind: document.Kind, WikiRevision: revision, SourceChecksum: document.ContentChecksum,
+			IndexGeneration: document.IndexGeneration, Kind: document.Kind, WikiRevision: revision, SourceChecksum: document.ContentChecksum,
 			ID:              fmt.Sprintf("%s-chunk-%d", document.ID, index),
 			KnowledgeBaseID: document.KnowledgeBaseID,
 			DocumentID:      document.ID,
@@ -319,6 +320,8 @@ func (s *RagService) BuildContext(chunks []RetrievedChunk) (string, []map[string
 			"kind":            chunk.Kind,
 			"sourceChecksum":  chunk.SourceChecksum,
 			"quote":           chunk.Text,
+			"snippet":         chunk.Text,
+			"chunkIndex":      fmt.Sprint(chunk.Index + 1),
 		})
 		if chunk.Kind == "wiki" {
 			source := sources[len(sources)-1]
@@ -461,6 +464,10 @@ func (r *RagService) MultiQuerySearch(
 				}
 				results = append(results, RetrievedChunk{
 					DocumentChunk: DocumentChunk{
+						IndexGeneration: payloadString(item.Payload, "index_generation", ""),
+						Kind:            payloadString(item.Payload, "document_kind", ""),
+						WikiRevision:    payloadInt(item.Payload, "wiki_revision"),
+						SourceChecksum:  payloadString(item.Payload, "source_checksum", ""),
 						ID:              chunkID,
 						KnowledgeBaseID: payloadString(item.Payload, "knowledge_base_id", collectionName),
 						DocumentID:      payloadString(item.Payload, "document_id", ""),

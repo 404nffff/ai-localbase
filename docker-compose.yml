@@ -41,7 +41,8 @@ services:
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION_PREFIX: kb_
-      QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:-1024}"
+      # 默认 nomic-embed-text 输出 768 维；其他模型通过环境变量显式覆盖。
+      QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:-768}"
       QDRANT_DISTANCE: Cosine
       QDRANT_TIMEOUT_SECONDS: "${QDRANT_TIMEOUT_SECONDS:-5}"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}

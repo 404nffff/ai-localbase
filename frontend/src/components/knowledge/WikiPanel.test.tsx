@@ -59,8 +59,8 @@ describe('知识页工作区', () => {
     expect(html).toContain('上传资料')
     expect(html).toContain('自动整理默认开启，未配置第三方聊天模型时跳过整理。')
     expect(html).toContain('项目资料 的知识文库')
-    expect(html).toContain('整理后的文档记录')
-    expect(html).toContain('点击查看整理内容')
+    expect(html).toContain('wiki-panel-wide')
+    expect(html).not.toContain('整理后的文档记录')
     expect(html).not.toContain('checked=""')
   })
 

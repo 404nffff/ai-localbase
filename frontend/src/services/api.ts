@@ -153,9 +153,10 @@ export const fetchKnowledgeBaseHealth = async (knowledgeBaseId: string) => {
   return (await response.json()) as KnowledgeBaseHealthResponse
 }
 
-export const fetchDocumentDetail = async (knowledgeBaseId: string, documentId: string) => {
+/** 请求引用分块，服务端会将默认预览范围外的目标分块一并返回。 */
+export const fetchDocumentDetail = async (knowledgeBaseId: string, documentId: string, focusChunkId?: string) => {
   const response = await ensureOk(await apiFetch(
-    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}`,
+    `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(documentId)}${focusChunkId ? `?focusChunkId=${encodeURIComponent(focusChunkId)}` : ''}`,
   ))
   return (await response.json()) as DocumentDetailResponse
 }

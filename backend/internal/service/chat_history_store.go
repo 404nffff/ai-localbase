@@ -56,6 +56,11 @@ func (s *SQLiteChatHistoryStore) init() error {
 	}
 
 	statements := []string{
+		// SQLite 不支持列 COMMENT，用字段旁说明保存会话范围；独立表兼容旧数据库。
+		`CREATE TABLE IF NOT EXISTS conversation_scopes (
+			conversation_id TEXT PRIMARY KEY, -- 会话 ID，与 conversations.id 对应
+			scope TEXT NOT NULL -- none 普通聊天、selected 指定范围、all 显式全库
+		);`,
 		`CREATE TABLE IF NOT EXISTS conversations (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -134,6 +139,10 @@ func (s *SQLiteChatHistoryStore) SaveConversation(conversation model.Conversatio
 		return fmt.Errorf("upsert conversation: %w", err)
 	}
 
+	// 范围与消息沿用既有事务一起提交，避免全库会话重载后退回普通聊天。
+	if _, err = tx.Exec(`INSERT INTO conversation_scopes (conversation_id, scope) VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET scope = excluded.scope`, conversation.ID, normalizeStoredKnowledgeScope(conversation.KnowledgeScope, conversation.KnowledgeBaseID, conversation.DocumentID)); err != nil {
+		return fmt.Errorf("save conversation scope: %w", err)
+	}
 	if _, err = tx.Exec(`DELETE FROM messages WHERE conversation_id = ?`, conversation.ID); err != nil {
 		return fmt.Errorf("replace conversation messages: %w", err)
 	}
@@ -206,6 +215,29 @@ func (s *SQLiteChatHistoryStore) ListConversations() ([]model.ConversationListIt
 		return nil, fmt.Errorf("iterate conversations: %w", err)
 	}
 
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// 单次读取范围映射，不为每个会话新增一条查询，也不修改旧列表统计。
+	scopeRows, err := s.db.Query(`SELECT conversation_id, scope FROM conversation_scopes`)
+	if err != nil {
+		return nil, fmt.Errorf("list conversation scopes: %w", err)
+	}
+	defer scopeRows.Close()
+	scopes := map[string]string{}
+	for scopeRows.Next() {
+		var id, scope string
+		if err := scopeRows.Scan(&id, &scope); err != nil {
+			return nil, err
+		}
+		scopes[id] = scope
+	}
+	if err := scopeRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].KnowledgeScope = normalizeStoredKnowledgeScope(scopes[items[i].ID], items[i].KnowledgeBaseID, items[i].DocumentID)
+	}
 	return items, nil
 }
 
@@ -239,6 +271,11 @@ func (s *SQLiteChatHistoryStore) GetConversation(id string) (*model.Conversation
 		return nil, fmt.Errorf("get conversation: %w", err)
 	}
 
+	var scope string
+	if err := s.db.QueryRow(`SELECT scope FROM conversation_scopes WHERE conversation_id = ?`, conversationID).Scan(&scope); err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("read conversation scope: %w", err)
+	}
+	conversation.KnowledgeScope = normalizeStoredKnowledgeScope(scope, conversation.KnowledgeBaseID, conversation.DocumentID)
 	rows, err := s.db.Query(
 		`SELECT id, role, content, created_at, metadata
 		 FROM messages
@@ -291,6 +328,9 @@ func (s *SQLiteChatHistoryStore) DeleteConversation(id string) error {
 
 	if _, err := s.db.Exec(`DELETE FROM conversations WHERE id = ?`, conversationID); err != nil {
 		return fmt.Errorf("delete conversation: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM conversation_scopes WHERE conversation_id = ?`, conversationID); err != nil {
+		return fmt.Errorf("delete conversation scope: %w", err)
 	}
 	return nil
 }

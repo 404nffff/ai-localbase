@@ -26,11 +26,12 @@ type realEvalRuntime struct {
 
 func main() {
 	var (
-		dataset      = flag.String("dataset", "eval/data/ground_truth_v1.small.json", "评估数据集 JSON 文件路径")
-		outputDir    = flag.String("output", "eval/results", "报告输出目录")
-		hitThreshold = flag.Float64("hit-threshold", 0.5, "命中文本匹配阈值 (0-1)")
-		mockMode     = flag.Bool("mock", true, "使用 mock 检索和生成函数（用于 CI/测试）")
-		realLLM      = flag.Bool("real-llm", false, "真实模式下调用真实 LLM 生成答案")
+		fixtureManifest = flag.String("fixture-manifest", "", "公开 fixture manifest 路径；运行前验证数据集与文件校验和")
+		dataset         = flag.String("dataset", "eval/data/ground_truth_v1.small.json", "评估数据集 JSON 文件路径")
+		outputDir       = flag.String("output", "eval/results", "报告输出目录")
+		hitThreshold    = flag.Float64("hit-threshold", 0.5, "命中文本匹配阈值 (0-1)")
+		mockMode        = flag.Bool("mock", true, "使用 mock 检索和生成函数（用于 CI/测试）")
+		realLLM         = flag.Bool("real-llm", false, "真实模式下调用真实 LLM 生成答案")
 	)
 	flag.Parse()
 
@@ -43,6 +44,15 @@ func main() {
 	}
 	if err := ds.Validate(); err != nil {
 		log.Fatalf("[eval] 数据集验证失败: %v", err)
+	}
+	if *fixtureManifest != "" {
+		manifest, err := offline.LoadFixtureManifest(*fixtureManifest)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := manifest.ValidateDataset(*fixtureManifest, ds); err != nil {
+			log.Fatal(err)
+		}
 	}
 	log.Printf("[eval] 已加载 %d 个用例", len(ds.Cases))
 
@@ -79,7 +89,7 @@ func main() {
 	log.Printf("[eval] 评估完成，共 %d 个用例", len(results))
 
 	runID := fmt.Sprintf("%s-%s", runIDPrefix, time.Now().Format("20060102-150405"))
-	rpt := report.BuildReport(runID, *dataset, results, ds)
+	rpt := report.BuildReport(runID, *dataset, results, ds, *hitThreshold)
 
 	jsonPath := filepath.Join(*outputDir, runID+".json")
 	if err := rpt.WriteJSON(jsonPath); err != nil {

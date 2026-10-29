@@ -801,8 +801,8 @@ Redis 支持过期时间设置，适合用作会话缓存或临时数据存储�
 	request.KnowledgeBaseID = knowledgeBaseID
 	request.DocumentID = "doc-without-vectors"
 	chunks, err = appService.EvaluateRetrieve(request)
-	if err != nil || len(chunks) != 0 {
-		t.Errorf("cache crossed document scope: chunks=%d, error=%v", len(chunks), err)
+	if err == nil || len(chunks) != 0 {
+		t.Errorf("missing document scope must fail without cached results: chunks=%d, error=%v", len(chunks), err)
 	}
 	// 删除文档后再次提问必须重新检索，不能继续返回仍在 TTL 内的已删除片段。
 	if _, err := appService.DeleteDocument(knowledgeBaseID, uploadResult.Uploaded.ID); err != nil {

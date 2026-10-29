@@ -79,7 +79,7 @@ const DocumentScopePicker: React.FC<DocumentScopePickerProps> = ({
       >
         <KnowledgeIcon name="database" size={15} />
         <span className="document-scope-trigger-label">
-          {selectedDocument?.name ?? (disabled ? '全部知识库' : '全部文档')}
+          {selectedDocument?.name ?? (disabled ? '未限定文档' : '全部文档')}
         </span>
         <KnowledgeIcon name="chevronDown" size={15} />
       </button>

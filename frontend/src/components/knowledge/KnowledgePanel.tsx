@@ -4,6 +4,7 @@ import {
   DocumentDetailResponse,
   DocumentItem,
   KnowledgeBase,
+  KnowledgeScope,
   KnowledgeBaseFileUploadState,
   KnowledgeBaseHealthResponse,
   OperationLogEntry,
@@ -26,6 +27,8 @@ interface KnowledgePanelProps {
   onToggleCollapse: (knowledgeBaseId: string) => void
   selectedKnowledgeBaseId: string | null
   activeKnowledgeBaseId: string | null
+  /** 会话真实检索范围；浏览资料本身不改变此状态。 */
+  activeKnowledgeScope: KnowledgeScope
   activeDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
@@ -68,6 +71,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   onToggleCollapse,
   selectedKnowledgeBaseId,
   activeKnowledgeBaseId,
+  activeKnowledgeScope,
   activeDocumentId,
   onSelectKnowledgeBase,
   onSelectDocument,
@@ -328,13 +332,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   )
   const isBrowsingActiveKnowledgeBase =
     selectedKnowledgeBase?.id !== null && selectedKnowledgeBase?.id === activeKnowledgeBaseId
-  const activeScopeText = activeDocument
-    ? `文档问答：${activeDocument.name}`
-    : activeKnowledgeBase
-      ? `知识库问答：${activeKnowledgeBase.name}`
-      : knowledgeBases.length > 0
-        ? '全部知识库问答'
-        : '未设置聊天范围'
+  // 按会话的文档、单库及显式全库范围展示，不把正在浏览的资料当作问答范围。
+  let activeScopeText = '普通聊天，不检索知识库'
+  if (activeDocument) {
+    activeScopeText = `文档问答：${activeDocument.name}`
+  } else if (activeKnowledgeBase) {
+    activeScopeText = `知识库问答：${activeKnowledgeBase.name}`
+  } else if (activeKnowledgeScope === 'all') {
+    activeScopeText = '全部知识库问答'
+  }
 
   const isTaskVisible = directoryUploadTask.status !== 'idle'
   const canCancelUpload =
@@ -470,6 +476,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     fetchKnowledgeHealthRef.current = onFetchKnowledgeBaseHealth
   }, [onFetchKnowledgeBaseHealth])
 
+  // 上传、删除或重建会替换资料列表，需重新读取真实向量健康状态。
   useEffect(() => {
     if (!open || !selectedKnowledgeBaseId) {
       setKnowledgeHealth(null)
@@ -496,7 +503,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     return () => {
       canceled = true
     }
-  }, [open, selectedKnowledgeBaseId])
+  }, [open, selectedKnowledgeBaseId, selectedKnowledgeBase?.documents])
 
   useEffect(() => {
     if (isTaskActive) {

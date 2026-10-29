@@ -38,23 +38,27 @@ const (
 
 type AppService struct {
 	// 快照与落盘必须处于同一串行区间，防止旧快照晚于新快照发布。
-	stateSaveMu sync.Mutex
+	stateSaveMu   sync.Mutex
+	documentLocks sync.Map
 	// 数据或配置变化后推进版本，使尚在 TTL 内的旧检索条目立即不可复用。
-	retrievalRevision atomic.Uint64
-	state             *model.AppState
-	store             *AppStateStore
-	chatHistory       ChatHistoryStore
-	operationLogs     OperationLogStore
-	qdrant            *QdrantService
-	rag               *RagService
-	staging           *UploadStagingService
-	jobsMu            sync.Mutex
-	jobs              map[string]*indexJobState
-	serverConfig      model.ServerConfig
-	reranker          SemanticReranker
-	queryRewriter     QueryRewriter
-	semanticCache     *SemanticCache
-	contextCompressor ContextCompressor
+	retrievalRevision  atomic.Uint64
+	state              *model.AppState
+	store              *AppStateStore
+	chatHistory        ChatHistoryStore
+	operationLogs      OperationLogStore
+	qdrant             *QdrantService
+	rag                *RagService
+	staging            *UploadStagingService
+	jobsMu             sync.Mutex
+	jobsWorkers        sync.WaitGroup
+	jobsClosed         bool
+	indexPublishGuards sync.Map
+	jobs               map[string]*indexJobState
+	serverConfig       model.ServerConfig
+	reranker           SemanticReranker
+	queryRewriter      QueryRewriter
+	semanticCache      *SemanticCache
+	contextCompressor  ContextCompressor
 	// Wiki 执行队列由单一进程维护，持久任务仍存入库状态。
 	wikiRunMu   sync.Mutex
 	wikiRunning map[string]bool
@@ -443,7 +447,9 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if err := service.saveState(); err != nil {
 		log.Printf("failed to persist app state during startup: %v", err)
 	}
+	service.recoverIndexGenerations()
 	service.recoverWikiJobs()
+	service.recoverIndexJobs()
 
 	return service
 }
@@ -452,6 +458,10 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 // 当前模型请求沿用任务超时结束；重复关闭不重复关闭通知channel，日志关闭错误直接返回。
 func (s *AppService) Close() error {
 	if s != nil {
+		s.jobsMu.Lock()
+		s.jobsClosed = true
+		s.jobsMu.Unlock()
+		s.jobsWorkers.Wait()
 		s.wikiRunMu.Lock()
 		s.wikiClosed = true
 		if s.wikiStop != nil {
@@ -950,7 +960,20 @@ func (s *AppService) IndexDocumentWithLog(document model.Document, source string
 	})
 }
 
+// indexDocument 在文档锁内登记代际、提取正文并写入向量，持久发布成功后才返回文档。
+// 失败保留已发布指针；候选与旧代清理失败另存恢复记录，不冒充远端清理成功。
 func (s *AppService) indexDocument(document model.Document, logContext operationLogContext) (model.Document, error) {
+	unlock := s.lockDocument(document.KnowledgeBaseID, document.ID)
+	defer unlock()
+	previous, _ := s.GetDocument(document.KnowledgeBaseID, document.ID)
+	if previous.ID != "" {
+		document.IndexGeneration = previous.IndexGeneration
+	}
+	finish, err := s.beginIndexGeneration(&document, previous.ID != "")
+	if err != nil {
+		return model.Document{}, err
+	}
+	defer finish()
 	startedAt := time.Now().UTC()
 	stage := "extract_text"
 	content, err := util.ExtractDocumentText(document.Path)
@@ -998,8 +1021,11 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		added, err := s.publishIndexedDocument(document, previous)
+		if err != nil {
+			return model.Document{}, err
+		}
 		indexSucceeded = true
-		added := s.AddDocument(document.KnowledgeBaseID, document)
 		s.enqueueWikiSource(added)
 		s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
 			"chunkCount": 0,
@@ -1034,8 +1060,11 @@ func (s *AppService) indexDocument(document model.Document, logContext operation
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
 	document.IndexErrorCode = ""
+	added, err := s.publishIndexedDocument(document, previous)
+	if err != nil {
+		return model.Document{}, err
+	}
 	indexSucceeded = true
-	added := s.AddDocument(document.KnowledgeBaseID, document)
 	s.enqueueWikiSource(added)
 	s.recordIndexDocumentLog(added, logContext, model.OperationStatusSuccess, "complete", added.Status, startedAt, nil, map[string]any{
 		"chunkCount": len(chunks),
@@ -1119,6 +1148,13 @@ func markdownArchiveExists(path string) bool {
 
 // RewriteDocumentContent 覆写现有文档文件并重建整篇索引，供 append/update 共用。
 func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content string) (model.Document, error) {
+	unlock := s.lockDocument(knowledgeBaseID, documentID)
+	defer unlock()
+	return s.rewriteDocumentContent(knowledgeBaseID, documentID, content)
+}
+
+// rewriteDocumentContent 由持有文档锁的覆盖或追加入口调用，保证正文读取到发布处于同一操作中。
+func (s *AppService) rewriteDocumentContent(knowledgeBaseID, documentID, content string) (model.Document, error) {
 	document, err := s.GetDocument(knowledgeBaseID, documentID)
 	if err != nil {
 		return model.Document{}, err
@@ -1164,14 +1200,6 @@ func (s *AppService) RewriteDocumentContent(knowledgeBaseID, documentID, content
 	}
 	document.MarkdownPath = markdownPath
 
-	if err := s.deleteDocumentChunks(knowledgeBaseID, documentID); err != nil {
-		// 旧索引无法对应已更新的正文，不能继续对外宣称索引可用。
-		if persistErr := s.persistReindexError(document, err, true); persistErr != nil {
-			return model.Document{}, fmt.Errorf("%w; persist rewrite error: %v", err, persistErr)
-		}
-		return model.Document{}, err
-	}
-
 	document.Status = "processing"
 
 	// 与手动重建共用失败状态契约，避免 MCP 更新失败后仍显示旧的 indexed 元数据。
@@ -1212,41 +1240,21 @@ func (s *AppService) AddDocument(knowledgeBaseID string, document model.Document
 
 // ReplaceDocument 用新的文档元数据覆盖 state 中的旧记录，避免重建索引时生成重复条目。
 func (s *AppService) ReplaceDocument(knowledgeBaseID string, document model.Document) (model.Document, error) {
-	s.state.Mu.Lock()
-	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
-	if !ok {
-		s.state.Mu.Unlock()
-		return model.Document{}, fmt.Errorf("knowledge base not found")
-	}
-
-	replaced := false
-	originalDocuments := append([]model.Document(nil), kb.Documents...)
-	for index := range kb.Documents {
-		if kb.Documents[index].ID == document.ID {
-			kb.Documents[index] = document
-			replaced = true
-			break
+	err := s.commitWikiChange(knowledgeBaseID, func(kb *model.KnowledgeBase) error {
+		for i := range kb.Documents {
+			if kb.Documents[i].ID == document.ID {
+				kb.Documents[i] = document
+				return nil
+			}
 		}
-	}
-	if !replaced {
-		s.state.Mu.Unlock()
-		return model.Document{}, fmt.Errorf("document not found")
-	}
-
-	s.state.KnowledgeBases[knowledgeBaseID] = kb
-	s.state.Mu.Unlock()
-
-	if err := s.saveState(); err != nil {
-		s.state.Mu.Lock()
-		kb.Documents = originalDocuments
-		s.state.KnowledgeBases[knowledgeBaseID] = kb
-		s.state.Mu.Unlock()
-		return model.Document{}, err
-	}
-	return document, nil
+		return fmt.Errorf("document not found")
+	})
+	return document, err
 }
 
 func (s *AppService) DeleteDocument(knowledgeBaseID, documentID string) (model.Document, error) {
+	unlock := s.lockDocument(knowledgeBaseID, documentID)
+	defer unlock()
 	s.state.Mu.Lock()
 	kb, ok := s.state.KnowledgeBases[knowledgeBaseID]
 	if !ok {
@@ -1375,9 +1383,18 @@ func (s *AppService) BuildRetrievalContext(req model.ChatCompletionRequest) (str
 	return contextText, sources, nil
 }
 
+// EvaluateRetrieve 校验请求范围后执行实际检索；普通聊天直接返回空结果，不调用嵌入。
 func (s *AppService) EvaluateRetrieve(req model.ChatCompletionRequest) ([]RetrievedChunk, error) {
 	if s == nil {
 		return nil, fmt.Errorf("app service is nil")
+	}
+	var scopeErr error
+	req, scopeErr = s.NormalizeKnowledgeRequest(req)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	if req.KnowledgeScope == KnowledgeScopeNone {
+		return nil, nil
 	}
 
 	query := latestUserMessage(req.Messages)
@@ -1422,7 +1439,17 @@ func (s *AppService) CurrentChatConfig() model.ChatModelConfig {
 	return s.currentChatConfig()
 }
 
+// BuildChatContext 生成已选范围的资料概览；此处文档列表不能作为实际召回引用。
+// 无范围返回空概览，库或文档归属错误向调用方返回。
 func (s *AppService) BuildChatContext(req model.ChatCompletionRequest) (string, []map[string]string, error) {
+	var scopeErr error
+	req, scopeErr = s.NormalizeKnowledgeRequest(req)
+	if scopeErr != nil {
+		return "", nil, scopeErr
+	}
+	if req.KnowledgeScope == KnowledgeScopeNone {
+		return "", nil, nil
+	}
 	s.state.Mu.RLock()
 	defer s.state.Mu.RUnlock()
 
@@ -1523,7 +1550,14 @@ func (s *AppService) deleteDocumentChunks(knowledgeBaseID, documentID string) er
 	return nil
 }
 
+// reindexExistingDocument 在调用方持有文档锁时构建新代际，完整写入后替换发布指针。
+// 重建失败不先删旧向量，由调用方依据正文是否变化记录可用性。
 func (s *AppService) reindexExistingDocument(document model.Document, content string) (model.Document, error) {
+	finish, err := s.beginIndexGeneration(&document, true)
+	if err != nil {
+		return model.Document{}, err
+	}
+	defer finish()
 	chunks := s.rag.BuildDocumentChunks(document, content)
 	if len(chunks) == 0 {
 		document.ContentPreview = util.BuildContentPreviewFromText(content)
@@ -1620,6 +1654,7 @@ func (s *AppService) ContextMessageLimit() int {
 	return limit
 }
 
+// SaveConversation 拒绝矛盾检索范围，保存消息和显式范围；存储失败直接返回错误。
 func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model.Conversation, error) {
 	if s == nil {
 		return nil, fmt.Errorf("app service is nil")
@@ -1627,6 +1662,12 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 	if s.chatHistory == nil {
 		return nil, fmt.Errorf("chat history store is not configured")
 	}
+	// 拒绝矛盾范围，不将错误的全库或普通聊天标记静默转换成指定范围。
+	scope, err := ResolveKnowledgeScope(req.KnowledgeScope, req.KnowledgeBaseID, req.DocumentID)
+	if err != nil {
+		return nil, err
+	}
+	req.KnowledgeScope = scope
 	conversationID := strings.TrimSpace(req.ID)
 	if conversationID == "" {
 		return nil, fmt.Errorf("conversation id is required")
@@ -1638,6 +1679,7 @@ func (s *AppService) SaveConversation(req model.SaveConversationRequest) (*model
 	createdAt := normalizeTimestamp(messages[0].CreatedAt)
 	updatedAt := normalizeTimestamp(messages[len(messages)-1].CreatedAt)
 	conversation := model.Conversation{
+		KnowledgeScope:  normalizeStoredKnowledgeScope(req.KnowledgeScope, req.KnowledgeBaseID, req.DocumentID),
 		ID:              conversationID,
 		Title:           strings.TrimSpace(req.Title),
 		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
@@ -1914,6 +1956,7 @@ func (s *AppService) qdrantVectorSize() int {
 	return 768
 }
 
+// upsertDocumentChunks 校验数量与维度，以分块加代际生成 point ID，等待整批向量写入完成。
 func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []DocumentChunk, vectors [][]float64) error {
 	if s.qdrant == nil || !s.qdrant.IsEnabled() || len(chunks) == 0 {
 		return nil
@@ -1927,11 +1970,16 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 		if len(vectors[index]) != vectorSize {
 			return fmt.Errorf("embedding dimension mismatch for chunk %s: expected %d, got %d", chunk.ID, vectorSize, len(vectors[index]))
 		}
+		pointKey := chunk.ID
+		if chunk.IndexGeneration != "" {
+			pointKey += ":" + chunk.IndexGeneration
+		}
 		points = append(points, QdrantPoint{
-			ID:           qdrantPointID(chunk.ID),
+			ID:           qdrantPointID(pointKey),
 			Vector:       vectors[index],
 			SparseVector: BuildSparseVector(chunk.Text),
 			Payload: map[string]any{
+				"index_generation":  chunk.IndexGeneration,
 				"document_kind":     chunk.Kind,
 				"wiki_revision":     chunk.WikiRevision,
 				"source_checksum":   chunk.SourceChecksum,
@@ -2113,7 +2161,15 @@ func (s *AppService) retrieveRelevantChunks(req model.ChatCompletionRequest, que
 	return selected, nil
 }
 
+// resolveRetrievalKnowledgeBaseIDs 将明确范围展开为库 ID；none 不检索，all 才枚举全部库。
 func (s *AppService) resolveRetrievalKnowledgeBaseIDs(req model.ChatCompletionRequest) ([]string, error) {
+	scope, err := ResolveKnowledgeScope(req.KnowledgeScope, req.KnowledgeBaseID, req.DocumentID)
+	if err != nil {
+		return nil, err
+	}
+	if scope == KnowledgeScopeNone {
+		return nil, nil
+	}
 	s.state.Mu.RLock()
 	defer s.state.Mu.RUnlock()
 
@@ -2334,6 +2390,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 					Kind:            payloadString(item.Payload, "document_kind", "source"),
 					WikiRevision:    payloadInt(item.Payload, "wiki_revision"),
 					SourceChecksum:  payloadString(item.Payload, "source_checksum", ""),
+					IndexGeneration: payloadString(item.Payload, "index_generation", ""),
 					ID:              chunkID,
 					KnowledgeBaseID: payloadString(item.Payload, "knowledge_base_id", knowledgeBaseID),
 					DocumentID:      payloadString(item.Payload, "document_id", ""),

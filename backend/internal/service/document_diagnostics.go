@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -56,8 +57,10 @@ func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.Knowl
 	}
 
 	metrics := model.KnowledgeBaseHealthMetrics{
-		DocumentCount: len(kb.Documents),
-		QdrantEnabled: s.qdrant != nil && s.qdrant.IsEnabled(),
+		DocumentCount:     len(kb.Documents),
+		QdrantEnabled:     s.qdrant != nil && s.qdrant.IsEnabled(),
+		VectorCountSource: "not_applicable",
+		VectorCountStatus: "not_applicable",
 	}
 	documents := make([]model.KnowledgeBaseDocumentHealth, 0, len(kb.Documents))
 	needsReindexCount := 0
@@ -82,6 +85,14 @@ func (s *AppService) GetKnowledgeBaseHealth(knowledgeBaseID string) (model.Knowl
 		}
 		metrics.ChunkCount += item.ChunkCount
 		metrics.VectorCount += item.VectorCount
+		// 任一文档查询失败，汇总数量只能视为部分结果，不能显示为精确总数。
+		if item.VectorCountSource == "unknown" {
+			metrics.VectorCountSource = "unknown"
+			metrics.VectorCountStatus = item.VectorCountStatus
+		} else if item.VectorCountSource == "actual" && metrics.VectorCountSource != "unknown" {
+			metrics.VectorCountSource = "actual"
+			metrics.VectorCountStatus = "ok"
+		}
 		metrics.SummaryChunkCount += item.SummaryChunkCount
 		metrics.StructuredRowCount += item.StructuredRowCount
 		metrics.RawContentChars += item.RawContentChars
@@ -115,6 +126,12 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 	if document.Wiki != nil {
 		return s.indexWikiPage(knowledgeBaseID, documentID)
 	}
+	unlock := s.lockDocument(knowledgeBaseID, documentID)
+	defer unlock()
+	document, err = s.GetDocument(knowledgeBaseID, documentID)
+	if err != nil {
+		return model.Document{}, err
+	}
 	if strings.TrimSpace(document.Path) == "" {
 		return model.Document{}, fmt.Errorf("document path is empty")
 	}
@@ -126,6 +143,7 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 		}
 		return model.Document{}, fmt.Errorf("extract document text: %w", err)
 	}
+	originalChecksum, originalStatus := document.ContentChecksum, document.Status
 	// 手工重建同样接入来源版本，不能让磁盘变化绕过知识页失效。
 	document.ContentChecksum = hashDocumentContent(content)
 	document, err = s.snapshotWikiSource(document, content)
@@ -146,18 +164,12 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 	document.Size = int64(len([]byte(content)))
 	document.SizeLabel = util.FormatFileSize(document.Size)
 
-	if err := s.deleteDocumentChunks(document.KnowledgeBaseID, document.ID); err != nil {
-		if persistErr := s.persistReindexError(document, err, false); persistErr != nil {
-			return model.Document{}, fmt.Errorf("%w; persist reindex error: %v", err, persistErr)
-		}
-		return model.Document{}, err
-	}
-
 	document.Status = "processing"
 	document.IndexError = ""
 	indexed, err := s.reindexExistingDocument(document, content)
 	if err != nil {
-		if persistErr := s.persistReindexError(document, err, true); persistErr != nil {
+		document.Status = originalStatus
+		if persistErr := s.persistReindexError(document, err, originalChecksum != document.ContentChecksum); persistErr != nil {
 			return model.Document{}, fmt.Errorf("%w; persist reindex error: %v", err, persistErr)
 		}
 		return model.Document{}, err
@@ -182,6 +194,7 @@ func (s *AppService) persistReindexError(document model.Document, indexErr error
 	return err
 }
 
+// buildDocumentDetailResponse 截断原文和分块预览，额外保留引用目标；向量数量只采用远端实测。
 func buildDocumentDetailResponse(s *AppService, document model.Document, content string, chunks []DocumentChunk, focusChunkID string) model.DocumentDetailResponse {
 	rawContent := strings.TrimSpace(content)
 	rawContentTruncated := false
@@ -208,10 +221,9 @@ func buildDocumentDetailResponse(s *AppService, document model.Document, content
 		}
 	}
 
-	vectorCount := 0
-	if s != nil && s.qdrant != nil && s.qdrant.IsEnabled() && document.Status == "indexed" {
-		// 当前 Qdrant 封装没有按文档计数接口；已索引文档按本地分块数报告预期向量数。
-		vectorCount = len(chunks)
+	vectorHealth := VectorHealth{Source: "not_applicable", Status: "not_applicable"}
+	if s != nil {
+		vectorHealth = s.qdrant.InspectDocumentVectors(context.Background(), document)
 	}
 	summary := strings.TrimSpace(document.ContentPreview)
 	if summary == "" && len(chunks) > 0 {
@@ -225,7 +237,9 @@ func buildDocumentDetailResponse(s *AppService, document model.Document, content
 		Diagnostics: model.DocumentIndexDiagnostics{
 			RawContentChars:       len([]rune(content)),
 			ChunkCount:            len(chunks),
-			VectorCount:           vectorCount,
+			VectorCount:           vectorHealth.Count,
+			VectorCountSource:     vectorHealth.Source,
+			VectorCountStatus:     vectorHealth.Status,
 			SummaryChunkCount:     summaryChunkCount,
 			StructuredRowCount:    structuredRowCount,
 			RawContentAvailable:   strings.TrimSpace(content) != "",
@@ -248,6 +262,7 @@ func buildDocumentChunkPreview(document model.Document, chunk DocumentChunk) mod
 	}
 }
 
+// buildKnowledgeBaseDocumentHealth 对照原文、分块与实际向量状态生成建议，查询失败保留 unknown。
 func (s *AppService) buildKnowledgeBaseDocumentHealth(document model.Document) model.KnowledgeBaseDocumentHealth {
 	item := model.KnowledgeBaseDocumentHealth{
 		DocumentID:   document.ID,
@@ -270,9 +285,8 @@ func (s *AppService) buildKnowledgeBaseDocumentHealth(document model.Document) m
 		item.Recommendation = "无法读取原始文件，建议检查文件是否仍存在后重新上传。"
 	}
 
-	if s != nil && s.qdrant != nil && s.qdrant.IsEnabled() && document.Status == "indexed" {
-		item.VectorCount = item.ChunkCount
-	}
+	vectorHealth := s.qdrant.InspectDocumentVectors(context.Background(), document)
+	item.VectorCount, item.VectorCountSource, item.VectorCountStatus = vectorHealth.Count, vectorHealth.Source, vectorHealth.Status
 	item.NeedsReindex = documentNeedsReindex(document, item)
 	if item.Recommendation == "" {
 		item.Recommendation = documentHealthRecommendation(document, item)
@@ -289,7 +303,11 @@ func documentChunkPreviewContains(chunks []model.DocumentChunkPreview, chunkID s
 	return false
 }
 
+// documentNeedsReindex 判断已确认的索引缺失、维度或数量不符，不将连接失败等同于零向量。
 func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDocumentHealth) bool {
+	if health.VectorCountStatus == "collection_missing" || health.VectorCountStatus == "dimension_mismatch" || (health.VectorCountSource == "actual" && health.VectorCount != document.ChunkCount) {
+		return true
+	}
 	if strings.TrimSpace(document.IndexError) != "" || document.Status != "indexed" {
 		return true
 	}
@@ -299,8 +317,17 @@ func documentNeedsReindex(document model.Document, health model.KnowledgeBaseDoc
 	return strings.TrimSpace(document.IndexedAt) == ""
 }
 
+// documentHealthRecommendation 按远端诊断、索引错误和原文状态给出可执行处理建议。
 func documentHealthRecommendation(document model.Document, health model.KnowledgeBaseDocumentHealth) string {
 	switch {
+	case health.VectorCountStatus == "unavailable":
+		return "向量数量查询失败，请检查 Qdrant 连接后重试；当前数量未知。"
+	case health.VectorCountStatus == "collection_missing":
+		return "Qdrant 集合不存在，请重建索引。"
+	case health.VectorCountStatus == "dimension_mismatch":
+		return "向量维度与当前配置不一致，请核对模型及集合后迁移索引。"
+	case health.VectorCountSource == "actual" && health.VectorCount != document.ChunkCount:
+		return "实际向量数量与已记录分块数量不一致，建议重建索引。"
 	case strings.TrimSpace(document.IndexError) != "":
 		return "索引失败，建议查看错误信息后重建索引。"
 	case document.Status == "processing":
@@ -316,6 +343,7 @@ func documentHealthRecommendation(document model.Document, health model.Knowledg
 	}
 }
 
+// knowledgeBaseHealthScore 汇总本地索引完整性与远端可确认程度；未知计数扣分但不视为实测零。
 func knowledgeBaseHealthScore(metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) int {
 	if metrics.DocumentCount == 0 {
 		return 100
@@ -328,7 +356,7 @@ func knowledgeBaseHealthScore(metrics model.KnowledgeBaseHealthMetrics, needsRei
 	if metrics.ChunkCount == 0 {
 		score -= 25
 	}
-	if metrics.QdrantEnabled && metrics.IndexedCount > 0 && metrics.VectorCount == 0 {
+	if metrics.VectorCountSource == "unknown" || (metrics.VectorCountSource == "actual" && metrics.IndexedCount > 0 && metrics.VectorCount == 0) {
 		score -= 20
 	}
 	if score < 0 {
@@ -340,8 +368,11 @@ func knowledgeBaseHealthScore(metrics model.KnowledgeBaseHealthMetrics, needsRei
 	return score
 }
 
+// knowledgeBaseHealthStatus 优先标记远端未知为 attention，避免部分计数显示健康。
 func knowledgeBaseHealthStatus(score int, metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) string {
 	switch {
+	case metrics.VectorCountSource == "unknown":
+		return "attention"
 	case metrics.DocumentCount == 0:
 		return "empty"
 	case metrics.FailedCount > 0 || score < 60:
@@ -353,6 +384,7 @@ func knowledgeBaseHealthStatus(score int, metrics model.KnowledgeBaseHealthMetri
 	}
 }
 
+// knowledgeBaseHealthRecommendations 汇总重建需求与查询限制，明确区分未知数量和实际为零。
 func knowledgeBaseHealthRecommendations(metrics model.KnowledgeBaseHealthMetrics, needsReindexCount int) []string {
 	if metrics.DocumentCount == 0 {
 		return []string{"当前知识库暂无文档，上传文档后可生成索引健康度。"}
@@ -371,7 +403,9 @@ func knowledgeBaseHealthRecommendations(metrics model.KnowledgeBaseHealthMetrics
 	if needsReindexCount > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("%d 份文档建议重建索引。", needsReindexCount))
 	}
-	if metrics.QdrantEnabled && metrics.IndexedCount > 0 && metrics.VectorCount == 0 {
+	if metrics.VectorCountSource == "unknown" {
+		recommendations = append(recommendations, "Qdrant 诊断未能确认向量数量，请查看文档诊断状态，勿将未知数量视为零。")
+	} else if metrics.VectorCountSource == "actual" && metrics.IndexedCount > 0 && metrics.VectorCount == 0 {
 		recommendations = append(recommendations, "Qdrant 已启用但未统计到向量，建议重建相关文档索引。")
 	}
 	if len(recommendations) == 0 {

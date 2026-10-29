@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { fetchWikiPageForEdit, wikiRequest, type WikiPageContent, type WikiPageEditResult } from '../../services/api'
-import MarkdownRenderer from '../chat/MarkdownRenderer'
+import MarkdownRenderer from '../chat/LazyMarkdownRenderer'
 import AppIcon from '../common/AppIcon'
 
 /**

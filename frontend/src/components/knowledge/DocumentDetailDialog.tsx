@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import type { DocumentDetailResponse } from '../../App'
-import MarkdownRenderer from '../chat/MarkdownRenderer'
+import MarkdownRenderer from '../chat/LazyMarkdownRenderer'
 import KnowledgeIcon from './KnowledgeIcon'
 import { shouldUseRawDocumentPreview } from './documentPreviewText'
 
@@ -10,7 +10,7 @@ interface DocumentDetailDialogProps {
   loading: boolean
   reindexing: boolean
   reindexMessage?: string | null
-  onReindex: () => void
+  onReindex?: () => void
   onClose: () => void
 }
 
@@ -50,7 +50,7 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
             <h1>{detail?.document.name ?? '正在加载'}</h1>
           </div>
           <div className="document-detail-header-actions">
-            {detail && (
+            {detail && onReindex && (
               <button
                 type="button"
                 className="kb-doc-reindex"
@@ -83,7 +83,7 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
               <div className="document-detail-metrics">
                 <div><span>原文字符</span><strong>{detail.diagnostics.rawContentChars}</strong></div>
                 <div><span>Chunks</span><strong>{detail.diagnostics.chunkCount}</strong></div>
-                <div><span>向量</span><strong>{detail.diagnostics.vectorCount}</strong></div>
+                <div><span>实际向量</span><strong>{detail.diagnostics.vectorCountSource === 'actual' ? detail.diagnostics.vectorCount : detail.diagnostics.vectorCountSource === 'not_applicable' ? '不适用' : '未知'}</strong><small>{detail.diagnostics.vectorCountStatus && detail.diagnostics.vectorCountStatus !== 'ok' && detail.diagnostics.vectorCountStatus !== 'not_applicable' ? (detail.diagnostics.vectorCountStatus === 'collection_missing' ? '集合不存在' : detail.diagnostics.vectorCountStatus === 'dimension_mismatch' ? '维度不一致' : '查询失败') : ''}</small></div>
                 <div><span>结构化行</span><strong>{detail.diagnostics.structuredRowCount}</strong></div>
               </div>
 

@@ -6,6 +6,7 @@ import type {
   DocumentDetailResponse,
   DocumentItem,
   KnowledgeBase,
+  KnowledgeScope,
   KnowledgeBaseFileUploadState,
   KnowledgeBaseHealthResponse,
   OperationLogFilters,
@@ -27,6 +28,8 @@ interface SidebarProps {
   selectedKnowledgeBaseId: string | null
   selectedDocumentId: string | null
   activeKnowledgeBaseId: string | null
+  /** 普通聊天与全库检索不能仅凭空知识库 ID 区分。 */
+  activeKnowledgeScope: KnowledgeScope
   activeDocumentId: string | null
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
@@ -92,6 +95,7 @@ const Sidebar = ({
   knowledgeBases,
   selectedKnowledgeBaseId,
   activeKnowledgeBaseId,
+  activeKnowledgeScope,
   activeDocumentId,
   onSelectKnowledgeBase,
   onSelectDocument,
@@ -139,6 +143,7 @@ const Sidebar = ({
   const [progressLibraryId, setProgressLibraryId] = useState<string | null>(() => initialLocation.get('workspace') === 'progress' ? initialLocation.get('library') ?? '' : null)
   const [progressVisit, setProgressVisit] = useState(0)
   const [wikiOpen, setWikiOpen] = useState(() => initialLocation.get('workspace') === 'wiki')
+  const [wikiLibraryId, setWikiLibraryId] = useState<string | null>(() => initialLocation.get('workspace') === 'wiki' ? initialLocation.get('library') : null)
   const [wikiHistoryOpen, setWikiHistoryOpen] = useState(() => initialLocation.get('view') === 'history')
   const [wikiTarget, setWikiTarget] = useState<Pick<WikiChange, 'knowledgeBaseId' | 'pageId' | 'revision'> | null>(() => {
     const knowledgeBaseId = initialLocation.get('library')
@@ -146,7 +151,7 @@ const Sidebar = ({
     const revision = Number(initialLocation.get('revision'))
     return knowledgeBaseId && pageId && Number.isInteger(revision) && revision >= 0 ? { knowledgeBaseId, pageId, revision } : null
   })
-  const wikiLibrary = knowledgeBases.find((kb) => kb.id === (wikiTarget?.knowledgeBaseId ?? selectedKnowledgeBaseId)) ?? knowledgeBases[0]
+  const wikiLibrary = knowledgeBases.find((kb) => kb.id === (wikiTarget?.knowledgeBaseId ?? wikiLibraryId ?? selectedKnowledgeBaseId)) ?? knowledgeBases[0]
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1))
@@ -155,6 +160,10 @@ const Sidebar = ({
     }
     if (wikiOpen) {
       params.set('workspace', 'wiki')
+      // 即使尚未选择知识页，也保留文库身份，避免刷新后回到列表第一项。
+      if (wikiLibrary) {
+        params.set('library', wikiLibrary.id)
+      }
       if (wikiHistoryOpen) {
         params.set('view', 'history')
       }
@@ -173,7 +182,7 @@ const Sidebar = ({
     }
     const hash = params.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash ? '#' + hash : ''}`)
-  }, [wikiOpen, wikiHistoryOpen, wikiTarget, progressLibraryId])
+  }, [wikiOpen, wikiHistoryOpen, wikiTarget, progressLibraryId, wikiLibrary?.id])
 
   let activeWorkspace: WorkspaceId = 'chat'
   if (wikiOpen) {
@@ -206,6 +215,7 @@ const Sidebar = ({
     setWikiOpen(workspace === 'wiki')
     setProgressLibraryId(workspace === 'progress' ? '' : null)
     if (workspace === 'wiki') {
+      setWikiLibraryId(selectedKnowledgeBaseId)
       if (isSettingsOpen) onToggleSettings()
       if (isKnowledgePanelOpen) onToggleKnowledgePanel()
       return
@@ -455,11 +465,15 @@ const Sidebar = ({
           key={wikiLibrary.id}
           initialPageId={wikiTarget?.pageId}
           initialRevision={wikiTarget?.revision}
+          onNavigate={(pageId, revision) => {
+            setWikiLibraryId(wikiLibrary.id)
+            setWikiTarget(pageId ? { knowledgeBaseId: wikiLibrary.id, pageId, revision } : null)
+          }}
           onOpenHistory={() => setWikiHistoryOpen(true)}
           knowledgeBaseId={wikiLibrary.id}
           knowledgeBaseName={wikiLibrary.name}
           documents={wikiLibrary.documents}
-          libraryPicker={<label>当前知识库<select aria-label="切换 Wiki 知识库" value={wikiLibrary.id} onChange={(event) => { setWikiTarget(null); onSelectKnowledgeBase(event.target.value) }}>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select></label>}
+          libraryPicker={<label>当前知识库<select aria-label="切换 Wiki 知识库" value={wikiLibrary.id} onChange={(event) => { setWikiTarget(null); setWikiLibraryId(event.target.value); onSelectKnowledgeBase(event.target.value) }}>{knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select></label>}
           onUploadFiles={(files) => onUploadFiles(wikiLibrary.id, files)}
           uploadState={knowledgeBaseFileUploadStates[wikiLibrary.id]}
           onOpenProgress={() => { handleWorkspaceChange('progress'); setProgressLibraryId(wikiLibrary.id) }}
@@ -473,6 +487,7 @@ const Sidebar = ({
         onToggleCollapse={toggleKnowledgeBaseCollapse}
         selectedKnowledgeBaseId={selectedKnowledgeBaseId}
         activeKnowledgeBaseId={activeKnowledgeBaseId}
+        activeKnowledgeScope={activeKnowledgeScope}
         activeDocumentId={activeDocumentId}
         onSelectKnowledgeBase={onSelectKnowledgeBase}
         onSelectDocument={onSelectDocument}

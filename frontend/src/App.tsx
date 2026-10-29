@@ -23,11 +23,20 @@ import {
   UNAUTHORIZED_ERROR_MESSAGE,
 } from './services/api'
 
+/** 明确区分普通聊天、指定范围与全库检索。 */
+export type KnowledgeScope = 'none' | 'selected' | 'all'
+
 export interface ChatMessageMetadata {
+  /** 词法证据覆盖诊断，仅作辅助提示。 */
+  citationSupport?: { status: string; summary: string; coverage: number }
   degraded?: boolean
   fallbackStrategy?: string
   upstreamError?: string
   sources?: Array<{
+    chunkId?: string
+    chunkIndex?: string
+    snippet?: string
+    citationSnippet?: string
     pageId?: string
     wikiRevision?: string
     sourceChecksum?: string
@@ -48,6 +57,7 @@ export interface ChatMessage {
 }
 
 export interface Conversation {
+  knowledgeScope?: KnowledgeScope
   id: string
   title: string
   knowledgeBaseId: string | null
@@ -88,6 +98,9 @@ export interface DocumentChunkPreview {
 }
 
 export interface DocumentIndexDiagnostics {
+  /** 仅 actual 可显示精确数量，unknown 不等于零。 */
+  vectorCountSource?: 'actual' | 'unknown' | 'not_applicable'
+  vectorCountStatus?: string
   rawContentChars: number
   chunkCount: number
   vectorCount: number
@@ -109,6 +122,9 @@ export interface DocumentDetailResponse {
 }
 
 export interface KnowledgeBaseDocumentHealth {
+  /** 远端向量计数的可用性与诊断状态。 */
+  vectorCountSource?: 'actual' | 'unknown' | 'not_applicable'
+  vectorCountStatus?: string
   documentId: string
   documentName: string
   status: string
@@ -130,6 +146,9 @@ export interface KnowledgeBaseHealthResponse {
   status: string
   score: number
   metrics: {
+    /** 部分查询失败时总数标记 unknown。 */
+    vectorCountSource?: 'actual' | 'unknown' | 'not_applicable'
+    vectorCountStatus?: string
     documentCount: number
     indexedCount: number
     processingCount: number
@@ -197,6 +216,7 @@ interface ChatCompletionResponse {
 }
 
 interface ChatRequestBody {
+  knowledgeScope: KnowledgeScope
   conversationId: string
   model: string
   knowledgeBaseId: string
@@ -262,6 +282,7 @@ interface ConfigResponse {
 }
 
 interface BackendConversationListItem {
+  knowledgeScope?: KnowledgeScope
   id: string
   title: string
   knowledgeBaseId: string | null
@@ -276,6 +297,7 @@ interface ConversationListResponse {
 }
 
 interface BackendConversation {
+  knowledgeScope?: KnowledgeScope
   id: string
   title: string
   knowledgeBaseId: string | null
@@ -449,6 +471,7 @@ const normalizeConversation = (conversation: BackendConversation): Conversation 
   title: conversation.title,
   knowledgeBaseId: conversation.knowledgeBaseId || null,
   documentId: conversation.documentId || null,
+  knowledgeScope: conversation.knowledgeScope ?? (conversation.knowledgeBaseId || conversation.documentId ? 'selected' : 'none'),
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
   messages: (conversation.messages ?? []).map((message) => ({
@@ -807,6 +830,7 @@ function App() {
         title: conversation.title,
         knowledgeBaseId: conversation.knowledgeBaseId || null,
         documentId: conversation.documentId || null,
+        knowledgeScope: conversation.knowledgeScope ?? (conversation.knowledgeBaseId || conversation.documentId ? 'selected' : 'none'),
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
         messages: [],
@@ -1024,8 +1048,9 @@ function App() {
         conversation.id === conversationId
           ? {
               ...conversation,
-              knowledgeBaseId,
+              knowledgeBaseId: knowledgeBaseId === '__all_knowledge_bases__' ? null : knowledgeBaseId,
               documentId,
+              knowledgeScope: knowledgeBaseId === '__all_knowledge_bases__' ? 'all' : knowledgeBaseId || documentId ? 'selected' : 'none',
               updatedAt: new Date().toISOString(),
             }
           : conversation,
@@ -1099,6 +1124,7 @@ function App() {
           title: nextTitle,
           knowledgeBaseId: fullConversation.knowledgeBaseId ?? '',
           documentId: fullConversation.documentId ?? '',
+          knowledgeScope: fullConversation.knowledgeScope,
           messages: fullConversation.messages.map((message) => ({
             id: message.id,
             role: message.role,
@@ -1225,6 +1251,7 @@ function App() {
             title: '新的对话',
             knowledgeBaseId: activeConversation.knowledgeBaseId ?? '',
             documentId: activeConversation.documentId ?? '',
+            knowledgeScope: activeConversation.knowledgeScope,
             messages: [{
               id: resetMessage.id,
               role: resetMessage.role,
@@ -1309,6 +1336,7 @@ function App() {
             conversation.knowledgeBaseId === knowledgeBaseId
               ? {
                   ...conversation,
+                  knowledgeScope: 'none',
                   knowledgeBaseId: null,
                   documentId: null,
                   updatedAt: new Date().toISOString(),
@@ -1925,6 +1953,7 @@ function App() {
       model: config.chat.model,
       knowledgeBaseId: activeConversationKnowledgeBaseId ?? '',
       documentId: selectedDocument?.id ?? '',
+      knowledgeScope: activeConversation.knowledgeScope ?? (activeConversationKnowledgeBaseId || selectedDocument ? 'selected' : 'none'),
       config: config.chat,
       embedding: config.embedding,
       messages: nextMessages.map((message) => ({
@@ -2348,6 +2377,7 @@ function App() {
         selectedKnowledgeBaseId={panelSelectedKnowledgeBaseId}
         selectedDocumentId={activeConversationDocumentId}
         activeKnowledgeBaseId={activeConversationKnowledgeBaseId}
+        activeKnowledgeScope={activeConversation.knowledgeScope ?? 'none'}
         activeDocumentId={selectedDocument?.id ?? null}
         onSelectKnowledgeBase={handleSelectKnowledgeBase}
         onSelectDocument={handleSelectDocument}
