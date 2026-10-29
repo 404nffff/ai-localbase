@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"ai-localbase/internal/model"
 )
 
 // WikiChange 仅展示实际发布的文档修订，不把成功但没有产出的任务伪装成整理成果。
@@ -86,19 +88,21 @@ type WikiLibraryProgress struct {
 
 // WikiJobProgress 仅返回任务展示字段，不携带提取缓存、来源正文和模型配置。
 type WikiJobProgress struct {
-	ID                string `json:"id"`
-	Kind              string `json:"kind"`
-	Status            string `json:"status"`
-	Stage             string `json:"stage"`
-	Attempt           int    `json:"attempt"`
-	Error             string `json:"error,omitempty"`
-	TotalSegments     int    `json:"totalSegments"`
-	ProcessedSegments int    `json:"processedSegments"`
-	TotalPages        int    `json:"totalPages"`
-	CheckedPages      int    `json:"checkedPages"`
-	SemanticStatus    string `json:"semanticStatus,omitempty"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	SourceNames       []string `json:"sourceNames"` // 当前名称或已删除资料的身份提示。
+	ModelCalls        int      `json:"modelCalls"`  // 当前任务累计消耗的模型调用次数。
+	ID                string   `json:"id"`
+	Kind              string   `json:"kind"`
+	Status            string   `json:"status"`
+	Stage             string   `json:"stage"`
+	Attempt           int      `json:"attempt"`
+	Error             string   `json:"error,omitempty"`
+	TotalSegments     int      `json:"totalSegments"`
+	ProcessedSegments int      `json:"processedSegments"`
+	TotalPages        int      `json:"totalPages"`
+	CheckedPages      int      `json:"checkedPages"`
+	SemanticStatus    string   `json:"semanticStatus,omitempty"`
+	CreatedAt         string   `json:"createdAt"`
+	UpdatedAt         string   `json:"updatedAt"`
 }
 
 // WikiProgress 汇总全部知识库，并可按库与状态分页读取任务。
@@ -126,6 +130,11 @@ func (s *AppService) WikiProgress(kbID, status string, offset, limit int) (map[s
 	jobs := make([]WikiJobProgress, 0)
 	for _, kb := range s.state.KnowledgeBases {
 		library := WikiLibraryProgress{KnowledgeBaseID: kb.ID, Name: kb.Name, Enabled: true, Counts: map[string]int{}}
+		for _, status := range wikiSourceStates(kb) {
+			if status == "pending" || status == "failed" {
+				library.PendingCount++
+			}
+		}
 		for _, doc := range kb.Documents {
 			if doc.Wiki != nil {
 				library.PageCount++
@@ -133,7 +142,6 @@ func (s *AppService) WikiProgress(kbID, status string, offset, limit int) (map[s
 		}
 		if kb.Wiki != nil {
 			library.Enabled = kb.Wiki.Enabled
-			library.PendingCount = len(kb.Wiki.PendingSources)
 			library.Total = len(kb.Wiki.Jobs)
 			var latest time.Time
 			for _, job := range kb.Wiki.Jobs {
@@ -146,6 +154,7 @@ func (s *AppService) WikiProgress(kbID, status string, offset, limit int) (map[s
 					continue
 				}
 				jobs = append(jobs, WikiJobProgress{
+					SourceNames: wikiJobSourceNames(job, kb.Documents), ModelCalls: job.ModelCalls,
 					ID: job.ID, Kind: job.Kind, Status: job.Status, Stage: job.Stage,
 					Attempt: job.Attempt, Error: job.Error,
 					TotalSegments: job.TotalSegments, ProcessedSegments: job.ProcessedSegments,
@@ -179,4 +188,20 @@ func (s *AppService) WikiProgress(kbID, status string, offset, limit int) (map[s
 		"autoCompileReady": wikiAutoCompileReady(s.state.Config.Chat),
 		"jobs":             map[string]any{"items": jobs[start:end], "total": total, "nextCursor": nextCursor},
 	}, nil
+}
+
+// wikiJobSourceNames 将任务中的资料 ID 关联为可读名称，删除的资料仍保留身份提示。
+func wikiJobSourceNames(job model.WikiJob, documents []model.Document) []string {
+	names := []string{}
+	for _, id := range job.DocumentIDs {
+		name := id + "（资料已删除）"
+		for _, doc := range documents {
+			if doc.ID == id {
+				name = doc.Name
+				break
+			}
+		}
+		names = append(names, name)
+	}
+	return names
 }

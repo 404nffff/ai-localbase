@@ -11,12 +11,23 @@ export default function WikiHistoryPage({ knowledgeBases, onOpenPage, onClose, o
   onClose: () => void
   onOpenProgress: () => void
 }) {
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState('')
-  const [offset, setOffset] = useState(0)
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('historyLibrary') ?? '')
+  const [offset, setOffset] = useState(() => {
+    const value = Number(new URLSearchParams(window.location.hash.slice(1)).get('historyOffset'))
+    return Number.isInteger(value) && value >= 0 ? value : 0
+  })
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [data, setData] = useState<WikiList<WikiChange> | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+
+  // 历史筛选和分页进入 URL，刷新时继续读取同一范围。
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.slice(1))
+    params.set('historyLibrary', knowledgeBaseId)
+    params.set('historyOffset', String(offset))
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params}`)
+  }, [knowledgeBaseId, offset])
 
   // 筛选或离开页面时取消旧请求，失败不继续显示上一页为当前结果。
   useEffect(() => {
@@ -53,7 +64,7 @@ export default function WikiHistoryPage({ knowledgeBases, onOpenPage, onClose, o
         <span>{data ? `${data.total} 条发布记录` : '— 条发布记录'}</span>
         <button disabled={loading} onClick={() => setRefreshVersion((version) => version + 1)}><AppIcon name="refresh" size={16} />刷新历史</button>
       </div>
-      <p className="wiki-history-note">这里记录已生成或更新的 Wiki 文档；失败、排队和无文档变更的任务可在“查看整理任务”中查看。</p>
+      <p className="wiki-history-note">点击记录查看当时的内容；进入详情后可“编辑当前版本”，修改保存为新修订。失败和排队中的任务可在“查看整理任务”中查看。</p>
       {error && <div role="alert" className="wiki-error"><p>{error}</p><button onClick={() => setRefreshVersion((version) => version + 1)}>重新加载历史</button></div>}
       {loading && <p role="status">正在读取全部整理历史…</p>}
       {data && <>

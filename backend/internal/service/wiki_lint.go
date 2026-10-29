@@ -50,14 +50,30 @@ func (s *AppService) WikiOverview(kbID string) (map[string]any, error) {
 	if len(jobs) > 50 {
 		jobs = jobs[:50]
 	}
+	type jobView struct {
+		model.WikiJob
+		SourceNames []string `json:"sourceNames"`
+	}
+	jobViews := make([]jobView, 0, len(jobs))
+	for _, job := range jobs {
+		jobViews = append(jobViews, jobView{WikiJob: job, SourceNames: wikiJobSourceNames(job, kb.Documents)})
+	}
+	sourceStates := wikiSourceStates(kb)
+	pending := 0
+	for _, status := range sourceStates {
+		if status == "pending" || status == "failed" {
+			pending++
+		}
+	}
 	return map[string]any{
 		"enabled": state.Enabled,
 		// 仅表示第三方连接字段齐备，不表示模型请求已探测成功。
 		"autoCompileReady": wikiAutoCompileReady(s.GetConfig().Chat),
 		"rulesVersion":     state.RulesVersion,
 		"counts":           counts,
-		"pendingCount":     len(state.PendingSources),
-		"jobs":             jobs,
+		"pendingCount":     pending,
+		"sourceStates":     sourceStates,
+		"jobs":             jobViews,
 	}, nil
 }
 

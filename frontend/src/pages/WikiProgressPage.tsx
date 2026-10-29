@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchWikiProgress, wikiRequest, type WikiJob, type WikiProgressResponse, type WikiRetryBatchResult } from '../services/api'
+import { fetchWikiProgress, wikiRequest, type WikiBatchResult, type WikiJob, type WikiProgressResponse, type WikiRetryBatchResult } from '../services/api'
 import AppIcon from '../components/common/AppIcon'
 import { formatWikiTime, wikiStatusLabel, WikiJobList } from '../components/knowledge/WikiPanel'
 import '../styles/wiki-progress.css'
@@ -99,21 +99,29 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
       if (libraryFilter === 'active' && !(library.counts.running || library.counts.queued)) {
         continue
       }
-      if (libraryFilter === 'attention' && !(library.counts.failed || library.counts.partial || library.counts.needs_split)) {
+      if (libraryFilter === 'attention' && !(library.pendingCount || library.counts.failed || library.counts.partial || library.counts.needs_split)) {
         continue
       }
       visible.push(library)
     }
     // 先展示执行中的库，再展示需要处理的库，同组保留服务端稳定顺序。
     visible.sort((left, right) => {
-      const leftRank = Number(Boolean(left.counts.running || left.counts.queued)) * 2 + Number(Boolean(left.counts.failed || left.counts.partial || left.counts.needs_split))
-      const rightRank = Number(Boolean(right.counts.running || right.counts.queued)) * 2 + Number(Boolean(right.counts.failed || right.counts.partial || right.counts.needs_split))
+      const leftRank = Number(Boolean(left.counts.running || left.counts.queued)) * 2 + Number(Boolean(left.pendingCount || left.counts.failed || left.counts.partial || left.counts.needs_split))
+      const rightRank = Number(Boolean(right.counts.running || right.counts.queued)) * 2 + Number(Boolean(right.pendingCount || right.counts.failed || right.counts.partial || right.counts.needs_split))
       return rightRank - leftRank
     })
     return visible
   }, [data, query, libraryFilter])
 
   const selectedLibrary = data?.items.find((library) => library.knowledgeBaseId === selectedId)
+  // 按当前可见范围提交，搜索与状态筛选不会悄悄扩大成全站操作。
+  const pendingLibraries = (selectedId ? data?.items.filter((library) => library.knowledgeBaseId === selectedId) ?? [] : libraries)
+    .filter((library) => library.enabled && library.pendingCount > 0)
+  const pendingCount = pendingLibraries.reduce((count, library) => count + library.pendingCount, 0)
+  const pendingControls = <div className="wiki-pending-actions">
+    <span>{selectedId ? '当前知识库' : `当前筛选 · ${pendingLibraries.length} 个可处理知识库`}<strong>{pendingCount} 份待整理</strong></span>
+    <button className="wiki-pending-submit" title="逐份排队，已完成和执行中的资料会跳过；失败任务保留进度后重试。" disabled={retrying || loading || Boolean(error) || !data?.autoCompileReady || pendingCount === 0} onClick={() => void processPending()}><AppIcon name={retrying ? 'loader' : 'sparkles'} size={16} />{retrying ? '正在提交…' : '整理待处理资料'}</button>
+  </div>
   const completion = totals.total > 0 ? Math.floor(totals.succeeded / totals.total * 100) : 0
   // 失败提示优先于用户选择的刷新模式，避免暂停后仍显示自动更新。
   let refreshLabel = '手动刷新'
@@ -208,16 +216,19 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
         <section className="wiki-progress-summary" aria-label="全部知识库整理统计" aria-busy={loading}>
           <div className="wiki-progress-completion"><span>任务完成率</span><div><strong>{data ? `${completion}%` : '—'}</strong><span>{data ? `${totals.succeeded} / ${totals.total} 个任务已完成` : '正在读取统计'}</span></div><progress aria-label="全部任务完成率" value={completion} max={100} /><small>仅已完成任务计入，部分完成与失败单独保留。</small></div>
           <div><span><i data-tone="active" />正在整理</span><strong>{data ? totals.running : '—'}</strong><small>{totals.queued} 个任务排队中</small></div>
-          <div><span><i data-tone="warning" />需要处理</span><strong>{data ? totals.attention : '—'}</strong><small>失败 · 部分完成 · 需要拆分</small></div>
+          <div><span><i data-tone="warning" />需要处理</span><strong>{data ? totals.attention + totals.pending : '—'}</strong><small>异常任务 + 待整理资料（可能重叠）</small></div>
           <div><span>待整理资料</span><strong>{data ? totals.pending : '—'}</strong><small>{data ? `${data.items.length} 个知识库` : '正在读取知识库'}</small></div>
         </section>
         {data && !data.autoCompileReady && <p className="wiki-progress-hint"><AppIcon name="info" size={17} />尚未配置第三方聊天模型，新资料的自动整理会跳过。请先在设置中配置模型。</p>}
 
+        {actionError && <p role="alert" className="wiki-progress-error">操作未成功：{actionError}</p>}
+        {notice && <p role="status" className="wiki-progress-hint" style={{ whiteSpace: 'pre-wrap' }}>{notice}</p>}
         {!selectedId ? <section aria-label="知识库进度列表">
           <div className="wiki-progress-section-heading"><div><h2>知识库进度</h2><p>点击知识库，查看任务明细与失败原因。</p></div><span>{libraries.length} 个知识库</span></div>
           <div className="wiki-progress-filters">
-            <label className="wiki-progress-search"><AppIcon name="search" size={17} /><input type="search" aria-label="搜索知识库进度" placeholder="搜索知识库…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-            <div className="wiki-progress-filter-buttons" aria-label="知识库进度筛选">{[['all', '全部知识库'], ['active', '执行中'], ['attention', '需要处理']].map(([value, label]) => <button key={value} aria-pressed={libraryFilter === value} onClick={() => setLibraryFilter(value)}>{label}</button>)}</div>
+            <label className="wiki-progress-search"><AppIcon name="search" size={17} /><input type="search" aria-label="搜索知识库进度" placeholder="搜索知识库…" value={query} disabled={retrying} onChange={(event) => setQuery(event.target.value)} /></label>
+            <div className="wiki-progress-filter-buttons" role="group" aria-label="知识库进度筛选">{[['all', '全部知识库'], ['active', '执行中'], ['attention', '需要处理']].map(([value, label]) => <button key={value} aria-pressed={libraryFilter === value} disabled={retrying} onClick={() => setLibraryFilter(value)}>{label}</button>)}</div>
+            {pendingControls}
           </div>
           <div className="wiki-library-list">
             {libraries.map((library) => {
@@ -226,12 +237,14 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
               const done = counts.succeeded ?? 0
               const percent = library.total > 0 ? Math.floor(done / library.total * 100) : 0
               let idleLabel = '暂无执行中的任务'
-              if (library.total === 0) {
+              if (library.pendingCount > 0) {
+                idleLabel = `${library.pendingCount} 份待整理`
+              } else if (library.total === 0) {
                 idleLabel = '尚未开始'
               } else if (done === library.total) {
                 idleLabel = '全部完成'
               }
-              return <button className="wiki-library-row" key={library.knowledgeBaseId} onClick={() => selectLibrary(library.knowledgeBaseId)} aria-label={`查看 ${library.name} 的整理进度`}>
+              return <button className="wiki-library-row" key={library.knowledgeBaseId} disabled={retrying} onClick={() => selectLibrary(library.knowledgeBaseId)} aria-label={`查看 ${library.name} 的整理进度`}>
                 <span className="wiki-library-identity"><span className="wiki-library-icon"><AppIcon name="book" size={23} /></span><span><strong>{library.name}</strong><small>{library.pageCount} 个知识页 · {library.pendingCount} 份待整理资料{!library.enabled && ' · 自动整理已关闭'}</small></span></span>
                 <span className="wiki-library-completion"><span><strong>{library.total ? `${percent}%` : '暂无任务'}</strong><small>{done} / {library.total} 已完成</small></span><span className="wiki-progress-track"><i style={{ width: `${percent}%` }} /></span></span>
                 <span className="wiki-library-state">{Boolean(counts.running || counts.queued) && <span className="wiki-status-pill">{counts.running ?? 0} 整理中 · {counts.queued ?? 0} 排队</span>}{attention > 0 && <span className="wiki-status-pill" data-status="failed">{attention} 需处理{counts.failed ? ` · ${counts.failed} 失败` : ''}</span>}{!attention && !counts.running && !counts.queued && <span className="wiki-library-idle">{idleLabel}</span>}</span>
@@ -245,18 +258,19 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
           <div className="wiki-progress-detail-nav"><button onClick={() => selectLibrary('')} disabled={retrying}><AppIcon name="chevronLeft" size={16} />全部知识库</button><label>当前知识库<select aria-label="切换进度知识库" value={selectedId} disabled={loading || retrying} onChange={(event) => selectLibrary(event.target.value)}>{data?.items.map((library) => <option key={library.knowledgeBaseId} value={library.knowledgeBaseId}>{library.name}</option>)}</select></label></div>
           <div className="wiki-progress-section-heading"><div><h2>{selectedLibrary?.name ?? '知识库任务'}</h2><p>{selectedLibrary ? `${selectedLibrary.total} 个任务 · ${selectedLibrary.pageCount} 个知识页 · ${selectedLibrary.pendingCount} 份待整理资料` : '正在读取任务明细'}</p></div><span className="wiki-status-pill">{selectedLibrary?.enabled ? '自动整理开启' : '自动整理未开启'}</span></div>
           {selectedLibrary && !selectedLibrary.enabled && <p className="wiki-progress-hint"><AppIcon name="info" size={17} />本库自动整理已关闭。历史任务仍可查看，开启后可重试失败任务。</p>}
-          <div className="wiki-progress-task-filters" aria-label="任务状态筛选">{['', 'running', 'queued', 'failed', 'succeeded', 'partial', 'needs_split', 'canceled'].map((value) => <button key={value} aria-pressed={status === value} disabled={retrying} onClick={() => { setStatus(value); setOffset(0) }}>{value ? wikiStatusLabel(value) : '全部任务'}<span>{value ? selectedLibrary?.counts[value] ?? 0 : selectedLibrary?.total ?? 0}</span></button>)}</div>
-          <div className="wiki-progress-header-actions">
-            <button disabled={retrying || loading || Boolean(error) || !selectedLibrary?.enabled || !selectedLibrary.counts.failed} onClick={() => void retryAllFailed()}><AppIcon name="refresh" size={16} />{retrying ? '正在提交重试…' : '重试本库全部失败任务'}</button>
-            <span>覆盖全部分页；达到 3 次上限的任务会跳过。请先保存并测试模型配置。</span>
-          </div>
+          <div className="wiki-progress-detail-actions">{pendingControls}</div>
+          <section className="wiki-progress-task-toolbar" aria-label="任务筛选与操作">
+            <div className="wiki-progress-task-toolbar-heading"><h3>整理任务</h3>
+              <button disabled={retrying || loading || Boolean(error) || !selectedLibrary?.enabled || !(selectedLibrary.counts.failed || selectedLibrary.counts.needs_split)} onClick={() => void retryAllFailed()}><AppIcon name="refresh" size={16} />{retrying ? '正在提交重试…' : '重试本库失败任务'}</button>
+            </div>
+            <p>重试包含全部分页中的失败和暂停任务，保留已完成进度。</p>
+            <div className="wiki-progress-task-filters" role="group" aria-label="任务状态筛选">{['', 'running', 'queued', 'failed', 'succeeded', 'partial', 'needs_split', 'canceled'].map((value) => <button key={value} aria-pressed={status === value} disabled={retrying} onClick={() => { setStatus(value); setOffset(0) }}>{value ? wikiStatusLabel(value) : '全部任务'}<span>{value ? selectedLibrary?.counts[value] ?? 0 : selectedLibrary?.total ?? 0}</span></button>)}</div>
+          </section>
           {batchResult && <div className="wiki-progress-hint" role="status"><div>
             <strong>已提交 {batchResult.submitted} / {batchResult.total} 个失败任务</strong>
-            <p>达到上限跳过 {batchResult.skipped} 个，提交失败 {batchResult.failures.length} 个，尚未提交 {batchResult.remaining} 个。整理结果以任务最新状态为准。</p>
+            <p>提交失败 {batchResult.failures.length} 个，尚未提交 {batchResult.remaining} 个。整理结果以任务最新状态为准。</p>
             {batchResult.failures.length > 0 && <details><summary>查看未提交成功的原因</summary><ul>{batchResult.failures.map((failure) => <li key={failure.jobId}>{failure.jobId}：{failure.error}</li>)}</ul></details>}
           </div></div>}
-          {actionError && <p role="alert" className="wiki-progress-error">重试未成功：{actionError}</p>}
-          {notice && <p role="status" className="wiki-progress-hint">{notice}</p>}
           {loading && <p role="status" className="wiki-progress-empty">正在读取任务…</p>}
           {data && <WikiJobList jobs={data.jobs.items} enabled={Boolean(selectedLibrary?.enabled)} busy={retrying || loading || Boolean(error)} onRetry={(job) => void retryJob(job)} />}
           {data && !data.jobs.items.length && <div className="wiki-progress-empty"><AppIcon name="clock" size={30} /><h3>{status ? '没有该状态的任务' : '还没有整理任务'}</h3><p>{status ? '可切换其他状态查看执行记录。' : '在知识文库中上传资料，或选择已有资料开始整理。'}</p></div>}
@@ -265,4 +279,42 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
       </div>
     </div>
   </section>
+
+  /** 全库或当前库按资料排队；逐库回执保留部分失败，提交期间禁止重复操作。 */
+  async function processPending() {
+    if (retryLock.current || !data) {
+      return
+    }
+    retryLock.current = true
+    setRetrying(true)
+    setNotice('')
+    setActionError('')
+    const results: string[] = []
+    try {
+      // 固定点击时的筛选结果；只提交按钮上显示的范围，不改变已关闭库的设置。
+      for (const library of pendingLibraries) {
+        try {
+          const result = await wikiRequest<WikiBatchResult>(library.knowledgeBaseId, '/ingest-batch', 'POST', {})
+          const failures = result.items.filter((item) => item.error)
+          const queued = result.items.filter((item) => item.status === 'queued' || item.status === 'running').length
+          results.push(`${library.name}：${queued} 份已排队或执行中，${failures.length} 份未提交${failures.length ? '；' + failures.map((item) => `${item.name}：${item.error}`).join('；') : ''}`)
+        } catch (reason) {
+          results.push(`${library.name}：请求未确认完成，${reason instanceof Error ? reason.message : '提交失败'}，请刷新核对`)
+        }
+        if (!mounted.current) {
+          break
+        }
+      }
+      if (mounted.current) {
+        setNotice(results.join('\n') || '没有可提交的待整理资料；已关闭的知识库需先开启整理。')
+      }
+    } finally {
+      retryLock.current = false
+      if (mounted.current) {
+        setRetrying(false)
+        setRefreshVersion((version) => version + 1)
+      }
+    }
+  }
+
 }

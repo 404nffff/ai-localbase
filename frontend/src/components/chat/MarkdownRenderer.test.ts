@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { fixMarkdown } from './MarkdownRenderer'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import MarkdownRenderer from './MarkdownRenderer'
+
+describe('原始文档渲染', () => {
+  it('保留合法加粗语义及代码中的格式标记', () => {
+    const content = '**当前有效安排：**\n\n按照既有范围执行。\n\n```text\n**literal**\n```'
+    const html = renderToStaticMarkup(createElement(MarkdownRenderer, { content, preserveSource: true }))
+    expect(html).toMatch(/<strong\b[^>]*>当前有效安排：<\/strong>/)
+    expect(html).toContain('**literal**')
+  })
+})
 
 describe('fixMarkdown', () => {
   it('normalizes compact headings and lists', () => {

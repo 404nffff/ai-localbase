@@ -129,7 +129,7 @@ func (s *AppService) GetWikiJob(kbID, jobID string) (model.WikiJob, error) {
 	return model.WikiJob{}, &WikiError{404, "not_found", "wiki job not found"}
 }
 
-// RetryWikiJob 显式重试失败阶段，最多三次；来源版本变化要求创建新任务。
+// RetryWikiJob 显式重试失败阶段，保留累计次数和提取缓存；来源版本变化要求创建新任务。
 func (s *AppService) RetryWikiJob(kbID, jobID string) (model.WikiJob, error) {
 	err := s.commitWikiChange(kbID, func(kb *model.KnowledgeBase) error {
 		if !kb.Wiki.Enabled {
@@ -140,8 +140,8 @@ func (s *AppService) RetryWikiJob(kbID, jobID string) (model.WikiJob, error) {
 			if job.ID != jobID {
 				continue
 			}
-			if job.Status != "failed" || job.Attempt >= 3 {
-				return &WikiError{409, "retry_not_allowed", "only failed jobs with remaining attempts can retry"}
+			if job.Status != "failed" && job.Status != "needs_split" {
+				return &WikiError{409, "retry_not_allowed", "only failed or paused jobs can retry"}
 			}
 			for id, checksum := range job.SourceVersions {
 				found := false
@@ -251,6 +251,8 @@ func (s *AppService) runWikiJob(job model.WikiJob) error {
 	started := time.Now()
 	job.Status, job.Error = "running", ""
 	job.Attempt++
+	// 每轮显式执行获得独立预算，累计调用数不清零；整理阶段按实际来源规模扩充。
+	job.ModelCallLimit = job.ModelCalls + 32
 	job.ModelTimeoutSeconds = s.GetConfig().Wiki.ModelTimeoutSeconds
 	if err := s.saveWikiJob(job); err != nil {
 		return err
@@ -472,7 +474,7 @@ func wikiMCPTools() []model.MCPTool {
 		{"wiki.ingest", "整理指定原始资料；复用已配置聊天模型", []string{"documentIds", "requestKey"}, nil},
 		{"wiki.lint", "检查结构及可选语义疑点，返回真实覆盖范围", []string{"requestKey"}, []string{"semantic"}},
 		{"wiki.job.get", "读取持久任务阶段与失败原因", []string{"jobId"}, nil},
-		{"wiki.job.retry", "显式重试失败任务，最多三次执行", []string{"jobId"}, nil},
+		{"wiki.job.retry", "显式重试失败或暂停任务，保留累计执行记录", []string{"jobId"}, nil},
 		{"wiki.page.list", "分页浏览知识页", nil, []string{"pageType", "freshness", "query", "cursor", "limit"}},
 		{"wiki.page.get", "按修订读取完整知识页的 Unicode 分页片段", []string{"pageId"}, []string{"revision", "offset", "limit"}},
 		{"wiki.source.get", "读取仍存在的原始资料历史版本", []string{"documentId", "checksum"}, []string{"offset", "limit"}},
@@ -523,12 +525,12 @@ type WikiRetryFailure struct {
 type WikiRetryBatchResult struct {
 	Total     int                `json:"total"` // 点击时本库全部失败任务数，不受分页影响。
 	Submitted int                `json:"submitted"`
-	Skipped   int                `json:"skipped"`   // 已达到三次执行上限。
+	Skipped   int                `json:"skipped"`   // 保留批量结果字段；手动重试不因累计次数跳过。
 	Remaining int                `json:"remaining"` // 因执行故障停止后尚未尝试提交的数量。
 	Failures  []WikiRetryFailure `json:"failures"`
 }
 
-// RetryFailedWikiJobs 对当前失败任务快照逐项提交一次，复用单条重试的来源和次数校验。
+// RetryFailedWikiJobs 对失败及暂停任务快照逐项提交一次，复用单条重试的来源和状态校验。
 // 部分提交不会回滚；业务冲突记录后继续，持久化等系统错误立即停止并返回已发生的结果。
 func (s *AppService) RetryFailedWikiJobs(kbID string) (WikiRetryBatchResult, error) {
 	result := WikiRetryBatchResult{Failures: []WikiRetryFailure{}}
@@ -540,20 +542,16 @@ func (s *AppService) RetryFailedWikiJobs(kbID string) (WikiRetryBatchResult, err
 		return result, &WikiError{409, "disabled", "本库自动整理已关闭"}
 	}
 	for _, job := range kb.Wiki.Jobs {
-		if job.Status == "failed" {
+		if job.Status == "failed" || job.Status == "needs_split" {
 			result.Total++
 		}
 	}
 	result.Remaining = result.Total
 	for _, job := range kb.Wiki.Jobs {
-		if job.Status != "failed" {
+		if job.Status != "failed" && job.Status != "needs_split" {
 			continue
 		}
 		result.Remaining--
-		if job.Attempt >= 3 {
-			result.Skipped++
-			continue
-		}
 		_, err := s.RetryWikiJob(kbID, job.ID)
 		if err == nil {
 			result.Submitted++

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
   AppConfig,
   Conversation,
@@ -78,13 +78,14 @@ const formatDateTime = (value: string) =>
 type WorkspaceId = 'chat' | 'knowledge' | 'settings' | 'progress' | 'wiki'
 
 const workspaceItems = [
-  { id: 'chat', label: '会话', icon: 'message' },
-  { id: 'knowledge', label: '知识库', icon: 'book' },
-  { id: 'settings', label: '设置', icon: 'settings' },
-  { id: 'progress', label: '整理总进度', icon: 'clock' },
-  { id: 'wiki', label: 'Wiki', icon: 'file' },
+  { id: 'chat', label: '会话', description: '基于资料提问与对话', icon: 'message' },
+  { id: 'knowledge', label: '知识库', description: '上传资料、检查与重建索引', icon: 'book' },
+  { id: 'settings', label: '设置', description: '配置模型和检索参数', icon: 'settings' },
+  { id: 'progress', label: '整理总进度', description: '查看待处理资料和失败任务', icon: 'clock' },
+  { id: 'wiki', label: '知识文库', description: '批量整理、阅读与追溯来源', icon: 'file' },
 ] as const
 
+/** 管理工作区入口与会话侧栏；展开时说明用途，Wiki 与历史入口可通过 URL 恢复。 */
 const Sidebar = ({
   isOpen,
   onToggle,
@@ -127,18 +128,52 @@ const Sidebar = ({
   onOperationLogFiltersChange,
   onRefreshOperationLogs,
 }: SidebarProps) => {
+  // URL 只记录工作区与文档身份，刷新可恢复历史入口，不保存资料正文或凭据。
+  const [initialLocation] = useState(() => new URLSearchParams(window.location.hash.slice(1)))
   const [collapsedKnowledgeBases, setCollapsedKnowledgeBases] = useState<Record<string, boolean>>({})
   const [menuConversationId, setMenuConversationId] = useState<string | null>(null)
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [isComposingTitle, setIsComposingTitle] = useState(false)
   const [conversationFilter, setConversationFilter] = useState('')
-  const [progressLibraryId, setProgressLibraryId] = useState<string | null>(null)
+  const [progressLibraryId, setProgressLibraryId] = useState<string | null>(() => initialLocation.get('workspace') === 'progress' ? initialLocation.get('library') ?? '' : null)
   const [progressVisit, setProgressVisit] = useState(0)
-  const [wikiOpen, setWikiOpen] = useState(false)
-  const [wikiHistoryOpen, setWikiHistoryOpen] = useState(false)
-  const [wikiTarget, setWikiTarget] = useState<WikiChange | null>(null)
+  const [wikiOpen, setWikiOpen] = useState(() => initialLocation.get('workspace') === 'wiki')
+  const [wikiHistoryOpen, setWikiHistoryOpen] = useState(() => initialLocation.get('view') === 'history')
+  const [wikiTarget, setWikiTarget] = useState<Pick<WikiChange, 'knowledgeBaseId' | 'pageId' | 'revision'> | null>(() => {
+    const knowledgeBaseId = initialLocation.get('library')
+    const pageId = initialLocation.get('page')
+    const revision = Number(initialLocation.get('revision'))
+    return knowledgeBaseId && pageId && Number.isInteger(revision) && revision >= 0 ? { knowledgeBaseId, pageId, revision } : null
+  })
   const wikiLibrary = knowledgeBases.find((kb) => kb.id === (wikiTarget?.knowledgeBaseId ?? selectedKnowledgeBaseId)) ?? knowledgeBases[0]
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.slice(1))
+    for (const key of ['workspace', 'view', 'library', 'page', 'revision']) {
+      params.delete(key)
+    }
+    if (wikiOpen) {
+      params.set('workspace', 'wiki')
+      if (wikiHistoryOpen) {
+        params.set('view', 'history')
+      }
+      if (wikiTarget) {
+        params.set('library', wikiTarget.knowledgeBaseId)
+        params.set('page', wikiTarget.pageId)
+        params.set('revision', String(wikiTarget.revision))
+      }
+    } else if (progressLibraryId !== null) {
+      params.set('workspace', 'progress')
+      params.set('library', progressLibraryId)
+    }
+    if (!wikiHistoryOpen) {
+      params.delete('historyLibrary')
+      params.delete('historyOffset')
+    }
+    const hash = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash ? '#' + hash : ''}`)
+  }, [wikiOpen, wikiHistoryOpen, wikiTarget, progressLibraryId])
 
   let activeWorkspace: WorkspaceId = 'chat'
   if (wikiOpen) {
@@ -230,7 +265,7 @@ const Sidebar = ({
                 onClick={() => handleWorkspaceChange(item.id)}
               >
                 <AppIcon name={item.icon} size={20} />
-                <span>{item.label}</span>
+                <span>{item.label}<small>{item.description}</small></span>
               </button>
             ))}
           </nav>
@@ -241,8 +276,9 @@ const Sidebar = ({
               type="button"
               className="app-rail-button app-rail-toggle"
               onClick={onToggle}
-              aria-label={isOpen ? '收起会话栏' : '展开会话栏'}
-              title={isOpen ? '收起会话栏' : '展开会话栏'}
+              aria-label={isOpen ? '收起侧边栏' : '展开侧边栏'}
+              aria-expanded={isOpen}
+              title={isOpen ? '收起侧边栏' : '展开侧边栏'}
             >
               <AppIcon name={isOpen ? 'panelClose' : 'panelOpen'} size={20} />
               <span>{isOpen ? '收起' : '展开'}</span>

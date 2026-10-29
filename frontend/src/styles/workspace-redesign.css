@@ -112,6 +112,35 @@ body,
 .app-rail-button span {
   display: none;
 }
+.app-rail-button small { display: none; }
+
+/* 展开导航时直接展示中文用途；工作区与会话栏共用同一宽度变量。 */
+@media (min-width: 769px) {
+  :root:has(.app-navigation.context-open) { --app-rail-width: 204px; }
+  .context-open .app-rail-button { width: 184px; height: auto; min-height: 56px; padding: 10px; justify-content: flex-start; gap: 10px; }
+  .context-open .app-rail-button span { display: grid; text-align: left; gap: 4px; font-size: 14px; color: var(--text-primary); }
+  .context-open .app-rail-button small { display: block; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+}
+
+.kb-batch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.kb-batch-actions button { padding: 8px 12px; min-height: 36px; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; }
+.kb-batch-actions button:disabled { opacity: .6; cursor: not-allowed; }
+.kb-batch-results { color: var(--text-primary); padding: 12px 28px; line-height: 1.7; }
+
+/* 原生模态窗口负责焦点约束与返回，颜色沿用当前主题。 */
+.document-detail-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.document-detail-dialog:not([open]) { display: none; }
+.document-detail-dialog .document-detail-metrics > div,
+.document-detail-dialog .document-detail-raw,
+.document-detail-dialog .document-chunk-list article { background: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color); }
+.document-detail-dialog .document-detail-section > h2 { color: var(--text-primary); }
+.document-detail-body:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.document-detail-dialog .document-detail-section { border-color: var(--border-color); }
+.document-detail-dialog .document-detail-metrics span,
+.document-detail-dialog .document-detail-section small { color: var(--text-secondary); }
+.document-detail-markdown :is(h1,h2,h3,h4) { margin: 1.2em 0 .6em; line-height: 1.4; }
+.document-detail-markdown :is(p,ul,ol,blockquote) { margin: .8em 0; line-height: 1.7; }
+.document-detail-markdown :is(ul,ol) { padding-left: 1.5em; }
 
 .app-rail-button::before {
   position: absolute;
@@ -177,7 +206,7 @@ body,
 .workspace-page-kicker {
   display: block;
   margin-bottom: 3px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
@@ -779,6 +808,7 @@ body,
 }
 
 .input-context-text {
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4042,7 +4072,8 @@ body,
 
   .app-rail-button span {
     display: block;
-    font-size: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
   }
 
   .app-rail-button::before {
@@ -4609,7 +4640,8 @@ body,
 .knowledge-workspace-page .kb-detail-panel {
   min-height: 0;
   gap: 12px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .knowledge-workspace-page .kb-detail-panel > :not(.kb-docs) {
@@ -4715,11 +4747,10 @@ body,
 }
 
 .knowledge-workspace-page .kb-docs {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 240px;
   padding: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -4755,9 +4786,19 @@ body,
   overflow-x: hidden;
 }
 
+/* 库条目与日期使用主题色，深色模式不继承旧面板的浅色底和低对比文字。 */
+.knowledge-workspace-page .kb-side-item { background: var(--bg-secondary); color: var(--text-primary); }
+.knowledge-workspace-page .kb-side-item--active { background: var(--color-primary-soft); }
+.knowledge-workspace-page .kb-side-item-title,
+.knowledge-workspace-page .kb-side-item-name,
+.knowledge-workspace-page .kb-side-item strong { color: var(--text-primary); }
+.knowledge-workspace-page .kb-side-item-desc,
+.knowledge-workspace-page .kb-side-item-meta,
+.knowledge-workspace-page .kb-card-meta { color: var(--text-secondary); font-size: 12px; }
+
 .knowledge-workspace-page .kb-doc-item {
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0;
   overflow: hidden;
@@ -4848,6 +4889,10 @@ body,
     flex: 1;
     padding-right: 8px;
     padding-left: 8px;
+    white-space: nowrap;
+    min-height: 36px;
+    line-height: 1.4;
+    font-size: 12px;
   }
 
   .knowledge-workspace-page .kb-create-btn,
@@ -4871,7 +4916,7 @@ body,
 
   .knowledge-workspace-page .kb-docs {
     flex: 0 0 auto;
-    height: clamp(280px, 50svh, 420px);
+    height: auto;
   }
 
   .knowledge-workspace-page .kb-detail-header,
@@ -4881,10 +4926,11 @@ body,
   }
 
   .knowledge-workspace-page .kb-doc-item {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 24px minmax(0, 1fr);
   }
 
   .knowledge-workspace-page .kb-doc-actions {
+    grid-column: 1 / -1;
     justify-content: flex-end;
     padding: 0 12px 10px;
   }

@@ -131,7 +131,7 @@ func TestWikiJobConfiguredModelAndIdempotency(t *testing.T) {
 	}
 }
 
-// TestWikiJobRejectsInvalidModelOutput 验证格式错误、降级和单次网络预算，最多三次显式执行。
+// TestWikiJobRejectsInvalidModelOutput 验证格式错误、降级和单次网络预算，失败后支持第四次显式执行并保留累计次数。
 func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 	for _, output := range []string{"{}", "null", "broken", "http-failure"} {
 		t.Run(output, func(t *testing.T) {
@@ -147,7 +147,7 @@ func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for attempt := 1; attempt <= 3; attempt++ {
+			for attempt := 1; attempt <= 4; attempt++ {
 				job = waitWikiJob(t, s, id, job.ID)
 				if job.ModelTimeoutSeconds != 180+(attempt-1)*60 {
 					t.Fatalf("retry timeout snapshot: %d", job.ModelTimeoutSeconds)
@@ -156,10 +156,10 @@ func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 				if output == "http-failure" {
 					callsPerAttempt = 1
 				}
-				if job.Status != "failed" || calls.Load() != int32(attempt*callsPerAttempt) {
+				if job.Status != "failed" || job.Attempt != attempt || job.ModelCalls != attempt*callsPerAttempt || calls.Load() != int32(attempt*callsPerAttempt) {
 					t.Fatalf("unexpected result %+v calls=%d", job, calls.Load())
 				}
-				if attempt < 3 {
+				if attempt < 4 {
 					// 显式重试必须重新读取设置，不能沿用首次执行的超时。
 					s.state.Mu.Lock()
 					s.state.Config.Wiki.ModelTimeoutSeconds = 180 + attempt*60
@@ -168,9 +168,6 @@ func TestWikiJobRejectsInvalidModelOutput(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-			}
-			if _, err = s.RetryWikiJob(id, job.ID); err == nil {
-				t.Fatal("fourth attempt allowed")
 			}
 			kb, _ := s.WikiSnapshot(id)
 			if len(kb.Documents) != 1 {
@@ -255,6 +252,19 @@ func TestWikiLongSourceReadsTail(t *testing.T) {
 	s, id, doc := wikiFixture(t, func(req model.ChatCompletionRequest) (string, int) {
 		input := req.Messages[len(req.Messages)-1].Content
 		if strings.HasPrefix(req.Messages[0].Content, "提取") {
+			var segment struct {
+				Lines []struct {
+					Text string `json:"text"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal([]byte(input), &segment); err != nil {
+				t.Fatal(err)
+			}
+			parts := []string{}
+			for _, line := range segment.Lines {
+				parts = append(parts, line.Text)
+			}
+			input = strings.Join(parts, "\n")
 			quote := string([]rune(input)[:1])
 			if strings.Contains(input, "尾部唯一条款") {
 				quote = "尾部唯一条款"
@@ -437,6 +447,19 @@ func TestWikiExtractionResumesLegacyAndRangeCache(t *testing.T) {
 		calls.Add(1)
 		input := req.Messages[len(req.Messages)-1].Content
 		if strings.HasPrefix(req.Messages[0].Content, "提取") {
+			var segment struct {
+				Lines []struct {
+					Text string `json:"text"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal([]byte(input), &segment); err != nil {
+				t.Fatal(err)
+			}
+			parts := []string{}
+			for _, line := range segment.Lines {
+				parts = append(parts, line.Text)
+			}
+			input = strings.Join(parts, "\n")
 			if input != "尾部条款" {
 				t.Errorf("completed segment requested again, length=%d", len([]rune(input)))
 			}
@@ -478,6 +501,19 @@ func TestWikiExtractionCorrectsQuote(t *testing.T) {
 	s, id, doc := wikiFixture(t, func(req model.ChatCompletionRequest) (string, int) {
 		input := req.Messages[len(req.Messages)-1].Content
 		if strings.HasPrefix(req.Messages[0].Content, "提取") {
+			var segment struct {
+				Lines []struct {
+					Text string `json:"text"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal([]byte(input), &segment); err != nil {
+				t.Fatal(err)
+			}
+			parts := []string{}
+			for _, line := range segment.Lines {
+				parts = append(parts, line.Text)
+			}
+			input = strings.Join(parts, "\n")
 			if extracts.Add(1) == 1 {
 				return `[{"claim":"不存在的条款","quote":"伪造引文"}]`, 200
 			}
@@ -522,11 +558,14 @@ func TestWikiExtractionKeepsRequestBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	job.ModelCalls = 31
-	if err := s.runWikiJob(job); err != nil {
+	job.ModelCallLimit = 32
+	segments := wikiSourceSegments(doc.ID, job.SourceVersions[doc.ID], []rune(strings.Repeat("甲", 4000)+"乙"), job.Extracts)
+	if _, err := s.extractWikiSegment(&job, s.currentChatConfig(), segments[0]); err != nil {
 		t.Fatal(err)
 	}
-	job, _ = s.GetWikiJob(id, job.ID)
-	if job.Status != "needs_split" || job.ModelCalls != 32 || calls.Load() != 1 || len(job.Extracts) != 1 || job.ProcessedSegments != 1 {
+	_, err = s.extractWikiSegment(&job, s.currentChatConfig(), segments[1])
+	budgetError, ok := err.(*WikiError)
+	if !ok || budgetError.Code != "needs_split" || job.ModelCalls != 32 || calls.Load() != 1 || len(job.Extracts) != 1 {
 		t.Fatalf("budget or completed cache was lost: %+v", job)
 	}
 }

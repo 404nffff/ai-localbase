@@ -3773,7 +3773,10 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 20px;
-  background: #ffffff;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  margin: auto;
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.32);
 }
 
@@ -3783,7 +3786,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 18px 22px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .document-detail-header-actions {
@@ -3798,15 +3801,16 @@
 }
 
 .document-detail-header span {
-  color: #6366f1;
+  color: var(--color-primary);
   font-size: 12px;
   font-weight: 700;
 }
 
-.document-detail-header h3 {
+.document-detail-header h1 {
   overflow: hidden;
   margin: 4px 0 0;
-  color: #0f172a;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3814,6 +3818,7 @@
 .document-detail-header button {
   border: 0;
   background: transparent;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 20px;
 }
@@ -3849,8 +3854,9 @@
   border-top: 1px solid #e2e8f0;
 }
 
-.document-detail-section h4 {
+.document-detail-section > h2 {
   margin: 0 0 12px;
+  font-size: var(--text-base);
   color: #0f172a;
 }
 

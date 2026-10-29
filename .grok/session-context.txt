@@ -1,0 +1,8 @@
+SessionStart identity context
+session_id=01a1803b-6d5a-7fc2-a4b7-b912eb08d3a8
+cwd=/home/www/ai-localbase
+tool=unknown
+source=compact
+model=gpt-6-astra
+This file only carries trusted SessionStart identity.
+Never guess session id from transcript timestamps.

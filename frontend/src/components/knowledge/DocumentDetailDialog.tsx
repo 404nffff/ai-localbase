@@ -1,8 +1,8 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 import type { DocumentDetailResponse } from '../../App'
 import MarkdownRenderer from '../chat/MarkdownRenderer'
 import KnowledgeIcon from './KnowledgeIcon'
-import { formatDocumentPreviewText, shouldUseRawDocumentPreview } from './documentPreviewText'
+import { shouldUseRawDocumentPreview } from './documentPreviewText'
 
 interface DocumentDetailDialogProps {
   detail: DocumentDetailResponse | null
@@ -14,7 +14,7 @@ interface DocumentDetailDialogProps {
   onClose: () => void
 }
 
-// 文档详情只展示后端返回的截断内容，避免在浏览器加载完整超大文件。
+/** 以原生模态展示后端截断的详情与原文，保留 Markdown，并通过父组件执行重建和错误反馈。 */
 const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
   detail,
   error,
@@ -24,22 +24,30 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
   onReindex,
   onClose,
 }) => {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const open = Boolean(loading || error || detail)
+  useEffect(() => {
+    // 原生模态约束键盘焦点，关闭时由父组件清除详情状态并卸载窗口。
+    if (open && !dialog.current?.open) {
+      dialog.current?.showModal()
+    }
+  }, [open])
   if (!loading && !error && !detail) return null
 
   const rawMode = detail ? shouldUseRawDocumentPreview(detail.document.name) : false
-  const formattedContent = detail ? formatDocumentPreviewText(detail.rawContent) : ''
 
   return (
-    <div className="document-detail-backdrop" onClick={onClose}>
-      <section
+      <dialog
+        ref={dialog}
         className="document-detail-dialog"
         aria-label="文档详情"
+        onCancel={onClose}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="document-detail-header">
           <div>
             <span>文档详情</span>
-            <h3>{detail?.document.name ?? '正在加载'}</h3>
+            <h1>{detail?.document.name ?? '正在加载'}</h1>
           </div>
           <div className="document-detail-header-actions">
             {detail && (
@@ -59,7 +67,8 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
           </div>
         </header>
 
-        <div className="document-detail-body">
+        {/* 模态内正文可独立键盘滚动；产品标题从一级、二级组织，原文标题保持原样。 */}
+        <div className="document-detail-body" tabIndex={0} role="region" aria-label="文档详情内容">
           {loading && <div className="document-detail-state">正在读取文档详情…</div>}
           {error && <div className="document-detail-state document-detail-state--error">{error}</div>}
 
@@ -80,25 +89,25 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
 
               {detail.summary && (
                 <section className="document-detail-section">
-                  <h4>索引摘要</h4>
+                  <h2>索引摘要</h2>
                   <MarkdownRenderer content={detail.summary} />
                 </section>
               )}
 
               <section className="document-detail-section">
-                <h4>原文预览</h4>
+                <h2>原文预览</h2>
                 {rawMode ? (
                   <pre className="document-detail-raw">{detail.rawContent}</pre>
                 ) : (
                   <div className="document-detail-markdown">
-                    <MarkdownRenderer content={formattedContent} />
+                    <MarkdownRenderer content={detail.rawContent} preserveSource />
                   </div>
                 )}
                 {detail.diagnostics.rawContentTruncated && <small>原文过长，当前仅展示前 20000 个字符。</small>}
               </section>
 
               <section className="document-detail-section">
-                <h4>Chunk 预览</h4>
+                <h2>Chunk 预览</h2>
                 <div className="document-chunk-list">
                   {detail.chunks.map((chunk) => (
                     <article key={chunk.id}>
@@ -113,8 +122,7 @@ const DocumentDetailDialog: React.FC<DocumentDetailDialogProps> = ({
             </>
           )}
         </div>
-      </section>
-    </div>
+      </dialog>
   )
 }
 

@@ -328,6 +328,12 @@ export async function fetchWikiChanges(knowledgeBaseId: string, offset: number, 
 }
 /** 持久整理任务及实际覆盖范围，不包含模型连接信息。 */
 export interface WikiJob {
+  /** 任务所选原始资料名称，删除的资料由服务端保留 ID 提示。 */
+  sourceNames?: string[]
+  /** 已消耗的模型请求次数，拆批与重试时累计保留。 */
+  modelCalls?: number
+  /** 服务端根据来源分段计算的累计调用预算；历史任务可能尚未计算。 */
+  modelCallLimit?: number
   id: string; kind: string; status: string; stage: string; attempt: number
   error?: string; totalSegments: number; processedSegments: number
   totalPages: number; checkedPages: number; semanticStatus?: string; updatedAt: string
@@ -336,6 +342,8 @@ export interface WikiJob {
 export interface WikiIssue { id: string; type: string; pageIds: string[]; status: string; reason: string }
 /** 当前知识库的知识维护概况。 */
 export interface WikiOverview {
+  /** 当前版本逐份资料的整理状态；旧服务端未返回时不推断已完成。 */
+  sourceStates?: Record<string, string>
   /** 本库保存的自动整理开关，显式关闭优先于默认值。 */
   enabled: boolean
   /** 第三方聊天配置是否完整；为 true 不代表已探测连接成功。 */
@@ -347,6 +355,23 @@ export interface WikiOverview {
   /** 最近任务及其实际执行状态。 */
   jobs: WikiJob[]
 }
+
+/** 批量按资料独立排队的结果，已排队不表示整理完成。 */
+export interface WikiBatchResult {
+  /** 每份请求资料的真实提交回执，包括跳过项和失败项。 */
+  items: Array<{
+    /** 原始资料 ID。 */
+    documentId: string
+    /** 提交时的资料名称。 */
+    name: string
+    /** 排队或复用的任务 ID；未提交时可为空。 */
+    jobId?: string
+    /** 服务端当前任务状态，queued 不代表整理完成。 */
+    status: string
+    /** 单份资料的提交错误，其他资料可继续提交。 */
+    error?: string
+  }>
+}
 /** 统一分页列表，空游标表示末页。 */
 export interface WikiList<T> { items: T[]; total: number; nextCursor: string }
 /** 正文按 Unicode 码点分页，nextOffset 为零表示已完整读取。 */
@@ -357,6 +382,35 @@ export interface WikiPageContent {
 }
 /** 原始资料历史版本的正文片段。 */
 export interface WikiSourceContent { name: string; content: string; nextOffset: number; totalChars: number }
+
+/** 人工编辑保存回执；索引失败时正文已经保存，不能将其当作整个请求失败。 */
+export interface WikiPageEditResult {
+  pageId: string
+  revision: number
+  indexed: boolean
+  indexError?: string
+}
+
+/** 编辑前读取当前版本的完整正文；后续分页固定修订，拒绝不连续或截断的数据。 */
+export async function fetchWikiPageForEdit(knowledgeBaseId: string, pageId: string, signal: AbortSignal): Promise<WikiPageContent> {
+  const path = `/pages/${encodeURIComponent(pageId)}`
+  const first = await wikiRequest<WikiPageContent>(knowledgeBaseId, `${path}?revision=0`, 'GET', undefined, signal)
+  let markdown = first.markdown
+  let offset = first.nextOffset
+  while (offset > 0) {
+    const part = await wikiRequest<WikiPageContent>(knowledgeBaseId, `${path}?revision=${first.revision}&offset=${offset}`, 'GET', undefined, signal)
+    if (part.revision !== first.revision || part.pageId !== first.pageId || part.totalChars !== first.totalChars || (part.nextOffset !== 0 && part.nextOffset <= offset)) {
+      throw new Error('正文分页不连续，请重新读取后再编辑')
+    }
+    markdown += part.markdown
+    offset = part.nextOffset
+  }
+  // 服务端按 Unicode 码点计数，不能用 JavaScript UTF-16 length 校验中文和表情正文。
+  if (Array.from(markdown).length !== first.totalChars) {
+    throw new Error('知识页正文尚未完整读取，请重新读取后再编辑')
+  }
+  return { ...first, markdown, nextOffset: 0 }
+}
 
 /** 调用单库 Wiki 接口，复用既有鉴权和错误语义；请求失败直接抛出。 */
 export async function wikiRequest<T>(knowledgeBaseId: string, path = '', method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {

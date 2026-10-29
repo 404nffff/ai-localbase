@@ -90,6 +90,7 @@ func TestWikiProgressAllHistory(t *testing.T) {
 	id := s.ListKnowledgeBases()[0].ID
 	err := s.commitWikiChange(id, func(kb *model.KnowledgeBase) error {
 		kb.Wiki.PendingSources["source"] = "version"
+		kb.Documents = append(kb.Documents, model.Document{ID: "source", ContentChecksum: "version"})
 		for i := 0; i < 65; i++ {
 			status := "succeeded"
 			if i < 5 {

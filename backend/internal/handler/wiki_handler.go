@@ -123,7 +123,7 @@ func (h *AppHandler) WikiCreateJob(c *gin.Context) { h.wikiRequest(c, "wiki.jobs
 // @Router /api/knowledge-bases/{id}/wiki/jobs/{jobId} [get]
 func (h *AppHandler) WikiGetJob(c *gin.Context) { h.wikiRequest(c, "wiki.job.get") }
 
-// WikiRetryJob 显式重试失败阶段，最多三次执行。
+// WikiRetryJob 显式重试失败或暂停阶段，保留累计执行记录与提取进度。
 // @Summary 重试整理任务
 // @Param id path string true "知识库 ID"
 // @Param jobId path string true "任务 ID"
@@ -250,6 +250,63 @@ func (h *AppHandler) WikiProgress(c *gin.Context) {
 // @Router /api/knowledge-bases/{id}/wiki/retry-failed [post]
 func (h *AppHandler) WikiRetryFailed(c *gin.Context) {
 	result, err := h.appService.RetryFailedWikiJobs(c.Param("id"))
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// WikiIngestBatch 将所选资料独立排队；未传资料时处理本库全部待整理资料。
+// @Summary 批量整理原始资料
+// @Tags Wiki
+// @Param id path string true "知识库 ID"
+// @Param body body object true "documentIds 为可选的原始资料 ID 数组"
+// @Success 200 {object} map[string]interface{} "items 含逐项提交结果"
+// @Failure 400 {object} map[string]interface{} "无效请求"
+// @Failure 404 {object} map[string]interface{} "知识库或所选资料不存在"
+// @Failure 409 {object} map[string]interface{} "未开启整理或未配置模型"
+// @Accept json
+// @Produce json
+// @Router /api/knowledge-bases/{id}/wiki/ingest-batch [post]
+func (h *AppHandler) WikiIngestBatch(c *gin.Context) {
+	var input struct {
+		DocumentIDs []string `json:"documentIds"` // 省略或空数组表示当前库全部待整理资料。
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(400, gin.H{"error": "请求必须是 JSON 对象"})
+		return
+	}
+	items, err := h.appService.StartWikiBatch(c.Param("id"), input.DocumentIDs)
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(200, gin.H{"items": items})
+}
+
+// WikiEditPage 保存人工修改为新修订，旧修订保留；索引失败通过成功回执明确告知。
+// @Summary 编辑知识页标题和正文
+// @Tags Wiki
+// @Param id path string true "知识库 ID"
+// @Param pageId path string true "知识页 ID"
+// @Param body body service.WikiPageEdit true "完整正文、标题及读取时的 baseRevision"
+// @Success 200 {object} service.WikiPageEditResult "正文已保存；indexed/indexError 表达索引结果"
+// @Failure 400 {object} map[string]interface{} "编辑内容无效"
+// @Failure 401 {object} map[string]interface{} "访问验证失败"
+// @Failure 404 {object} map[string]interface{} "知识库或页面不存在"
+// @Failure 409 {object} map[string]interface{} "修订或来源已变化、库关闭、标题冲突"
+// @Failure 500 {object} map[string]interface{} "正文写入失败"
+// @Accept json
+// @Produce json
+// @Router /api/knowledge-bases/{id}/wiki/pages/{pageId} [put]
+func (h *AppHandler) WikiEditPage(c *gin.Context) {
+	var input service.WikiPageEdit
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请提交有效的知识页编辑内容"})
+		return
+	}
+	result, err := h.appService.EditWikiPage(c.Param("id"), c.Param("pageId"), input)
 	if err != nil {
 		wikiHTTPError(c, err)
 		return

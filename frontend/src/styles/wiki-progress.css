@@ -82,8 +82,24 @@
 .wiki-progress-task-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
 .wiki-progress-task-filters button { font-size: 13px; }
 .wiki-progress-task-filters span { color: var(--text-secondary); font-size: 12px; }
+/* 批量重试属于整库任务工具栏，与单张任务卡的操作保持清晰距离。 */
+.wiki-progress-task-toolbar { margin-bottom: 28px; padding-bottom: 22px; border-bottom: 1px solid var(--border-color); }
+.wiki-progress-task-toolbar-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.wiki-progress-task-toolbar-heading h3 { margin: 0; font-size: 17px; font-weight: 600; }
+.wiki-progress-task-toolbar > p { margin: 12px 0 18px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+.wiki-progress-task-toolbar .wiki-progress-task-filters { margin-bottom: 0; }
+.wiki-progress-page .wiki-task-heading > .wiki-status-pill { flex-shrink: 0; white-space: nowrap; }
 .wiki-progress-pagination { display: flex; align-items: center; gap: 10px; margin-top: 28px; }
 .wiki-progress-pagination > span { margin-right: auto; color: var(--text-secondary); font-size: 13px; }
+
+/* 批量操作属于当前列表范围，和筛选放在同一工具栏内。 */
+.wiki-progress-filters { flex-wrap: wrap; padding: 18px 0; border-block: 1px solid var(--border-color); }
+.wiki-pending-actions { display: flex; gap: 14px; align-items: center; margin-left: auto; }
+.wiki-pending-actions > span { display: grid; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.wiki-pending-actions strong { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.wiki-progress-page .wiki-pending-submit { background: var(--color-primary); border-color: var(--color-primary); color: var(--text-inverse); min-height: 42px; }
+.wiki-progress-detail-actions { display: flex; padding: 16px 0; margin-bottom: 20px; border-block: 1px solid var(--border-color); }
+.wiki-progress-detail-actions .wiki-pending-actions { width: 100%; justify-content: space-between; }
 
 @media (max-width: 1200px) {
   .wiki-progress-summary > div { padding: 0 20px; }
@@ -93,6 +109,7 @@
   .wiki-library-state { padding-left: 0; }
 }
 @media (max-width: 900px) {
+  .wiki-pending-actions { margin-left: 0; justify-content: space-between; width: 100%; padding-top: 12px; border-top: 1px solid var(--border-color); }
   .wiki-progress-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0; }
   .wiki-progress-summary > div { padding: 24px; }
   .wiki-progress-summary > div:nth-child(3) { border-left: 0; }

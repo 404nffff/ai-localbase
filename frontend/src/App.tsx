@@ -847,12 +847,15 @@ function App() {
     }
   }
 
+  /** 验证成功后先初始化请求令牌，再开放工作区，避免子页面首次读取收到 401。 */
   const handleAccessGateSubmit = async (nextAccessToken: string) => {
     setAccessGateFeedback(null)
     setIsAccessGateSubmitting(true)
     try {
       await verifyAccessToken(nextAccessToken)
       await loadProtectedAppData(nextAccessToken)
+      // 子组件 effect 先于父组件的令牌持久化 effect 执行，必须在挂载前设置请求状态。
+      setApiAccessToken(nextAccessToken)
       setAccessToken(nextAccessToken)
       setAccessTokenValidated(true)
       setIsSettingsOpen(false)

@@ -1912,9 +1912,12 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 
 interface MarkdownRendererProps {
   content: string
+  /** 已发布文档使用原始 Markdown，避免聊天输出修复误改代码、引文与格式标记。 */
+  preserveSource?: boolean
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => (
+/** 渲染 Markdown；聊天默认修复格式，原始文档保留正文标记并沿用现有渲染组件。 */
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, preserveSource = false }) => (
   <ReactMarkdown
     remarkPlugins={[remarkGfm]}
     components={{
@@ -1999,7 +2002,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
       },
     }}
   >
-    {fixMarkdown(content)}
+    {preserveSource ? content : fixMarkdown(content)}
   </ReactMarkdown>
 )
 

@@ -180,9 +180,11 @@ type WikiJob struct {
 	// Status 表示 queued/running/succeeded/failed/needs_split/canceled/partial。
 	Status string `json:"status"`
 	Stage  string `json:"stage"`
-	// Attempt 最多三次显式执行；ModelCalls 为累计实际模型请求数，上限 32。
-	Attempt           int `json:"attempt"`
-	ModelCalls        int `json:"modelCalls"`
+	// Attempt 和 ModelCalls 累计记录执行及模型调用次数，不因手动重试清零或限制重试。
+	Attempt    int `json:"attempt"`
+	ModelCalls int `json:"modelCalls"`
+	// ModelCallLimit 为本轮允许达到的累计调用数；在历史调用数上追加本轮来源规模预算。
+	ModelCallLimit    int `json:"modelCallLimit,omitempty"`
 	TotalSegments     int `json:"totalSegments"`
 	ProcessedSegments int `json:"processedSegments"`
 	// Extracts 保留已成功提取的分段事实，失败重试不重复处理已完成分段。

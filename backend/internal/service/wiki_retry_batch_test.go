@@ -9,7 +9,7 @@ import (
 	"ai-localbase/internal/model"
 )
 
-// TestRetryFailedWikiJobs 验证跨分页快照、来源校验、执行上限和重复提交，使用真实重试方法。
+// TestRetryFailedWikiJobs 验证跨分页快照、来源校验、暂停恢复和重复提交，使用真实重试方法。
 func TestRetryFailedWikiJobs(t *testing.T) {
 	s := NewAppService(nil, nil, nil, model.ServerConfig{UploadDir: t.TempDir()})
 	t.Cleanup(func() { _ = s.Close() })
@@ -25,6 +25,7 @@ func TestRetryFailedWikiJobs(t *testing.T) {
 		}
 		kb.Wiki.Jobs = append(kb.Wiki.Jobs,
 			model.WikiJob{ID: "limit", Status: "failed", Attempt: 3},
+			model.WikiJob{ID: "paused", Status: "needs_split", Attempt: 8, ModelCalls: 64, ModelCallLimit: 64},
 			model.WikiJob{ID: "changed", Status: "failed", Attempt: 1, SourceVersions: map[string]string{"missing": "old"}},
 			model.WikiJob{ID: "success", Status: "succeeded", Attempt: 1},
 			model.WikiJob{ID: "partial", Status: "partial", Attempt: 1},
@@ -35,7 +36,7 @@ func TestRetryFailedWikiJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := s.RetryFailedWikiJobs(id)
-	if err != nil || result.Total != 67 || result.Submitted != 65 || result.Skipped != 1 || result.Remaining != 0 || len(result.Failures) != 1 || result.Failures[0].JobID != "changed" {
+	if err != nil || result.Total != 68 || result.Submitted != 67 || result.Skipped != 0 || result.Remaining != 0 || len(result.Failures) != 1 || result.Failures[0].JobID != "changed" {
 		t.Fatalf("unexpected batch: %+v, %v", result, err)
 	}
 	job, err := s.GetWikiJob(id, "retry-64")
@@ -43,7 +44,7 @@ func TestRetryFailedWikiJobs(t *testing.T) {
 		t.Fatalf("retry must enqueue without consuming execution attempts: %+v, %v", job, err)
 	}
 	second, err := s.RetryFailedWikiJobs(id)
-	if err != nil || second.Submitted != 0 || second.Total != 2 {
+	if err != nil || second.Submitted != 0 || second.Total != 1 {
 		t.Fatalf("queued jobs retried twice: %+v, %v", second, err)
 	}
 	if _, err := s.RetryFailedWikiJobs("missing"); err == nil {
@@ -54,6 +55,38 @@ func TestRetryFailedWikiJobs(t *testing.T) {
 	}
 	if _, err := s.RetryFailedWikiJobs(id); err == nil {
 		t.Fatal("disabled library accepted")
+	}
+}
+
+// TestWikiRetryRenewsExhaustedBudget 验证第九次恢复仍能调用模型，且历史计数与缓存不会被重置。
+func TestWikiRetryRenewsExhaustedBudget(t *testing.T) {
+	s, id, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+		return `{"pages":[],"issues":[]}`, 200
+	})
+	s.wikiRunMu.Lock()
+	s.wikiClosed = true
+	s.wikiRunMu.Unlock()
+	job, _, err := s.StartWikiJob(id, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "exhausted-budget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Status, job.Attempt, job.ModelCalls, job.ModelCallLimit = "needs_split", 8, 64, 64
+	job.Extracts = map[string]string{"completed-segment": "已提取事实"}
+	if err := s.saveWikiJob(job); err != nil {
+		t.Fatal(err)
+	}
+	s.wikiRunMu.Lock()
+	s.wikiClosed = false
+	s.wikiRunMu.Unlock()
+	if _, err := s.RetryWikiJob(id, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	job = waitWikiJob(t, s, id, job.ID)
+	if job.Status != "succeeded" || job.Attempt != 9 || job.ModelCalls != 65 || job.ModelCallLimit != 96 || job.Extracts["completed-segment"] != "已提取事实" {
+		t.Fatalf("retry failed to preserve history and renew budget: %+v", job)
+	}
+	if _, err := s.RetryWikiJob(id, job.ID); err == nil {
+		t.Fatal("completed job accepted by retry")
 	}
 }
 

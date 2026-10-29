@@ -13,6 +13,12 @@ interface DocumentListProps {
   healthByDocumentId: Map<string, KnowledgeBaseDocumentHealth>
   documentDetailLoadingId: string | null
   reindexingDocumentId: string | null
+  /** 跨当前筛选结果保留的待重建资料 ID。 */
+  selectedIds: string[]
+  /** 批量重建期间禁止选择、单项重建和删除。 */
+  batchBusy: boolean
+  /** 切换单份资料的批量选择状态。 */
+  onToggleSelection: (id: string) => void
   onSelectDocument: (knowledgeBaseId: string, documentId: string | null) => void
   onOpenDocumentDetail: (knowledgeBaseId: string, documentId: string) => void
   onReindexDocument: (knowledgeBaseId: string, documentId: string) => void
@@ -21,12 +27,13 @@ interface DocumentListProps {
 }
 
 const statusLabel = (status: string) => {
-  if (status === 'indexed') return { text: '已索引', color: '#16a34a', bg: '#dcfce7' }
-  if (status === 'processing') return { text: '处理中', color: '#d97706', bg: '#fef3c7' }
+  if (status === 'indexed') return { text: '已索引', color: '#166534', bg: '#dcfce7' }
+  if (status === 'processing') return { text: '处理中', color: '#92400e', bg: '#fef3c7' }
   if (status === 'failed') return { text: '失败', color: '#b91c1c', bg: '#fee2e2' }
   return { text: '就绪', color: '#2563eb', bg: '#dbeafe' }
 }
 
+/** 展示当前资料分页和索引状态；选择独立于当前页，批量处理期间禁用冲突写操作。 */
 const DocumentList = ({
   documents,
   filteredDocuments,
@@ -37,6 +44,9 @@ const DocumentList = ({
   healthByDocumentId,
   documentDetailLoadingId,
   reindexingDocumentId,
+  selectedIds,
+  batchBusy,
+  onToggleSelection,
   onSelectDocument,
   onOpenDocumentDetail,
   onReindexDocument,
@@ -74,6 +84,7 @@ const DocumentList = ({
             key={doc.id}
             className={`kb-doc-item${isBrowsingActiveKnowledgeBase && activeDocumentId === doc.id ? ' kb-doc-item--active' : ''}${needsReindex ? ' kb-doc-item--attention' : ''}`}
           >
+            <input type="checkbox" aria-label={`选择 ${doc.name}`} checked={selectedIds.includes(doc.id)} disabled={batchBusy} onChange={() => onToggleSelection(doc.id)} />
             <button
               className="kb-doc-main"
               onClick={() => onSelectDocument(knowledgeBaseId, doc.id)}
@@ -112,7 +123,7 @@ const DocumentList = ({
               <button
                 type="button"
                 className="kb-doc-reindex"
-                disabled={reindexingDocumentId !== null}
+                disabled={batchBusy || reindexingDocumentId !== null}
                 onClick={() => onReindexDocument(knowledgeBaseId, doc.id)}
                 title="重新建立索引"
               >
@@ -121,6 +132,8 @@ const DocumentList = ({
               <button
                 type="button"
                 className="kb-doc-remove"
+                aria-label={`删除 ${doc.name}`}
+                disabled={batchBusy}
                 onClick={() => onRemoveDocument(knowledgeBaseId, doc.id)}
                 title="删除文档"
               >

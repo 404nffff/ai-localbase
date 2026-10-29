@@ -60,6 +60,7 @@ interface KnowledgePanelProps {
 type KnowledgePanelView = 'knowledge' | 'logs'
 type DocumentSort = 'uploadedAt:desc' | 'uploadedAt:asc' | 'name:asc' | 'name:desc' | 'size:desc' | 'size:asc'
 
+/** 管理当前知识库的资料、健康诊断和索引；批量结果逐项保留，切库隔离未完成请求。 */
 const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   open,
   knowledgeBases,
@@ -109,6 +110,17 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [documentDetailError, setDocumentDetailError] = useState<string | null>(null)
   const [documentDetailLoadingId, setDocumentDetailLoadingId] = useState<string | null>(null)
   const [reindexingDocumentId, setReindexingDocumentId] = useState<string | null>(null)
+  const [selectedIndexIds, setSelectedIndexIds] = useState<string[]>([])
+  const [batchIndexBusy, setBatchIndexBusy] = useState(false)
+  const [batchIndexResult, setBatchIndexResult] = useState<string[]>([])
+  const indexLock = useRef(false)
+  const currentLibraryId = useRef(selectedKnowledgeBaseId)
+  const libraryGeneration = useRef(0)
+  // 每次切库生成新批次身份，切走再切回也不能接收旧页面的异步结果。
+  if (currentLibraryId.current !== selectedKnowledgeBaseId) {
+    currentLibraryId.current = selectedKnowledgeBaseId
+    libraryGeneration.current += 1
+  }
   const [reindexFeedback, setReindexFeedback] = useState<{
     knowledgeBaseId: string
     message: string
@@ -168,17 +180,23 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     if (operation === 'upload_file') return '上传文件'
     if (operation === 'index_document') return '建立索引'
     if (operation === 'rebuild_index') return '重建索引'
+    if (operation === 'wiki_ingest') return 'Wiki 资料整理'
+    if (operation === 'wiki_lint') return 'Wiki 内容体检'
+    if (operation === 'wiki_capture') return 'Wiki 回答沉淀'
     return operation || '-'
   }
 
   const operationStatusLabel = (status: string) => {
-    if (status === 'success') return '成功'
+    if (status === 'success' || status === 'succeeded') return '成功'
+    if (status === 'needs_split') return '超出处理预算'
+    if (status === 'partial') return '部分完成'
     if (status === 'failed') return '失败'
     if (status === 'partial_success') return '部分成功'
     return status || '-'
   }
 
   const sourceLabel = (source: string) => {
+    if (source === 'wiki') return '知识文库'
     if (source === 'web') return '页面'
     if (source === 'mcp') return 'MCP'
     if (source === 'admin_rebuild') return '重建'
@@ -330,17 +348,28 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     directoryUploadTask.status === 'uploading' ||
     directoryUploadTask.status === 'canceling'
 
+  /** 刷新当前库的健康状态；切库后成功、失败和加载状态都不回写新页面。 */
   const refreshKnowledgeHealth = async (knowledgeBaseId: string) => {
+    if (currentLibraryId.current !== knowledgeBaseId) {
+      return
+    }
+    const generation = libraryGeneration.current
     setIsKnowledgeHealthLoading(true)
     setKnowledgeHealthError(null)
     try {
       const health = await onFetchKnowledgeBaseHealth(knowledgeBaseId)
-      setKnowledgeHealth(health)
+      if (libraryGeneration.current === generation && currentLibraryId.current === knowledgeBaseId) {
+        setKnowledgeHealth(health)
+      }
     } catch (error) {
-      setKnowledgeHealth(null)
-      setKnowledgeHealthError(error instanceof Error ? error.message : '知识库健康状态加载失败')
+      if (libraryGeneration.current === generation && currentLibraryId.current === knowledgeBaseId) {
+        setKnowledgeHealth(null)
+        setKnowledgeHealthError(error instanceof Error ? error.message : '知识库健康状态加载失败')
+      }
     } finally {
-      setIsKnowledgeHealthLoading(false)
+      if (libraryGeneration.current === generation && currentLibraryId.current === knowledgeBaseId) {
+        setIsKnowledgeHealthLoading(false)
+      }
     }
   }
 
@@ -364,27 +393,47 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     }
   }
 
+  /** 仅在当前库内调试召回；切库使旧请求失效，错误仍在原请求页面显示。 */
   const handleDebugRetrieve = async (knowledgeBaseId: string) => {
     const query = debugQuery.trim()
     if (!query || isDebugging) return
+    const generation = libraryGeneration.current
     setIsDebugging(true)
     setDebugError(null)
     try {
-      setDebugResult(await debugKnowledgeBaseRetrieval(knowledgeBaseId, query, activeDocumentId ?? undefined))
+      const result = await debugKnowledgeBaseRetrieval(knowledgeBaseId, query, activeKnowledgeBaseId === knowledgeBaseId ? activeDocumentId ?? undefined : undefined)
+      if (libraryGeneration.current === generation) {
+        setDebugResult(result)
+      }
     } catch (error) {
-      setDebugResult(null)
-      setDebugError(error instanceof Error ? error.message : '检索调试失败')
+      if (libraryGeneration.current === generation) {
+        setDebugResult(null)
+        setDebugError(error instanceof Error ? error.message : '检索调试失败')
+      }
     } finally {
-      setIsDebugging(false)
+      if (libraryGeneration.current === generation) {
+        setIsDebugging(false)
+      }
     }
   }
 
+  /** 重建单份资料并刷新本库诊断；失败保留原因，切库后不再打开旧资料详情。 */
   const handleReindexDocument = async (knowledgeBaseId: string, documentId: string) => {
-    if (reindexingDocumentId !== null) return
+    if (indexLock.current) {
+      return
+    }
+    const generation = libraryGeneration.current
+    indexLock.current = true
     setReindexingDocumentId(documentId)
     setReindexFeedback(null)
     try {
       const document = await onReindexDocument(knowledgeBaseId, documentId)
+      if (document.status === 'failed' || document.indexError) {
+        throw new Error(document.indexError || '索引重建失败')
+      }
+      if (libraryGeneration.current !== generation) {
+        return
+      }
       // 正常文档重建后健康分可能不变，单独反馈结果，避免被误认为按钮无效。
       setReindexFeedback({
         knowledgeBaseId,
@@ -392,12 +441,17 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         failed: false,
       })
       await refreshKnowledgeHealth(knowledgeBaseId)
-      if (documentDetail?.document.id === documentId) {
+      if (libraryGeneration.current === generation && documentDetail?.document.id === documentId) {
         try {
-          setDocumentDetail(await onFetchDocumentDetail(knowledgeBaseId, documentId))
+          const detail = await onFetchDocumentDetail(knowledgeBaseId, documentId)
+          if (libraryGeneration.current === generation) {
+            setDocumentDetail(detail)
+          }
         } catch (error) {
           // 详情刷新失败不代表索引重建失败，保留已成功的操作结果。
-          setDocumentDetailError(error instanceof Error ? error.message : '文档详情刷新失败')
+          if (libraryGeneration.current === generation) {
+            setDocumentDetailError(error instanceof Error ? error.message : '文档详情刷新失败')
+          }
         }
       }
     } catch (error) {
@@ -407,6 +461,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
         failed: true,
       })
     } finally {
+      indexLock.current = false
       setReindexingDocumentId(null)
     }
   }
@@ -459,6 +514,11 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setDocumentPage(1)
     setDocumentDetail(null)
     setDocumentDetailError(null)
+    setSelectedIndexIds([])
+    setBatchIndexResult([])
+    setDebugResult(null)
+    setDebugError(null)
+    setIsDebugging(false)
   }, [selectedKnowledgeBaseId])
 
   useEffect(() => {
@@ -492,7 +552,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
               </div>
             </div>
             <div className="kb-header-actions">
-              <div className="kb-view-switch" role="tablist" aria-label="知识库面板视图">
+              <div className="kb-view-switch" role="group" aria-label="知识库面板视图">
                 <button
                   type="button"
                   className={`kb-view-switch-btn${activeView === 'knowledge' ? ' kb-view-switch-btn--active' : ''}`}
@@ -500,7 +560,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 >
                   知识库
                 </button>
-                <button type="button" className="kb-view-switch-btn" onClick={onOpenWiki}>打开 Wiki ↗</button>
+                <button type="button" className="kb-view-switch-btn" aria-label="打开知识文库" onClick={onOpenWiki}>文库 ↗</button>
                 <button
                   type="button"
                   className={`kb-view-switch-btn${activeView === 'logs' ? ' kb-view-switch-btn--active' : ''}`}
@@ -509,7 +569,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                   操作日志
                 </button>
               </div>
-              <button className="kb-create-btn" onClick={handleOpenCreate}>
+              <button className="kb-create-btn" aria-label="新建知识库" onClick={handleOpenCreate}>
                 <KnowledgeIcon name="plus" size={16} /><span>新建知识库</span>
               </button>
               <button className="workspace-page-back" onClick={onClose} title="返回聊天" aria-label="返回聊天">
@@ -546,7 +606,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       <option value="">全部操作</option>
                       <option value="upload_file">上传文件</option>
                       <option value="index_document">建立索引</option>
-                      <option value="rebuild_index">重建索引</option>
+                      <option value="rebuild_index">重建索引</option><option value="wiki_ingest">Wiki 资料整理</option><option value="wiki_lint">Wiki 内容体检</option><option value="wiki_capture">Wiki 回答沉淀</option>
                     </select>
                   </label>
                   <label className="kb-search-field kb-log-filter">
@@ -558,7 +618,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       <option value="">全部结果</option>
                       <option value="success">成功</option>
                       <option value="failed">失败</option>
-                      <option value="partial_success">部分成功</option>
+                      <option value="partial_success">部分成功</option><option value="succeeded">Wiki 已完成</option><option value="partial">Wiki 部分完成</option><option value="needs_split">超出处理预算</option>
                     </select>
                   </label>
                   <label className="kb-search-field kb-log-filter">
@@ -570,7 +630,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                       <option value="">全部来源</option>
                       <option value="web">页面</option>
                       <option value="mcp">MCP</option>
-                      <option value="admin_rebuild">重建</option>
+                      <option value="admin_rebuild">重建</option><option value="wiki">知识文库</option>
                     </select>
                   </label>
                   <button
@@ -645,7 +705,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                 <div className="kb-empty-icon"><KnowledgeIcon name="book" size={34} /></div>
                 <p className="kb-empty-title">暂无知识库</p>
                 <p className="kb-empty-sub">创建第一个知识库，开始管理您的文档</p>
-                <button className="kb-create-btn" onClick={handleOpenCreate}>
+                <button className="kb-create-btn" aria-label="新建知识库" onClick={handleOpenCreate}>
                   <KnowledgeIcon name="plus" size={16} /><span>新建知识库</span>
                 </button>
               </div>
@@ -1091,7 +1151,16 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           onDragOver={(event) => event.preventDefault()}
                           onDrop={(event) => handleDropFiles(selectedKnowledgeBase.id, event)}
                         >
+                          <div className="kb-batch-actions">
+                            <button disabled={batchIndexBusy} onClick={() => setSelectedIndexIds(filteredAndSortedDocuments.map((doc) => doc.id))}>全选筛选结果</button>
+                            <button disabled={batchIndexBusy || !selectedIndexIds.length} onClick={() => setSelectedIndexIds([])}>取消选择</button>
+                            <button disabled={batchIndexBusy || reindexingDocumentId !== null || !selectedIndexIds.length} onClick={() => void rebuildSelected()}>{batchIndexBusy ? '批量重建中…' : `批量重建索引（${selectedIndexIds.length}）`}</button>
+                          </div>
+                          {batchIndexResult.length > 0 && <ul className="kb-batch-results" role="status">{batchIndexResult.map((result, index) => <li key={index}>{result}</li>)}</ul>}
                           <DocumentList
+                            selectedIds={selectedIndexIds}
+                            batchBusy={batchIndexBusy}
+                            onToggleSelection={(id) => setSelectedIndexIds((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])}
                             documents={selectedKnowledgeBase.documents.filter((document) => document.kind !== 'wiki')}
                             filteredDocuments={filteredAndSortedDocuments}
                             page={documentPage}
@@ -1206,6 +1275,49 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       />
     </>
   )
+
+  /** 顺序调用真实重建接口，逐项展示失败并继续其余资料，结束后只刷新一次健康状态。 */
+  async function rebuildSelected() {
+    if (!selectedKnowledgeBaseId || indexLock.current || !selectedIndexIds.length) {
+      return
+    }
+    const libraryId = selectedKnowledgeBaseId
+    const generation = libraryGeneration.current
+    const ids = [...selectedIndexIds]
+    indexLock.current = true
+    setBatchIndexBusy(true)
+    setBatchIndexResult([])
+    const failures: string[] = []
+    for (const id of ids) {
+      if (libraryGeneration.current !== generation) {
+        break
+      }
+      setReindexingDocumentId(id)
+      const name = selectedKnowledgeBase?.documents.find((doc) => doc.id === id)?.name ?? id
+      try {
+        const document = await onReindexDocument(libraryId, id)
+        if (document.status === 'failed' || document.indexError) {
+          throw new Error(document.indexError || '索引重建失败')
+        }
+        if (libraryGeneration.current === generation) {
+          setBatchIndexResult((old) => [...old, `${name}：重建完成`])
+        }
+      } catch (reason) {
+        failures.push(id)
+        if (libraryGeneration.current === generation) {
+          setBatchIndexResult((old) => [...old, `${name}：失败，${reason instanceof Error ? reason.message : '未知错误'}`])
+        }
+      }
+    }
+    if (libraryGeneration.current === generation) {
+      setSelectedIndexIds(failures)
+      await refreshKnowledgeHealth(libraryId)
+    }
+    indexLock.current = false
+    setBatchIndexBusy(false)
+    setReindexingDocumentId(null)
+  }
+
 }
 
 export default KnowledgePanel

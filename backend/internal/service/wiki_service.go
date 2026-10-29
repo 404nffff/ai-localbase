@@ -100,14 +100,23 @@ func (s *AppService) ConfigureWiki(kbID string, enabled bool) (model.WikiState, 
 // publishWikiPlan 校验整批来源、页面基线和链接，再一次发布全部页面指针。
 // 索引独立执行；未完成索引的新修订不会进入默认问答。
 func (s *AppService) publishWikiPlan(kbID, jobID string, plan model.WikiPlan) ([]string, error) {
-	if len(plan.Pages) > 15 {
-		return nil, &WikiError{422, "needs_split", "one job may update at most 15 pages"}
-	}
 	changed := make([]string, 0, len(plan.Pages))
 	written := make([]string, 0, len(plan.Pages))
 	err := s.commitWikiChange(kbID, func(kb *model.KnowledgeBase) error {
 		if !kb.Wiki.Enabled {
 			return &WikiError{409, "disabled", "wiki is disabled"}
+		}
+		// 每个来源分段可形成独立主题；整批保留同一次原子发布，不受旧的15页总量限制。
+		// 非整理任务仍使用原15页预算，实际任务预算来自服务端已持久化的完整段数。
+		pageLimit := 15
+		for _, job := range kb.Wiki.Jobs {
+			if job.ID == jobID {
+				pageLimit = 15 * max(1, job.TotalSegments)
+				break
+			}
+		}
+		if len(plan.Pages) > pageLimit {
+			return &WikiError{422, "invalid_plan", "generated pages exceed the source segment budget"}
 		}
 		documents := make(map[string]model.Document, len(kb.Documents))
 		names := map[string]string{}
