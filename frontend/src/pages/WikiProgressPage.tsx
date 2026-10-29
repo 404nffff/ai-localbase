@@ -4,6 +4,9 @@ import AppIcon from '../components/common/AppIcon'
 import { formatWikiTime, wikiStatusLabel, WikiJobList } from '../components/knowledge/WikiPanel'
 import '../styles/wiki-progress.css'
 
+// 异常按任务状态统计；待整理资料另按来源版本统计，两者不能相加。
+const attentionStatuses = ['failed', 'partial', 'needs_split'] as const
+
 /**
  * 全库整理工作台：全量统计、按库钻取、状态筛选与分页，复用已有失败重试接口。
  * 轮询串行执行，离开页面或变更筛选时取消旧读取；读取失败停止轮询，保留上次快照并明确标记。
@@ -78,13 +81,16 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
   }, [selectedId, status, offset, autoRefresh, refreshVersion])
 
   const totals = useMemo(() => {
-    const result = { total: 0, succeeded: 0, running: 0, queued: 0, attention: 0, pending: 0 }
+    const result = { total: 0, succeeded: 0, running: 0, queued: 0, attention: 0, pending: 0, failed: 0, partial: 0, needs_split: 0 }
     for (const library of data?.items ?? []) {
       result.total += library.total
       result.succeeded += library.counts.succeeded ?? 0
       result.running += library.counts.running ?? 0
       result.queued += library.counts.queued ?? 0
-      result.attention += (library.counts.failed ?? 0) + (library.counts.partial ?? 0) + (library.counts.needs_split ?? 0)
+      for (const value of attentionStatuses) {
+        result[value] += library.counts[value] ?? 0
+        result.attention += library.counts[value] ?? 0
+      }
       result.pending += library.pendingCount
     }
     return result
@@ -99,12 +105,18 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
       if (libraryFilter === 'active' && !(library.counts.running || library.counts.queued)) {
         continue
       }
-      if (libraryFilter === 'attention' && !(library.pendingCount || library.counts.failed || library.counts.partial || library.counts.needs_split)) {
+      if (libraryFilter === 'attention' && !attentionStatuses.some((value) => library.counts[value])) {
+        continue
+      }
+      if (libraryFilter === 'pending' && !library.pendingCount) {
+        continue
+      }
+      if (attentionStatuses.some((value) => value === libraryFilter) && !library.counts[libraryFilter]) {
         continue
       }
       visible.push(library)
     }
-    // 先展示执行中的库，再展示需要处理的库，同组保留服务端稳定顺序。
+    // 先展示执行中的库，再展示异常任务或待整理资料所在库，同组保留服务端稳定顺序。
     visible.sort((left, right) => {
       const leftRank = Number(Boolean(left.counts.running || left.counts.queued)) * 2 + Number(Boolean(left.pendingCount || left.counts.failed || left.counts.partial || left.counts.needs_split))
       const rightRank = Number(Boolean(right.counts.running || right.counts.queued)) * 2 + Number(Boolean(right.pendingCount || right.counts.failed || right.counts.partial || right.counts.needs_split))
@@ -132,13 +144,31 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
   }
 
   /** 切换范围时重置分页和操作反馈，避免上一库错误留在新库。 */
-  function selectLibrary(id: string) {
+  function selectLibrary(id: string, taskStatus = '') {
     setSelectedId(id)
-    setStatus('')
+    setStatus(taskStatus)
     setOffset(0)
     setActionError('')
     setNotice('')
     setBatchResult(null)
+  }
+
+  /** 全站统计入口清空旧搜索和库范围，保证点击后的列表与统计口径一致。 */
+  function showLibraryFilter(value: string) {
+    selectLibrary('')
+    setQuery('')
+    setLibraryFilter(value)
+  }
+
+  /** 从异常分类进入知识库时直接定位对应任务；综合分类优先展示本库实际存在的异常。 */
+  function openLibrary(id: string, counts: Record<string, number>) {
+    let taskStatus = ''
+    if (libraryFilter === 'attention') {
+      taskStatus = attentionStatuses.find((value) => counts[value]) ?? ''
+    } else if (attentionStatuses.some((value) => value === libraryFilter)) {
+      taskStatus = libraryFilter
+    }
+    selectLibrary(id, taskStatus)
   }
 
   /** 显式重试只提交一次；成功后回读服务端状态，冲突与失败原样展示。 */
@@ -216,8 +246,10 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
         <section className="wiki-progress-summary" aria-label="全部知识库整理统计" aria-busy={loading}>
           <div className="wiki-progress-completion"><span>任务完成率</span><div><strong>{data ? `${completion}%` : '—'}</strong><span>{data ? `${totals.succeeded} / ${totals.total} 个任务已完成` : '正在读取统计'}</span></div><progress aria-label="全部任务完成率" value={completion} max={100} /><small>仅已完成任务计入，部分完成与失败单独保留。</small></div>
           <div><span><i data-tone="active" />正在整理</span><strong>{data ? totals.running : '—'}</strong><small>{totals.queued} 个任务排队中</small></div>
-          <div><span><i data-tone="warning" />需要处理</span><strong>{data ? totals.attention + totals.pending : '—'}</strong><small>异常任务 + 待整理资料（可能重叠）</small></div>
-          <div><span>待整理资料</span><strong>{data ? totals.pending : '—'}</strong><small>{data ? `${data.items.length} 个知识库` : '正在读取知识库'}</small></div>
+          <div><span><i data-tone="warning" />异常任务</span><strong>{data ? totals.attention : '—'}</strong><small>按任务计数，资料另计</small>
+            <div className="wiki-progress-summary-links" role="group" aria-label="异常任务分类">{attentionStatuses.map((value) => <button key={value} disabled={!data || loading || retrying || !totals[value]} onClick={() => showLibraryFilter(value)}>{wikiStatusLabel(value)} {data ? totals[value] : '—'}<AppIcon name="chevronRight" size={13} /></button>)}</div>
+          </div>
+          <div><span>待整理资料</span><strong>{data ? totals.pending : '—'}</strong><small>尚未完成整理的原始资料，含失败待重试</small><div className="wiki-progress-summary-links"><button disabled={!data || loading || retrying || !totals.pending} onClick={() => showLibraryFilter('pending')}>查看待整理知识库<AppIcon name="chevronRight" size={13} /></button></div></div>
         </section>
         {data && !data.autoCompileReady && <p className="wiki-progress-hint"><AppIcon name="info" size={17} />尚未配置第三方聊天模型，新资料的自动整理会跳过。请先在设置中配置模型。</p>}
 
@@ -227,7 +259,7 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
           <div className="wiki-progress-section-heading"><div><h2>知识库进度</h2><p>点击知识库，查看任务明细与失败原因。</p></div><span>{libraries.length} 个知识库</span></div>
           <div className="wiki-progress-filters">
             <label className="wiki-progress-search"><AppIcon name="search" size={17} /><input type="search" aria-label="搜索知识库进度" placeholder="搜索知识库…" value={query} disabled={retrying} onChange={(event) => setQuery(event.target.value)} /></label>
-            <div className="wiki-progress-filter-buttons" role="group" aria-label="知识库进度筛选">{[['all', '全部知识库'], ['active', '执行中'], ['attention', '需要处理']].map(([value, label]) => <button key={value} aria-pressed={libraryFilter === value} disabled={retrying} onClick={() => setLibraryFilter(value)}>{label}</button>)}</div>
+            <div className="wiki-progress-filter-buttons" role="group" aria-label="知识库进度筛选">{[['all', '全部知识库'], ['active', '执行中'], ['attention', '异常任务'], ...attentionStatuses.map((value) => [value, wikiStatusLabel(value)]), ['pending', '待整理资料']].map(([value, label]) => <button key={value} aria-pressed={libraryFilter === value} disabled={retrying} onClick={() => setLibraryFilter(value)}>{label}</button>)}</div>
             {pendingControls}
           </div>
           <div className="wiki-library-list">
@@ -244,10 +276,10 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
               } else if (done === library.total) {
                 idleLabel = '全部完成'
               }
-              return <button className="wiki-library-row" key={library.knowledgeBaseId} disabled={retrying} onClick={() => selectLibrary(library.knowledgeBaseId)} aria-label={`查看 ${library.name} 的整理进度`}>
+              return <button className="wiki-library-row" key={library.knowledgeBaseId} disabled={retrying} onClick={() => openLibrary(library.knowledgeBaseId, counts)} aria-label={`查看 ${library.name} 的整理进度`}>
                 <span className="wiki-library-identity"><span className="wiki-library-icon"><AppIcon name="book" size={23} /></span><span><strong>{library.name}</strong><small>{library.pageCount} 个知识页 · {library.pendingCount} 份待整理资料{!library.enabled && ' · 自动整理已关闭'}</small></span></span>
                 <span className="wiki-library-completion"><span><strong>{library.total ? `${percent}%` : '暂无任务'}</strong><small>{done} / {library.total} 已完成</small></span><span className="wiki-progress-track"><i style={{ width: `${percent}%` }} /></span></span>
-                <span className="wiki-library-state">{Boolean(counts.running || counts.queued) && <span className="wiki-status-pill">{counts.running ?? 0} 整理中 · {counts.queued ?? 0} 排队</span>}{attention > 0 && <span className="wiki-status-pill" data-status="failed">{attention} 需处理{counts.failed ? ` · ${counts.failed} 失败` : ''}</span>}{!attention && !counts.running && !counts.queued && <span className="wiki-library-idle">{idleLabel}</span>}</span>
+                <span className="wiki-library-state">{Boolean(counts.running || counts.queued) && <span className="wiki-status-pill">{counts.running ?? 0} 整理中 · {counts.queued ?? 0} 排队</span>}{attentionStatuses.map((value) => Boolean(counts[value]) && <span key={value} className="wiki-status-pill" data-status={value}>{counts[value]} 个任务{wikiStatusLabel(value)}</span>)}{!attention && !counts.running && !counts.queued && <span className="wiki-library-idle">{idleLabel}</span>}</span>
                 <AppIcon name="chevronRight" size={18} />
               </button>
             })}

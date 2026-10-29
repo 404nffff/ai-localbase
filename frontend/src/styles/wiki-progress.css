@@ -37,6 +37,10 @@
 .wiki-progress-summary i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; }
 .wiki-progress-summary i[data-tone=active] { background: var(--color-primary); }
 .wiki-progress-summary i[data-tone=warning] { background: #c17c30; }
+/* 分类入口放在对应统计内，允许窄屏换行，不与资料数合并或挤占列表操作栏。 */
+.wiki-progress-summary-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 10px; }
+.wiki-progress-page .wiki-progress-summary-links button { min-height: 32px; padding: 4px 0; border: 0; border-radius: 2px; background: transparent; color: var(--color-primary); font-size: 12px; text-align: left; justify-content: flex-start; }
+.wiki-progress-summary-links button svg { flex-shrink: 0; }
 .wiki-progress-completion > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin: 6px 0 12px; }
 .wiki-progress-completion strong { font-size: 40px; font-weight: 600; color: var(--color-primary); font-variant-numeric: tabular-nums; }
 .wiki-progress-completion progress { width: 100%; height: 6px; margin-bottom: 12px; }
