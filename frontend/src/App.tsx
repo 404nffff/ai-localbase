@@ -640,6 +640,8 @@ function App() {
     return window.localStorage.getItem(APP_ACCESS_TOKEN_STORAGE_KEY) ?? ''
   })
   const [accessTokenRequired, setAccessTokenRequired] = useState(false)
+  // 启动只验证挂载时的令牌；后续登录由提交入口处理，不重复初始化应用。
+  const initialAccessTokenRef = useRef(accessToken)
   const [accessTokenValidated, setAccessTokenValidated] = useState(false)
   const [accessGateFeedback, setAccessGateFeedback] = useState<AccessTokenGateFeedback | null>(null)
   const [isAccessGateSubmitting, setIsAccessGateSubmitting] = useState(false)
@@ -929,6 +931,7 @@ function App() {
 
   useEffect(() => {
     const bootstrapApp = async () => {
+      const initialAccessToken = initialAccessTokenRef.current.trim()
       try {
         const readiness = await waitForBackendReady()
         if (!readiness.ready) {
@@ -936,11 +939,11 @@ function App() {
         }
 
         if (readiness.authRequired) {
-          if (accessToken.trim()) {
+          if (initialAccessToken) {
             setIsAccessGateSubmitting(true)
             try {
-              await verifyAccessToken(accessToken.trim())
-              await loadProtectedAppData(accessToken.trim())
+              await verifyAccessToken(initialAccessToken)
+              await loadProtectedAppData(initialAccessToken)
               setAccessTokenValidated(true)
               setAccessGateFeedback(null)
             } catch (error) {
@@ -2157,10 +2160,10 @@ function App() {
       let buffer = ''
       let streamCompleted = false
       let receivedFirstChunk = false
-      let firstChunkTimer = window.setTimeout(() => {
+      const firstChunkTimer = window.setTimeout(() => {
         streamAbortController.abort()
       }, STREAM_FIRST_CHUNK_TIMEOUT_MS)
-      let requestTimer = window.setTimeout(() => {
+      const requestTimer = window.setTimeout(() => {
         streamAbortController.abort()
       }, STREAM_REQUEST_TIMEOUT_MS)
 
@@ -2225,7 +2228,8 @@ function App() {
       }
 
       try {
-        while (true) {
+        // 持续读取至流结束；异常仍交给下方失败处理，最终释放读取器。
+        for (;;) {
           const { done, value } = await reader.read()
           buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
           const normalizedBuffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n')

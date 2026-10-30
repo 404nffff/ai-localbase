@@ -152,6 +152,8 @@ const Sidebar = ({
     return knowledgeBaseId && pageId && Number.isInteger(revision) && revision >= 0 ? { knowledgeBaseId, pageId, revision } : null
   })
   const wikiLibrary = knowledgeBases.find((kb) => kb.id === (wikiTarget?.knowledgeBaseId ?? wikiLibraryId ?? selectedKnowledgeBaseId)) ?? knowledgeBases[0]
+  // URL 只依赖库身份，资料刷新替换库对象时不重复同步导航。
+  const currentWikiLibraryId = wikiLibrary?.id
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1))
@@ -161,8 +163,8 @@ const Sidebar = ({
     if (wikiOpen) {
       params.set('workspace', 'wiki')
       // 即使尚未选择知识页，也保留文库身份，避免刷新后回到列表第一项。
-      if (wikiLibrary) {
-        params.set('library', wikiLibrary.id)
+      if (currentWikiLibraryId) {
+        params.set('library', currentWikiLibraryId)
       }
       if (wikiHistoryOpen) {
         params.set('view', 'history')
@@ -182,7 +184,7 @@ const Sidebar = ({
     }
     const hash = params.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash ? '#' + hash : ''}`)
-  }, [wikiOpen, wikiHistoryOpen, wikiTarget, progressLibraryId, wikiLibrary?.id])
+  }, [wikiOpen, wikiHistoryOpen, wikiTarget, progressLibraryId, currentWikiLibraryId])
 
   let activeWorkspace: WorkspaceId = 'chat'
   if (wikiOpen) {
