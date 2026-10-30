@@ -2,7 +2,8 @@ import type { ChatMessage } from '../../App'
 import { useState } from 'react'
 import { WikiPageViewer } from '../knowledge/WikiPanel'
 import AppIcon from '../common/AppIcon'
-import MarkdownRenderer from './MarkdownRenderer'
+import MarkdownRenderer from './LazyMarkdownRenderer'
+import MessageCitations from './MessageCitations'
 
 interface MessageCardProps {
   message: ChatMessage
@@ -22,7 +23,7 @@ const formatTime = (value: string) =>
     minute: '2-digit',
   })
 
-// 消息卡片只负责展示当前 ChatMessage，不引入 origin 额外的编辑、引用或导出契约。
+// 消息卡片保留 Wiki 原始引文入口，普通文档引用通过真实分块定位。
 const MessageCard = ({
   message,
   isStreamingPlaceholder,
@@ -153,10 +154,11 @@ const MessageCard = ({
         ) : message.role === 'assistant' ? (
           <>
             <MarkdownRenderer content={message.content} />
+            <MessageCitations metadata={message.metadata} />
             {sources.length > 0 && (
               <div className="message-sources">
                 <span>来源</span>
-                {sources.map((source, index) => (
+                {sources.filter((source) => source.pageId).map((source, index) => (
                   source.pageId && source.knowledgeBaseId ? <button type="button" key={`${source.documentId}-${index}`} onClick={() => setWikiSource({ knowledgeBaseId: source.knowledgeBaseId ?? '', pageId: source.pageId ?? '', revision: Number(source.wikiRevision) || 0 })}>{source.documentName || source.documentId} · 查看知识页与来源</button> : <em key={`${source.documentId}-${index}`}>{source.documentName || source.documentId}</em>
                 ))}
               </div>

@@ -540,7 +540,7 @@ func (s *AppService) filterWikiChunks(chunks []RetrievedChunk, evidence bool) []
 	for _, chunk := range chunks {
 		kb, err := s.WikiSnapshot(chunk.KnowledgeBaseID)
 		if err != nil {
-			if chunk.Kind != "wiki" {
+			if chunk.Kind != "wiki" && chunk.IndexGeneration == "" {
 				result = append(result, chunk)
 			}
 			continue
@@ -551,6 +551,9 @@ func (s *AppService) filterWikiChunks(chunks []RetrievedChunk, evidence bool) []
 				doc = d
 				break
 			}
+		}
+		if chunk.IndexGeneration != doc.IndexGeneration {
+			continue
 		}
 		if doc.Wiki == nil {
 			if chunk.Kind == "wiki" {

@@ -391,7 +391,8 @@ func (s *QdrantService) UpsertPoints(ctx context.Context, knowledgeBaseID string
 		return err
 	}
 
-	collPath := "/collections/" + url.PathEscape(collectionName) + "/points"
+	// 等待向量写入完成才允许发布文档代际，避免指针先于可检索数据可见。
+	collPath := "/collections/" + url.PathEscape(collectionName) + "/points?wait=true"
 	for i := 0; i < len(points); i += qdrantUpsertBatchSize {
 		end := i + qdrantUpsertBatchSize
 		if end > len(points) {
@@ -745,7 +746,17 @@ func (s *QdrantService) doJSONWithClient(ctx context.Context, client *http.Clien
 	if err != nil {
 		return nil, fmt.Errorf("invalid qdrant base url: %w", err)
 	}
-	requestURL.Path = path.Join(requestURL.Path, requestPath)
+	// 查询参数必须独立编码；否则 wait=true 会被转义进路径，无法等待写入完成。
+	relativeURL, err := url.Parse(requestPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid qdrant request path: %w", err)
+	}
+	requestURL.Path = path.Join(requestURL.Path, relativeURL.Path)
+	query := requestURL.Query()
+	for key, values := range relativeURL.Query() {
+		query[key] = values
+	}
+	requestURL.RawQuery = query.Encode()
 
 	var body io.Reader
 	if payload != nil {

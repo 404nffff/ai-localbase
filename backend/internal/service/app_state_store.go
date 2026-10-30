@@ -80,6 +80,10 @@ func (s *AppStateStore) Save(state persistentAppState) error {
 		_ = tempFile.Close()
 		return fmt.Errorf("write app state temp file: %w", err)
 	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("sync app state: %w", err)
+	}
 	// Windows 替换文件前必须关闭句柄，确保新状态已经完整写入。
 	if err := tempFile.Close(); err != nil {
 		return fmt.Errorf("close app state temp file: %w", err)

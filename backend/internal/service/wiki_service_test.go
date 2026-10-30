@@ -231,6 +231,8 @@ func TestWikiRetrievalRejectsObsoleteEvidence(t *testing.T) {
 	if _, err := s.indexWikiPage(id, ids[0]); err != nil {
 		t.Fatal(err)
 	}
+	indexedPage, _ := s.GetDocument(id, ids[0])
+	chunk.IndexGeneration = indexedPage.IndexGeneration
 	valid := s.filterWikiChunks([]RetrievedChunk{chunk}, true)
 	if len(valid) != 1 {
 		t.Fatal("valid page excluded")

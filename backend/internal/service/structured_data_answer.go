@@ -45,6 +45,14 @@ type structuredRowMatch struct {
 
 // TryBuildStructuredDataAnswer 对明确的 CSV/XLSX 查询生成本地确定性回答；未命中时交回原聊天链路。
 func (s *AppService) TryBuildStructuredDataAnswer(req model.ChatCompletionRequest) (string, []map[string]string, bool, error) {
+	var scopeErr error
+	req, scopeErr = s.NormalizeKnowledgeRequest(req)
+	if scopeErr != nil {
+		return "", nil, false, scopeErr
+	}
+	if req.KnowledgeScope == KnowledgeScopeNone {
+		return "", nil, false, nil
+	}
 	query := latestUserMessage(req.Messages)
 	if !looksLikeStructuredDataQuery(query) {
 		return "", nil, false, nil

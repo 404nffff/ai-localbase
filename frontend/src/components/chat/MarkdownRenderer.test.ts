@@ -14,6 +14,12 @@ describe('原始文档渲染', () => {
 })
 
 describe('fixMarkdown', () => {
+  it('只移除指定装饰符号，保留其他完整表情及其显示变体', () => {
+    const output = fixMarkdown('保留😀与🕊️；移除✅☑️🛠️⚠️🚀装饰')
+
+    expect(output).toBe('保留😀与🕊️；移除装饰')
+  })
+
   it('normalizes compact headings and lists', () => {
     const output = fixMarkdown('##核心观点###数据概况-**文件名称**：users.csv-**字段定义**：姓名、城市')
 

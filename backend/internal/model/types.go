@@ -87,6 +87,8 @@ type KnowledgeBaseInput struct {
 }
 
 type Document struct {
+	// IndexGeneration 仅发布成功的向量代际可参与检索。
+	IndexGeneration string `json:"indexGeneration,omitempty"`
 	ID              string `json:"id"`
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
 	Name            string `json:"name"`
@@ -246,15 +248,18 @@ type DocumentChunkPreview struct {
 
 // DocumentIndexDiagnostics 汇总文档原文、分块和向量索引的诊断指标。
 type DocumentIndexDiagnostics struct {
-	RawContentChars       int  `json:"rawContentChars"`
-	ChunkCount            int  `json:"chunkCount"`
-	VectorCount           int  `json:"vectorCount"`
-	SummaryChunkCount     int  `json:"summaryChunkCount"`
-	StructuredRowCount    int  `json:"structuredRowCount"`
-	RawContentAvailable   bool `json:"rawContentAvailable"`
-	QdrantEnabled         bool `json:"qdrantEnabled"`
-	RawContentTruncated   bool `json:"rawContentTruncated"`
-	ChunkPreviewTruncated bool `json:"chunkPreviewTruncated"`
+	// VectorCountSource 区分 actual、unknown 与 not_applicable；仅 actual 的数量可展示为精确值。
+	VectorCountSource     string `json:"vectorCountSource"`
+	VectorCountStatus     string `json:"vectorCountStatus"`
+	RawContentChars       int    `json:"rawContentChars"`
+	ChunkCount            int    `json:"chunkCount"`
+	VectorCount           int    `json:"vectorCount"`
+	SummaryChunkCount     int    `json:"summaryChunkCount"`
+	StructuredRowCount    int    `json:"structuredRowCount"`
+	RawContentAvailable   bool   `json:"rawContentAvailable"`
+	QdrantEnabled         bool   `json:"qdrantEnabled"`
+	RawContentTruncated   bool   `json:"rawContentTruncated"`
+	ChunkPreviewTruncated bool   `json:"chunkPreviewTruncated"`
 }
 
 // DocumentDetailResponse 返回文档原文预览、摘要、分块和索引诊断信息。
@@ -269,6 +274,9 @@ type DocumentDetailResponse struct {
 
 // KnowledgeBaseHealthMetrics 汇总知识库级索引健康指标。
 type KnowledgeBaseHealthMetrics struct {
+	// 任一文档计数未知时，汇总同样标记 unknown，不能将部分数量当作总数。
+	VectorCountSource  string `json:"vectorCountSource"`
+	VectorCountStatus  string `json:"vectorCountStatus"`
 	DocumentCount      int    `json:"documentCount"`
 	IndexedCount       int    `json:"indexedCount"`
 	ProcessingCount    int    `json:"processingCount"`
@@ -285,6 +293,8 @@ type KnowledgeBaseHealthMetrics struct {
 
 // KnowledgeBaseDocumentHealth 描述单文档健康状态和可执行建议。
 type KnowledgeBaseDocumentHealth struct {
+	VectorCountSource   string `json:"vectorCountSource"` // actual 为远端实测，unknown 为查询未完成。
+	VectorCountStatus   string `json:"vectorCountStatus"` // 集合、维度或连接异常的稳定状态。
 	DocumentID          string `json:"documentId"`
 	DocumentName        string `json:"documentName"`
 	Status              string `json:"status"`
@@ -393,6 +403,7 @@ type EmbeddingModelConfig struct {
 }
 
 type ChatCompletionRequest struct {
+	KnowledgeScope  string               `json:"knowledgeScope"` // none 不检索、selected 指定范围、all 显式全库。
 	ConversationID  string               `json:"conversationId"`
 	Model           string               `json:"model"`
 	Messages        []ChatMessage        `json:"messages"`
@@ -438,6 +449,7 @@ type ConfigUpdateRequest struct {
 }
 
 type Conversation struct {
+	KnowledgeScope  string              `json:"knowledgeScope"` // 保存显式全库选择，避免重启后与普通聊天混淆。
 	ID              string              `json:"id"`
 	Title           string              `json:"title"`
 	KnowledgeBaseID string              `json:"knowledgeBaseId"`
@@ -456,6 +468,7 @@ type StoredChatMessage struct {
 }
 
 type ConversationListItem struct {
+	KnowledgeScope  string `json:"knowledgeScope"`
 	ID              string `json:"id"`
 	Title           string `json:"title"`
 	KnowledgeBaseID string `json:"knowledgeBaseId"`
@@ -466,6 +479,7 @@ type ConversationListItem struct {
 }
 
 type SaveConversationRequest struct {
+	KnowledgeScope  string              `json:"knowledgeScope"`
 	ID              string              `json:"id"`
 	Title           string              `json:"title"`
 	KnowledgeBaseID string              `json:"knowledgeBaseId"`

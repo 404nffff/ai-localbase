@@ -16,7 +16,7 @@ function looksLikePseudoTableHeader(cell: string): boolean {
     return false
   }
 
-  return !/[，。；：:,.!?()（）\[\]]/.test(trimmed)
+  return !/[，。；：:,.!?()（）[\]]/.test(trimmed)
 }
 
 function renumberOrderedListBlocks(content: string): string {
@@ -803,7 +803,7 @@ function sanitizeMermaidLine(line: string): string {
   sanitized = sanitized.replace(/mermaidflowchart\s*LR/g, 'flowchart LR')
   sanitized = sanitized.replace(/mermaidgraph\s*TD/g, 'graph TD')
   sanitized = sanitized.replace(/mermaidgraph\s*LR/g, 'graph LR')
-  sanitized = sanitized.replace(/([A-Za-z0-9_\]\)\}])\s*--\s+([A-Za-z0-9_\[\(\{])/g, '$1 --> $2')
+  sanitized = sanitized.replace(/([A-Za-z0-9_\])}])\s*--\s+([A-Za-z0-9_[({])/g, '$1 --> $2')
   sanitized = sanitized.replace(/;+\s*$/, '')
   return sanitized.trim()
 }
@@ -825,19 +825,19 @@ function rebuildCompressedMermaid(lines: string[]): string[] {
     .replace(/%%\s*/g, '\n%% ')
     .replace(/end\s*subgraph/gi, 'end\nsubgraph ')
     .replace(/endsubgraph/gi, 'end\nsubgraph ')
-    .replace(/(subgraph\s+[A-Za-z0-9_\-]+\[[^\]]+\])/g, '\n$1\n')
-    .replace(/(subgraph\s+[A-Za-z0-9_\-]+)/g, '\n$1\n')
+    .replace(/(subgraph\s+[A-Za-z0-9_-]+\[[^\]]+\])/g, '\n$1\n')
+    .replace(/(subgraph\s+[A-Za-z0-9_-]+)/g, '\n$1\n')
     .replace(/(classDef\s+[A-Za-z0-9_]+\s+fill:[^;]+;)/g, '\n$1\n')
     .replace(/(style\s+[A-Za-z0-9_]+\s+fill:[^;]+;)/g, '\n$1\n')
     .replace(/(classDef[A-Za-z0-9_]+fill:[^;]+;)/g, '\n$1\n')
     .replace(/(style[A-Za-z0-9_]+fill:[^;]+;)/g, '\n$1\n')
     .replace(/([A-Za-z0-9_]+\[[^\]]+\])(?=[A-Za-z0-9_]+\[[^\]]+\])/g, '$1\n')
-    .replace(/([A-Za-z0-9_]+\([^\)]*\))(?=[A-Za-z0-9_]+\([^\)]*\))/g, '$1\n')
-    .replace(/([A-Za-z0-9_]+\{[^\}]*\})(?=[A-Za-z0-9_]+\{[^\}]*\})/g, '$1\n')
-    .replace(/([A-Za-z0-9_\]\)\}])\s*(-->|==>|-.->)\s*([A-Za-z0-9_\[\(\{])/g, '$1 $2 $3')
-    .replace(/([\]\)\}])\s*(?=[A-Za-z0-9_]+(?:\[|\(|\{|-->|==>|-.->))/g, '\n')
+    .replace(/([A-Za-z0-9_]+\([^)]*\))(?=[A-Za-z0-9_]+\([^)]*\))/g, '$1\n')
+    .replace(/([A-Za-z0-9_]+\{[^}]*\})(?=[A-Za-z0-9_]+\{[^}]*\})/g, '$1\n')
+    .replace(/([A-Za-z0-9_\])}])\s*(-->|==>|-.->)\s*([A-Za-z0-9_[({])/g, '$1 $2 $3')
+    .replace(/([\])}])\s*(?=[A-Za-z0-9_]+(?:\[|\(|\{|-->|==>|-.->))/g, '\n')
     .replace(/(;)(?=\s*(?:classDef|style|subgraph|end|[A-Za-z0-9_]+\[|[A-Za-z0-9_]+\{|[A-Za-z0-9_]+\(|[A-Za-z0-9_]+-->))/g, '$1\n')
-    .replace(/((?:-->|==>|-.->)\s*[A-Za-z0-9_]+(?:\[[^\]]*\]|\([^\)]*\)|\{[^\}]*\}))(?!\s*(?:classDef|style|subgraph|end|%%|$))/g, '$1\n')
+    .replace(/((?:-->|==>|-.->)\s*[A-Za-z0-9_]+(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\}))(?!\s*(?:classDef|style|subgraph|end|%%|$))/g, '$1\n')
     .replace(/([A-Za-z0-9_]+(?:-->|==>|-.->)[A-Za-z0-9_]+)(?=[A-Za-z0-9_]+(?:-->|==>|-.->))/g, '$1\n')
     .replace(/(end)(?=\s*(?:[A-Za-z0-9_]+\[|[A-Za-z0-9_]+\{|[A-Za-z0-9_]+\(|subgraph|classDef|style|%%))/g, '$1\n')
     .replace(/(\w+)(-->|==>|-.->)(\w+)/g, '$1 $2 $3')
@@ -1724,6 +1724,7 @@ const AdviceCardBlock: React.FC<{ content: string }> = ({ content }) => {
   )
 }
 
+/** 修复模型答案的排版并移除指定装饰符号；保留其余 Unicode 字符，原始资料绕过此处理。 */
 export function fixMarkdown(content: string): string {
   let fixed = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 
@@ -1785,7 +1786,8 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed.replace(/([^\n])\s+([-*+])\s+/g, '$1\n$2 ')
   fixed = fixed.replace(/([^\n])\s+-\s+(?=[^\n：:]+[：:])/g, '$1\n- ')
 
-  fixed = fixed.replace(/[✅☑️✔🟩🟦🔹🔸•📌✨📍🛠️📦🚀🎯💡🔥⭐👉🔧📝📣⚠️❗❓]/g, '')
+  // 按完整码点匹配，并只移除目标符号紧随的变体选择符，避免误删其他表情的代理项。
+  fixed = fixed.replace(/[✅☑✔🟩🟦🔹🔸•📌✨📍🛠📦🚀🎯💡🔥⭐👉🔧📝📣⚠❗❓]\uFE0F?/gu, '')
   fixed = fixed.replace(/-\s*(\d+[.)、])/g, '$1')
   fixed = fixed.replace(/([^\n])\s+(总结|结论|建议|风险|下一步|关键任务|阶段功能目标|理由|备注|关键依赖)[:：]/g, '$1\n\n$2：')
   fixed = fixed.replace(/\s+(---|———+|───+)\s+/g, '\n\n---\n\n')
@@ -1795,7 +1797,7 @@ ${treeBlock.trimEnd()}\n\
   fixed = fixed.replace(/([a-zA-Z])([\u4e00-\u9fa5])/g, '$1 $2')
   fixed = fixed.replace(/([\u4e00-\u9fa5])([A-Za-z][a-z])/g, '$1 $2')
   fixed = fixed.replace(/([!?])([A-Za-z\u4e00-\u9fa5])/g, '$1 $2')
-  fixed = fixed.replace(/(^|[\s\]\)】。！？!?])\.([A-Za-z\u4e00-\u9fa5])/g, '$1. $2')
+  fixed = fixed.replace(/(^|[\s\])】。！？!?])\.([A-Za-z\u4e00-\u9fa5])/g, '$1. $2')
 
   fixed = fixed.replace(/^[ \t]*:[-]{3,}[ \t]*$/gm, '---')
   fixed = fixed.replace(/^[ \t]*\|?[ :-]{3,}\|?[ \t]*$/gm, '---')

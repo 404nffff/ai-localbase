@@ -208,7 +208,10 @@
 .wiki-content > .wiki-reader { font-size: 16px; line-height: 1.95; }
 
 /* 顶部两行承载工作区操作；目录与正文共享剩余高度，各自滚动。 */
-.wiki-workspace-page .wiki-panel { height: 100%; min-height: 0; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+.wiki-workspace-page .wiki-panel { height: 100%; min-height: 0; grid-template-columns: clamp(220px, 22vw, 280px) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+/* 维护资料和任务时让出目录宽度；空文库直接呈现操作入口。 */
+.wiki-workspace-page .wiki-panel-wide { grid-template-columns: minmax(0, 1fr); }
+.wiki-panel-wide .wiki-sidebar { display: none; }
 .wiki-workspace-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding: 16px 24px; border-bottom: 1px solid var(--wiki-border); }
 .wiki-workspace-header .wiki-topbar-actions { margin-left: auto; flex-wrap: wrap; }
 .wiki-workspace-page .wiki-brand { padding: 0; white-space: nowrap; }
@@ -235,7 +238,7 @@
 .wiki-automation summary { cursor: pointer; }
 .wiki-workspace-page .wiki-main { min-height: 0; overflow-y: auto; }
 .wiki-workspace-page .wiki-topbar { min-height: 64px; padding: 12px 28px; }
-.wiki-workspace-page .wiki-content { max-width: none; padding: 32px clamp(24px, 3vw, 48px) 64px; }
+.wiki-workspace-page .wiki-content { max-width: 1200px; padding: 28px clamp(20px, 2.5vw, 40px) 48px; }
 .wiki-recent-changes { padding: 18px 28px; border-bottom: 1px solid var(--wiki-border); background: var(--bg-secondary); }
 .wiki-recent-changes summary { cursor: pointer; color: var(--wiki-accent); }
 .wiki-recent-changes summary > span { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }

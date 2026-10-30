@@ -70,7 +70,7 @@ const ChatArea = ({
     : selectedKnowledgeBase
       ? `知识库问答：${selectedKnowledgeBase.name}`
       : knowledgeBases.length > 0
-        ? '全部知识库'
+        ? (activeConversation.knowledgeScope === 'all' ? '全部知识库' : '普通聊天，不检索知识库')
         : '未选择知识库'
 
   // 输入框根据内容增长到六行，避免固定大输入区占用主要阅读空间。
@@ -113,7 +113,7 @@ const ChatArea = ({
 
   const handleKnowledgeBaseChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = event.target.value
-    onSelectKnowledgeBase(value === ALL_KNOWLEDGE_BASES_VALUE ? null : value)
+    onSelectKnowledgeBase(value === '__none__' ? null : value)
   }
 
   return (
@@ -130,12 +130,13 @@ const ChatArea = ({
               <span className="sr-only">选择知识库</span>
               <select
                 className="chat-context-select"
-                value={selectedKnowledgeBase?.id ?? ALL_KNOWLEDGE_BASES_VALUE}
+                value={selectedKnowledgeBase?.id ?? (activeConversation.knowledgeScope === 'all' ? ALL_KNOWLEDGE_BASES_VALUE : '__none__')}
                 onChange={handleKnowledgeBaseChange}
-                disabled={knowledgeBases.length === 0}
+                disabled={isLoading}
               >
+                <option value="__none__">普通聊天（不检索）</option>
                 <option value={ALL_KNOWLEDGE_BASES_VALUE}>
-                  {knowledgeBases.length > 0 ? '全部知识库' : '暂无知识库'}
+                  {knowledgeBases.length > 0 ? '全部知识库' : '全部知识库（当前为空）'}
                 </option>
                 {knowledgeBases.map((knowledgeBase) => (
                   <option key={knowledgeBase.id} value={knowledgeBase.id}>

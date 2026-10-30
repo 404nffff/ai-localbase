@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DocumentItem, KnowledgeBaseFileUploadState } from '../../App'
 import { downloadWiki, wikiRequest, type WikiBatchResult, type WikiChange, type WikiIssue, type WikiJob, type WikiList, type WikiOverview, type WikiPage, type WikiPageContent, type WikiSourceContent, type WikiSourceRef } from '../../services/api'
-import MarkdownRenderer from '../chat/MarkdownRenderer'
+import MarkdownRenderer from '../chat/LazyMarkdownRenderer'
 import AppIcon from '../common/AppIcon'
 import WikiPageEditor from './WikiPageEditor'
 import '../../styles/wiki.css'
@@ -118,6 +118,8 @@ export function WikiPageViewer({ knowledgeBaseId, pageId, initialRevision = 0, s
 
 /** 单库阅读工作区的宿主入口，上传沿用知识库原有处理与进度。 */
 interface WikiPanelProps {
+  /** 将当前阅读位置交给宿主写入 URL，刷新后恢复相同知识页。 */
+  onNavigate?: (pageId: string | null, revision: number) => void
   /** 从全库历史进入时定位发布时的页面和修订。 */
   initialPageId?: string
   initialRevision?: number
@@ -144,7 +146,7 @@ interface WikiPanelProps {
  * 宿主负责当前库选择、原始文件上传及上传失败反馈；本组件回读 Wiki 状态，
  * 展示整理错误并轮询已运行任务。历史资料仍需显式选择，切换库由宿主 key 重建状态。
  */
-export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, documents, libraryPicker, onUploadFiles, uploadState, onOpenProgress, onOpenHistory, initialPageId, initialRevision = 0 }: WikiPanelProps) {
+export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, documents, libraryPicker, onUploadFiles, uploadState, onOpenProgress, onOpenHistory, initialPageId, initialRevision = 0, onNavigate }: WikiPanelProps) {
   const [overview, setOverview] = useState<WikiOverview | null>(null)
   const [pages, setPages] = useState<WikiList<WikiPage>>({ items: [], total: 0, nextCursor: '' })
   const [issues, setIssues] = useState<WikiList<WikiIssue>>({ items: [], total: 0, nextCursor: '' })
@@ -237,14 +239,15 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
   const hasFilters = Boolean(query || pageType || freshness)
 
   /** 目录默认读最新正文；整理记录固定到当时发布的修订，切换时关闭手机目录。 */
-  function openPage(id: string, revision = 0) {
+  function openPage(id: string | null, revision = 0) {
     setPageId(id)
     setPageRevision(revision)
     setView('read')
     setDirectoryOpen(false)
+    onNavigate?.(id, revision)
   }
 
-  return <section className="wiki-panel" aria-label="知识页维护">
+  return <section className={`wiki-panel${view !== 'read' || !pages.items.length ? ' wiki-panel-wide' : ''}`} aria-label="知识页维护">
     {/* 工作区操作集中放在顶部，左栏只承载知识目录，避免列表被表单和说明挤压。 */}
     <header className="wiki-workspace-header">
       <div className="wiki-brand"><AppIcon name="book" size={22} /><span>知识文库<small>WIKI</small></span></div>
@@ -264,9 +267,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
     <div className="wiki-workspace-tools">
       <nav className="wiki-navigation" aria-label="文库导航">
         <button className={view === 'read' && !pageId && !pageType ? 'is-active' : ''} onClick={() => {
-          setDirectoryOpen(false)
-          setView('read')
-          setPageId(null)
+          openPage(null)
           setPageType('')
           setQuery('')
           setFreshness('')
@@ -288,8 +289,7 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
       <label className="wiki-search"><AppIcon name="search" size={16} /><input aria-label="搜索知识页" placeholder="搜索知识页…" value={query} onChange={(event) => {
           setQuery(event.target.value)
           setPageCursor('')
-          setView('read')
-          setPageId(null)
+          openPage(null)
         }} /></label>
       <details className="wiki-workspace-options">
         <summary>筛选与整理设置{hasFilters && <span> · 已筛选</span>}</summary>
@@ -298,14 +298,12 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
             <select aria-label="页面类型" value={pageType} onChange={(event) => {
               setPageType(event.target.value)
               setPageCursor('')
-              setView('read')
-              setPageId(null)
+              openPage(null)
             }}><option value="">全部类型</option>{['topic', 'decision', 'source-summary', 'question'].map((value) => <option key={value} value={value}>{wikiStatusLabel(value)}</option>)}</select>
             <select aria-label="来源状态" value={freshness} onChange={(event) => {
               setFreshness(event.target.value)
               setPageCursor('')
-              setView('read')
-              setPageId(null)
+              openPage(null)
             }}><option value="">全部状态</option>{['fresh', 'stale', 'missing-source'].map((value) => <option key={value} value={value}>{wikiStatusLabel(value)}</option>)}</select>
           </div>
           <div className="wiki-automation">
@@ -331,21 +329,21 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
     </aside>
 
     <div className="wiki-main">
-      <details className="wiki-recent-changes" open={!pageId}>
+      {view === 'read' && changes.total > 0 && <details className="wiki-recent-changes">
         <summary><span><AppIcon name="sparkles" size={17} />整理后的文档记录</span><small>{changes.total} 次发布 · 点击查看整理内容</small></summary>
         <div className="wiki-change-list">{changes.items.map((item) => <button key={`${item.pageId}-${item.revision}`} className={pageId === item.pageId && pageRevision === item.revision ? 'is-active' : ''} onClick={() => openPage(item.pageId, item.revision)}>
           <strong>{item.title}</strong><span>修订 {item.revision} · {item.sourceCount} 份来源</span><time dateTime={item.createdAt}>{formatWikiTime(item.createdAt)}</time>
         </button>)}</div>
         {!changes.items.length && <p>{overview ? '暂无已发布的整理内容。可从上方选择原始资料开始整理，或查看整理任务。' : '正在读取整理记录…'}</p>}
         {(changeOffset > 0 || changes.nextCursor) && <nav className="wiki-change-pagination" aria-label="整理记录分页"><span>第 {Math.floor(changeOffset / 6) + 1} 页</span><button disabled={changeOffset === 0} onClick={() => setChangeOffset(Math.max(0, changeOffset - 6))}>较新记录</button><button disabled={!changes.nextCursor} onClick={() => setChangeOffset(Number(changes.nextCursor))}>更早记录</button></nav>}
-      </details>
+      </details>}
       {error && <p className="wiki-error wiki-feedback" role="alert">{error}</p>}
       {notice && <p className="wiki-notice wiki-feedback" role="status">{notice}</p>}
       {batchResult && <div className="wiki-feedback" role="status"><strong>批量处理结果：{batchResult.items.length} 份资料</strong><ul>{batchResult.items.map((item) => <li key={item.documentId}>{item.name}：{item.error || wikiStatusLabel(item.status)}</li>)}</ul><p>排队中的任务尚未完成，请在整理任务中查看结果。</p></div>}
       {uploadState && <p className="wiki-feedback" role="status">正在上传：{uploadState.currentFileName}。{wikiAutomationMessage(overview)}</p>}
 
       <div className="wiki-content">
-        {view === 'read' && (pageId ? <WikiPageViewer key={`${pageId}-${pageRevision}`} knowledgeBaseId={knowledgeBaseId} pageId={pageId} initialRevision={pageRevision} showHistory onSaved={() => void act(refresh)} onClose={() => setPageId(null)} /> : <>
+        {view === 'read' && (pageId ? <WikiPageViewer key={`${pageId}-${pageRevision}`} knowledgeBaseId={knowledgeBaseId} pageId={pageId} initialRevision={pageRevision} showHistory onSaved={() => void act(refresh)} onClose={() => openPage(null)} /> : <>
           <div className="wiki-home-heading"><span className="wiki-eyebrow">KNOWLEDGE WIKI</span><h2>{knowledgeBaseName} 的知识文库</h2><p>让零散资料成为相互关联、随时可查的知识。</p></div>
           <div className="wiki-overview-strip"><span><strong>{overview?.counts.pages ?? '—'}</strong> 知识页</span><span><strong>{sourceDocuments.length}</strong> 原始资料</span><span><strong>{overview?.pendingCount ?? '—'}</strong> 待整理</span><span><strong>{overview?.counts.stale ?? '—'}</strong> 来源失效</span></div>
           {!overview && !error && <p className="wiki-loading" role="status">正在读取知识文库…</p>}
@@ -366,8 +364,11 @@ export default function WikiPanel({ knowledgeBaseId, knowledgeBaseName, document
 
         {view === 'sources' && <>
           <div className="wiki-section-heading"><div><span className="wiki-eyebrow">SOURCES</span><h2>原始资料</h2><p>知识的出处都保留在这里。选择已有资料，开始整理成知识页。</p></div><span>{sourceDocuments.length} 份</span></div>
-          <div className="wiki-source-help"><AppIcon name="info" size={20} /><div><strong>{wikiAutomationMessage(overview)}</strong><p>网页上传与 MCP 的 document.upload 共用入库流程。默认开启自动整理，复用设置中保存的第三方聊天模型；未配置时跳过，之后可选择资料补整理，不自动补跑历史资料。</p><p>上传成功不代表整理完成，请在“整理任务”中查看进度。MCP 文本上传需指定当前知识库 ID：<code>{knowledgeBaseId}</code>。</p></div></div>
-          <div className="wiki-toolbar wiki-source-actions"><label className="wiki-search"><AppIcon name="search" size={16} /><input aria-label="搜索原始资料" placeholder="搜索资料名称…" value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} /></label><span>已选 {selected.length} 份</span><button disabled={busy} onClick={() => setSelected(visibleSources.map((doc) => doc.id))}>全选筛选结果</button><button disabled={busy || !selected.length} onClick={() => setSelected([])}>取消选择</button><button className="wiki-primary" disabled={busy || !overview?.enabled || !overview.autoCompileReady || selected.length === 0} onClick={() => void act(() => startBatch(selected))}><AppIcon name="sparkles" size={16} />整理所选资料</button><button disabled={busy || !overview?.enabled || !overview.autoCompileReady || !overview.pendingCount} onClick={() => void act(() => startBatch([]))}>一键整理本库待处理资料</button></div>
+          <div className="wiki-source-help"><AppIcon name="info" size={20} /><div><strong>{wikiAutomationMessage(overview)}</strong><p>选择资料后点击“整理所选资料”，完成情况可在“整理任务”查看。</p><details><summary>上传与接入说明</summary><p>历史资料需手动补整理；上传成功不代表整理完成。通过 MCP 上传文本时指定知识库 ID：<code>{knowledgeBaseId}</code>。</p></details></div></div>
+          <div className="wiki-toolbar wiki-source-actions"><label className="wiki-search"><AppIcon name="search" size={16} /><input aria-label="搜索原始资料" placeholder="搜索资料名称…" value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} /></label><span>已选 {selected.length} 份</span><button disabled={busy || !visibleSources.length} onClick={() => {
+            // 全选只补充当前筛选结果，不丢弃用户在其他筛选下已选的资料。
+            setSelected((current) => [...new Set([...current, ...visibleSources.map((doc) => doc.id)])])
+          }}>全选筛选结果</button><button disabled={busy || !selected.length} onClick={() => setSelected([])}>取消选择</button><button className="wiki-primary" disabled={busy || !overview?.enabled || !overview.autoCompileReady || selected.length === 0} onClick={() => void act(() => startBatch(selected))}><AppIcon name="sparkles" size={16} />整理所选资料</button><button disabled={busy || !overview?.enabled || !overview.autoCompileReady || !overview.pendingCount} onClick={() => void act(() => startBatch([]))}>一键整理本库待处理资料</button></div>
           <div className="wiki-source-list">{visibleSources.map((doc) => {
             const status = overview?.sourceStates?.[doc.id]
             let label = '状态读取中'
