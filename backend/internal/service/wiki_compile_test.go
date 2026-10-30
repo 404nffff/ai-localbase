@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -570,59 +571,74 @@ func TestWikiExtractionKeepsRequestBudget(t *testing.T) {
 	}
 }
 
-// TestWikiModelGateAcrossLibraries 验证两个知识库共享模型名额，等待不计次数，服务关闭能唤醒等待任务。
+// TestWikiModelGateAcrossLibraries 通过六个库的真实 HTTP 请求验证全站五路上限、等待预算、失败释放与关闭唤醒。
 func TestWikiModelGateAcrossLibraries(t *testing.T) {
-	for _, stopWhileWaiting := range []bool{false, true} {
-		name := "serial"
-		if stopWhileWaiting {
-			name = "close"
-		}
+	for _, name := range []string{"success", "upstream_error", "close"} {
 		t.Run(name, func(t *testing.T) {
-			entered := make(chan struct{}, 2)
+			entered := make(chan struct{}, 6)
 			release := make(chan struct{})
 			var releaseOnce sync.Once
+			var active, peak atomic.Int32
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			defer unblock()
 			s, firstKB, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+				current := active.Add(1)
+				defer active.Add(-1)
+				for old := peak.Load(); current > old; old = peak.Load() {
+					if peak.CompareAndSwap(old, current) {
+						break
+					}
+				}
 				entered <- struct{}{}
 				<-release
+				if name == "upstream_error" {
+					return "", http.StatusServiceUnavailable
+				}
 				return `{"pages":[],"issues":[]}`, 200
 			})
-			secondKB, err := s.CreateKnowledgeBase(model.KnowledgeBaseInput{Name: "并发验证"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			secondDoc := doc
-			secondDoc.ID, secondDoc.KnowledgeBaseID = "second-source", secondKB.ID
-			s.AddDocument(secondKB.ID, secondDoc)
-			first, _, err := s.StartWikiJob(firstKB, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "gate-first"})
-			if err != nil {
-				t.Fatal(err)
+			jobs := make([]model.WikiJob, 0, 6)
+			// 前五个请求保持未响应，确保第六个库在所有名额占用时进入队列。
+			for i := 0; i < 6; i++ {
+				kbID := firstKB
+				if i > 0 {
+					kb, err := s.CreateKnowledgeBase(model.KnowledgeBaseInput{Name: fmt.Sprintf("并发验证%d", i)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					kbID = kb.ID
+				}
+				source := doc
+				source.ID, source.KnowledgeBaseID = fmt.Sprintf("gate-source-%d", i), kbID
+				s.AddDocument(kbID, source)
+				job, _, err := s.StartWikiJob(kbID, model.WikiJobRequest{DocumentIDs: []string{source.ID}, RequestKey: source.ID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				jobs = append(jobs, job)
+				if i < 5 {
+					select {
+					case <-entered:
+					case <-time.After(3 * time.Second):
+						t.Fatalf("parallel request %d did not start", i+1)
+					}
+				}
 			}
 			select {
 			case <-entered:
-			case <-time.After(time.Second):
-				t.Fatal("first request did not start")
-			}
-			second, _, err := s.StartWikiJob(secondKB.ID, model.WikiJobRequest{DocumentIDs: []string{secondDoc.ID}, RequestKey: "gate-second"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-entered:
-				t.Fatal("parallel model request escaped shared gate")
+				t.Fatal("sixth model request escaped shared gate")
 			case <-time.After(100 * time.Millisecond):
 			}
-			waiting, _ := s.GetWikiJob(secondKB.ID, second.ID)
-			if waiting.ModelCalls != 0 {
-				t.Fatal("waiting consumed request budget")
+			last := jobs[5]
+			waiting, err := s.GetWikiJob(last.KnowledgeBaseID, last.ID)
+			if err != nil || waiting.Status != "running" || waiting.ModelCalls != 0 || peak.Load() != 5 {
+				t.Fatalf("waiting or concurrency incorrect: %+v, peak=%d, error=%v", waiting, peak.Load(), err)
 			}
-			if stopWhileWaiting {
+			if name == "close" {
 				closed := make(chan struct{})
 				go func() { _ = s.Close(); close(closed) }()
-				second = waitWikiJob(t, s, secondKB.ID, second.ID)
-				if second.Status != "failed" || second.ModelCalls != 0 || !strings.Contains(second.Error, "closing") {
-					t.Fatalf("waiting request did not stop: %+v", second)
+				last = waitWikiJob(t, s, last.KnowledgeBaseID, last.ID)
+				if last.Status != "failed" || last.ModelCalls != 0 || !strings.Contains(last.Error, "closing") {
+					t.Fatalf("waiting request did not stop: %+v", last)
 				}
 				unblock()
 				select {
@@ -632,15 +648,120 @@ func TestWikiModelGateAcrossLibraries(t *testing.T) {
 				}
 			} else {
 				unblock()
-				second = waitWikiJob(t, s, secondKB.ID, second.ID)
-				if second.Status != "succeeded" || second.ModelCalls != 1 {
-					t.Fatalf("queued model request failed: %+v", second)
+			}
+			for i, job := range jobs {
+				finished := waitWikiJob(t, s, job.KnowledgeBaseID, job.ID)
+				expectedStatus, expectedCalls := "succeeded", 1
+				if name == "upstream_error" {
+					expectedStatus = "failed"
+				} else if name == "close" && i == 5 {
+					expectedStatus, expectedCalls = "failed", 0
+				}
+				if finished.Status != expectedStatus || finished.ModelCalls != expectedCalls {
+					t.Fatalf("job did not finish correctly: %+v", finished)
 				}
 			}
-			first = waitWikiJob(t, s, firstKB, first.ID)
-			if first.Status != "succeeded" {
-				t.Fatalf("in-flight request failed: %+v", first)
+			if peak.Load() != 5 {
+				t.Fatalf("concurrency limit changed while releasing slots: %d", peak.Load())
 			}
 		})
+	}
+}
+
+// TestWikiSameLibraryRemainsSerial 验证全站还有空闲名额时，同库第二份资料仍等待第一份完成发布。
+func TestWikiSameLibraryRemainsSerial(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	s, kbID, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+		entered <- struct{}{}
+		<-release
+		return `{"pages":[],"issues":[]}`, http.StatusOK
+	})
+	first, _, err := s.StartWikiJob(kbID, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "same-library-first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first request did not start")
+	}
+	secondDoc := doc
+	secondDoc.ID = "same-library-second-source"
+	s.AddDocument(kbID, secondDoc)
+	second, _, err := s.StartWikiJob(kbID, model.WikiJobRequest{DocumentIDs: []string{secondDoc.ID}, RequestKey: "same-library-second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+		t.Fatal("same-library jobs ran concurrently")
+	case <-time.After(100 * time.Millisecond):
+	}
+	waiting, err := s.GetWikiJob(kbID, second.ID)
+	if err != nil || waiting.Status != "queued" || waiting.ModelCalls != 0 {
+		t.Fatalf("same-library job did not remain queued: %+v, %v", waiting, err)
+	}
+	unblock()
+	for _, job := range []model.WikiJob{first, second} {
+		finished := waitWikiJob(t, s, kbID, job.ID)
+		if finished.Status != "succeeded" || finished.ModelCalls != 1 {
+			t.Fatalf("same-library job failed after release: %+v", finished)
+		}
+	}
+}
+
+// TestWikiRecoveryReusesQueuedSources 验证恢复直接复用已排队任务，同时仍为漏建任务的待整理资料补入队。
+func TestWikiRecoveryReusesQueuedSources(t *testing.T) {
+	s, kbID, doc := wikiFixture(t, func(model.ChatCompletionRequest) (string, int) {
+		t.Error("recovery fixture must not call the model")
+		return "", http.StatusInternalServerError
+	})
+	// 只验证持久队列恢复，关闭消费者以便精确检查排队结果。
+	s.wikiRunMu.Lock()
+	s.wikiClosed = true
+	s.wikiRunMu.Unlock()
+	queued, _, err := s.StartWikiJob(kbID, model.WikiJobRequest{DocumentIDs: []string{doc.ID}, RequestKey: "recovery-queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.GetDocument(kbID, doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.ID = "recovery-pending-source"
+	pending.Path = filepath.Join(t.TempDir(), "pending.md")
+	if err := os.WriteFile(pending.Path, []byte("退款期限为七天。"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.commitWikiChange(kbID, func(kb *model.KnowledgeBase) error {
+		kb.Documents = append(kb.Documents, pending)
+		kb.Wiki.PendingSources[pending.ID] = pending.ContentChecksum
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 已排队任务绑定原版本；磁盘外部变化应留给执行阶段校验，恢复不得重新入库或创建另一任务。
+	if err := os.WriteFile(doc.Path, []byte("资料已被外部改动。"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.recoverWikiJobs()
+	kb, err := s.WikiSnapshot(kbID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kb.Wiki.Jobs) != 2 {
+		t.Fatalf("queued source duplicated or missing source not enqueued: %+v", kb.Wiki.Jobs)
+	}
+	for _, job := range kb.Wiki.Jobs {
+		if job.Status != "queued" || job.Attempt != 0 || job.ModelCalls != 0 {
+			t.Fatalf("recovery executed or changed pending task: %+v", job)
+		}
+		if job.ID != queued.ID && (len(job.DocumentIDs) != 1 || job.DocumentIDs[0] != pending.ID) {
+			t.Fatalf("recovery created an unrelated task: %+v", job)
+		}
 	}
 }

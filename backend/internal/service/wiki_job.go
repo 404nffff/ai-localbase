@@ -342,7 +342,13 @@ func (s *AppService) recoverWikiJobs() {
 		}
 		if kb.Wiki.Enabled {
 			s.scheduleWikiJobs(kb.ID)
+			// 已持久排队的同版本资料由消费者直接恢复，避免启动时逐份重复读取和保存全站状态。
+			// 快照中的 running 已在上方转成 interrupted；它和已有失败都保留显式重试，不重复入队。
+			states := wikiSourceStates(kb)
 			for _, document := range kb.Documents {
+				if states[document.ID] == "queued" || states[document.ID] == "running" || states[document.ID] == "failed" {
+					continue
+				}
 				if kb.Wiki.PendingSources[document.ID] != "" {
 					s.enqueueWikiSource(document)
 				}

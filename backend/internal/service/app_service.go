@@ -34,6 +34,9 @@ const (
 
 	lowConfidenceTopScoreThreshold = 0.22
 	lowConfidenceAvgScoreThreshold = 0.18
+
+	// wikiModelConcurrency 限制当前进程全站 Wiki 同时请求模型的数量，同库任务仍串行。
+	wikiModelConcurrency = 5
 )
 
 type AppService struct {
@@ -60,8 +63,8 @@ type AppService struct {
 	wikiRunning map[string]bool
 	wikiClosed  bool
 	wikiWorkers sync.WaitGroup
-	// ponytail: 当前服务的Wiki共用一个名额；多实例部署时需重新评估跨实例并发。
-	wikiModelGate chan struct{} // 容量1，仅限制Wiki调用，不限制普通聊天或外部客户端。
+	// ponytail: 当前进程的 Wiki 共用五个名额；多实例部署时需重新评估跨实例并发。
+	wikiModelGate chan struct{} // 容量由 wikiModelConcurrency 指定，不限制普通聊天或外部客户端。
 	wikiStop      chan struct{} // 关闭时广播，唤醒等待模型名额的任务。
 }
 
@@ -371,7 +374,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 		staging:       NewUploadStagingService(stagingDir),
 		jobs:          map[string]*indexJobState{},
 		serverConfig:  serverConfig,
-		wikiModelGate: make(chan struct{}, 1),
+		wikiModelGate: make(chan struct{}, wikiModelConcurrency),
 		wikiStop:      make(chan struct{}),
 	}
 	service.rag.SetQdrantService(qdrant)
@@ -443,6 +446,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if err := service.saveState(); err != nil {
 		log.Printf("failed to persist app state during startup: %v", err)
 	}
+	log.Printf("wiki model concurrency limit=%d", cap(service.wikiModelGate))
 	service.recoverWikiJobs()
 
 	return service

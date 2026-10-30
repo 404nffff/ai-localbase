@@ -41,7 +41,7 @@ func (s *AppService) wikiModelText(job *model.WikiJob, config model.ChatModelCon
 	if job.ModelCalls >= max(32, job.ModelCallLimit) {
 		return "", &WikiError{422, "needs_split", "model request budget exhausted"}
 	}
-	// 多库自动任务也必须串行调用模型；等待名额不消耗单次请求时限和累计调用次数。
+	// 多库任务共用五个模型名额；等待名额不消耗单次请求时限和累计调用次数。
 	select {
 	case s.wikiModelGate <- struct{}{}:
 		defer func() { <-s.wikiModelGate }()
