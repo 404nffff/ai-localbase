@@ -6,6 +6,11 @@ import { fetchWikiChanges, fetchWikiPageForEdit, setApiAccessToken, wikiRequest 
 afterEach(() => { vi.unstubAllGlobals(); setApiAccessToken('') })
 
 describe('知识页工作区', () => {
+  it('旧读取错误不猜测原因，新记录保留具体超时和连接中断信息', () => {
+    expect(wikiFailureMessage('configured chat model failed: failed to read model response')).toContain('未保存具体原因')
+    expect(wikiFailureMessage('configured chat model failed: 读取模型响应失败（HTTP 200）: unexpected EOF')).toBe('模型调用失败：读取模型响应失败（HTTP 200）: unexpected EOF')
+    expect(wikiFailureMessage('configured chat model failed: 模型响应超时：context deadline exceeded')).toContain('context deadline exceeded')
+  })
   it('编辑读取完整 Unicode 正文并固定后续分页修订', async () => {
     const page = { pageId: 'page-1', title: '知识页', revision: 3, totalChars: 4 }
     const fetchMock = vi.fn()

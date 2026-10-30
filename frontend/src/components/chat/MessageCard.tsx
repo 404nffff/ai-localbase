@@ -23,7 +23,7 @@ const formatTime = (value: string) =>
     minute: '2-digit',
   })
 
-// 消息卡片保留 Wiki 原始引文入口，普通文档引用通过真实分块定位。
+/** 消息卡片按库、知识页和修订合并跳转入口，完整引文仍由知识页阅读器展示。 */
 const MessageCard = ({
   message,
   isStreamingPlaceholder,
@@ -38,6 +38,7 @@ const MessageCard = ({
   const [captureFeedback, setCaptureFeedback] = useState('')
   const [captureError, setCaptureError] = useState(false)
   const [wikiSource, setWikiSource] = useState<{ knowledgeBaseId: string; pageId: string; revision: number } | null>(null)
+  const [showAllSources, setShowAllSources] = useState(false)
   /** 沉淀动作等待服务端接受任务，失败不显示成功反馈。 */
   async function capture() {
     if (!onCaptureMessage) return
@@ -58,6 +59,22 @@ const MessageCard = ({
       ? message.metadata
       : null
   const sources = message.role === 'assistant' ? message.metadata?.sources ?? [] : []
+  // 原始引文也带 pageId；不能将每条引文渲染成同一个知识页按钮。
+  const wikiSources = new Map<string, { knowledgeBaseId: string; pageId: string; revision: number; title: string }>()
+  for (const source of sources) {
+    if (!source.pageId || !source.knowledgeBaseId) continue
+    const revision = Number(source.wikiRevision) || 0
+    const key = JSON.stringify([source.knowledgeBaseId, source.pageId, revision])
+    const existing = wikiSources.get(key)
+    const pageTitle = source.documentId === source.pageId ? source.documentName : ''
+    wikiSources.set(key, {
+      knowledgeBaseId: source.knowledgeBaseId,
+      pageId: source.pageId,
+      revision,
+      title: pageTitle || existing?.title || `知识页 ${source.pageId}`,
+    })
+  }
+  const visibleWikiSources = [...wikiSources.entries()].slice(0, showAllSources ? undefined : 3)
   const hasContent = message.content.trim().length > 0
 
   if (!hasContent && !degradedMetadata && !isStreamingPlaceholder) {
@@ -155,13 +172,18 @@ const MessageCard = ({
           <>
             <MarkdownRenderer content={message.content} />
             <MessageCitations metadata={message.metadata} />
-            {sources.length > 0 && (
-              <div className="message-sources">
-                <span>来源</span>
-                {sources.filter((source) => source.pageId).map((source, index) => (
-                  source.pageId && source.knowledgeBaseId ? <button type="button" key={`${source.documentId}-${index}`} onClick={() => setWikiSource({ knowledgeBaseId: source.knowledgeBaseId ?? '', pageId: source.pageId ?? '', revision: Number(source.wikiRevision) || 0 })}>{source.documentName || source.documentId} · 查看知识页与来源</button> : <em key={`${source.documentId}-${index}`}>{source.documentName || source.documentId}</em>
-                ))}
-              </div>
+            {wikiSources.size > 0 && (
+              <section className="message-wiki-sources" aria-label="知识页来源">
+                <div className="message-wiki-sources-heading"><AppIcon name="book" size={14} /><span>知识页来源 · {wikiSources.size}</span></div>
+                <div className="message-wiki-source-list">
+                  {visibleWikiSources.map(([key, source]) => (
+                    <button type="button" key={key} onClick={() => setWikiSource(source)}>
+                      <span>{source.title}</span><small>修订 {source.revision || '当前'} · 查看原文依据</small><AppIcon name="chevronRight" size={14} />
+                    </button>
+                  ))}
+                </div>
+                {wikiSources.size > 3 && <button type="button" className="message-wiki-sources-toggle" aria-expanded={showAllSources} onClick={() => setShowAllSources(!showAllSources)}>{showAllSources ? '收起来源' : `展开其余 ${wikiSources.size - 3} 个来源`}</button>}
+              </section>
             )}
           </>
         ) : (

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -160,6 +161,7 @@ func (s *LLMService) StreamChat(req model.ChatCompletionRequest, onChunk func(st
 
 // ── OpenAI-compatible implementation ─────────────────────────────────────────
 
+// openAIChat 请求完整聊天结果；读取失败保留错误链，供超时判断和有限重试使用。
 func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
 	payload := openAIChatRequest{
 		Model:    cfg.Model,
@@ -175,7 +177,10 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 		return model.ChatCompletionResponse{}, fmt.Errorf("failed to encode chat request")
 	}
 
-	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	endpoint, err := openAIEndpoint(cfg.BaseURL, "chat/completions")
+	if err != nil {
+		return model.ChatCompletionResponse{}, err
+	}
 	var result model.ChatCompletionResponse
 	// Wiki 的一次业务尝试对应一次模型请求，避免与任务重试相乘。
 	attempts := 3
@@ -201,16 +206,19 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("failed to read model response")
+			return fmt.Errorf("读取模型响应失败（HTTP %d）: %w", resp.StatusCode, err)
 		}
 
 		var llmResp openAIChatResponse
 		if err := json.Unmarshal(respBody, &llmResp); err != nil {
+			if resp.StatusCode >= http.StatusBadRequest {
+				return modelHTTPError{statusCode: resp.StatusCode, error: formatUpstreamResponseError(respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))}
+			}
 			return formatUpstreamResponseError(respBody, "invalid model response format")
 		}
 
 		if resp.StatusCode >= http.StatusBadRequest {
-			return formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
+			return modelHTTPError{statusCode: resp.StatusCode, error: formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))}
 		}
 
 		if len(llmResp.Choices) == 0 {
@@ -230,6 +238,7 @@ func (s *LLMService) openAIChat(ctx context.Context, cfg model.ChatModelConfig, 
 	return result, err
 }
 
+// openAIStreamChat 使用与普通聊天一致的地址规则，逐段转发模型输出。
 func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest, onChunk func(string) error) error {
 	payload := openAIChatStreamRequest{
 		Model:    cfg.Model,
@@ -245,7 +254,10 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 		return fmt.Errorf("failed to encode chat request")
 	}
 
-	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	endpoint, err := openAIEndpoint(cfg.BaseURL, "chat/completions")
+	if err != nil {
+		return err
+	}
 	return retryModelCall(ctx, 2, 200*time.Millisecond, func() error {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -271,10 +283,10 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 			var llmResp openAIChatResponse
 			if err := json.Unmarshal(respBody, &llmResp); err == nil {
-				return formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
+				return modelHTTPError{statusCode: resp.StatusCode, error: formatStructuredUpstreamError(llmResp.Error, respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))}
 			}
 
-			return formatUpstreamResponseError(respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))
+			return modelHTTPError{statusCode: resp.StatusCode, error: formatUpstreamResponseError(respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))}
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
@@ -326,6 +338,7 @@ func (s *LLMService) openAIStreamChat(ctx context.Context, cfg model.ChatModelCo
 
 // ── Ollama native implementation ──────────────────────────────────────────────
 
+// ollamaChat 调用 Ollama 原生接口，保留正文读取错误以识别超时和连接中断。
 func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
 	payload := ollamaChatRequest{
 		Model:    cfg.Model,
@@ -363,17 +376,20 @@ func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, 
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("failed to read model response")
+			return fmt.Errorf("读取模型响应失败（HTTP %d）: %w", resp.StatusCode, err)
 		}
 
 		var ollamaResp ollamaChatResponse
 		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
+			if resp.StatusCode >= http.StatusBadRequest {
+				return modelHTTPError{statusCode: resp.StatusCode, error: formatUpstreamResponseError(respBody, fmt.Sprintf("model api error: http %d", resp.StatusCode))}
+			}
 			return fmt.Errorf("invalid model response format")
 		}
 
 		if resp.StatusCode >= http.StatusBadRequest {
 			if strings.TrimSpace(ollamaResp.Error) != "" {
-				return fmt.Errorf("model api error: %s", ollamaResp.Error)
+				return modelHTTPError{statusCode: resp.StatusCode, error: fmt.Errorf("model api error: %s", ollamaResp.Error)}
 			}
 			return fmt.Errorf("model api error: http %d", resp.StatusCode)
 		}
@@ -398,6 +414,7 @@ func (s *LLMService) ollamaChat(ctx context.Context, cfg model.ChatModelConfig, 
 	return result, err
 }
 
+// ollamaStreamChat 转发原生流式结果；HTTP 失败保留状态码，避免错误文案改变重试分类。
 func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelConfig, req model.ChatCompletionRequest, onChunk func(string) error) error {
 	payload := ollamaChatRequest{
 		Model:    cfg.Model,
@@ -434,7 +451,7 @@ func (s *LLMService) ollamaStreamChat(ctx context.Context, cfg model.ChatModelCo
 			}
 			var ollamaResp ollamaChatResponse
 			if err := json.Unmarshal(respBody, &ollamaResp); err == nil && strings.TrimSpace(ollamaResp.Error) != "" {
-				return fmt.Errorf("model api error: %s", ollamaResp.Error)
+				return modelHTTPError{statusCode: resp.StatusCode, error: fmt.Errorf("model api error: %s", ollamaResp.Error)}
 			}
 			return fmt.Errorf("model api error: http %d", resp.StatusCode)
 		}
@@ -529,12 +546,23 @@ func (e stopRetryError) Unwrap() error {
 	return e.err
 }
 
+// isRetryableModelError 仅允许瞬时网络失败重试；已取消或耗尽时限的请求立即结束。
 func isRetryableModelError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
+	}
+	// 状态码优先于上游文案；限流和网关瞬时失败可重试，401 即使提到 timeout 也立即停止。
+	var httpErr modelHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.statusCode == http.StatusTooManyRequests || httpErr.statusCode == http.StatusBadGateway ||
+			httpErr.statusCode == http.StatusServiceUnavailable || httpErr.statusCode == http.StatusGatewayTimeout
+	}
+	// HTTP 正文提前断开可以重新请求完整结果，绝不把残缺内容当成成功。
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	if strings.Contains(message, "model not found") ||
@@ -559,6 +587,7 @@ func isRetryableModelError(err error) bool {
 	return false
 }
 
+// describeModelError 保留故障阶段和底层原因，远程模型与本地模型使用中性提示。
 func describeModelError(err error) string {
 	if err == nil {
 		return ""
@@ -567,7 +596,7 @@ func describeModelError(err error) string {
 		return "本地模型当前繁忙，系统已启用降级回复"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "本地模型响应超时，请稍后重试或切换更轻量模型"
+		return fmt.Sprintf("模型响应超时，请检查模型服务或调整对应请求时限：%v", err)
 	}
 	if errors.Is(err, context.Canceled) {
 		return "请求已取消"
@@ -672,4 +701,32 @@ func newLLMServiceWithTimeout(requestTimeout, headerTimeout time.Duration) *LLMS
 			Transport: transport.Clone(),
 		},
 	}
+}
+
+// openAIEndpoint 为服务根地址补 /v1，保留显式版本、自定义前缀及查询参数。
+// 已填写完整目标端点时不重复追加；Ollama 原生接口不使用此规则。
+func openAIEndpoint(baseURL, resource string) (string, error) {
+	base, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("模型服务地址格式无效")
+	}
+	path := strings.TrimRight(base.Path, "/")
+	if strings.HasSuffix(path, "/"+resource) {
+		return base.JoinPath(".").String(), nil
+	}
+	if path == "" {
+		return base.JoinPath("v1", resource).String(), nil
+	}
+	return base.JoinPath(resource).String(), nil
+}
+
+// modelHTTPError 保留响应状态用于重试分类，同时保持原有上游错误文案。
+type modelHTTPError struct {
+	statusCode int // 上游实际 HTTP 状态，不从响应文案猜测。
+	error          // 已解析的上游错误，沿用既有展示契约。
+}
+
+// Unwrap 保留底层错误链，供取消与超时判断使用。
+func (e modelHTTPError) Unwrap() error {
+	return e.error
 }

@@ -448,6 +448,8 @@ export interface WikiLibraryProgress {
 
 /** 全库汇总与指定库的任务分页，统计不受筛选和分页限制。 */
 export interface WikiProgressResponse {
+  /** 当前全站队列设置，不随库筛选或分页改变。 */
+  queue: WikiQueueSettings
   items: WikiLibraryProgress[]
   autoCompileReady: boolean
   jobs: WikiList<WikiJob>
@@ -466,4 +468,22 @@ export interface WikiRetryBatchResult {
   skipped: number
   remaining: number
   failures: Array<{ jobId: string; error: string }>
+}
+
+/** 全站队列设置：暂停保留任务，并发数限制同时整理数量。 */
+export interface WikiQueueSettings {
+  /** 停止领取新任务，已领取任务继续完成。 */
+  paused: boolean
+  /** 同时整理任务数，范围1–20，同库仍串行。 */
+  concurrency: number
+}
+
+/** 局部更新队列控制，未提交字段保留；保存失败保留服务端错误。 */
+export async function updateWikiQueue(settings: Partial<WikiQueueSettings>): Promise<WikiQueueSettings> {
+  const response = await ensureOk(await apiFetch('/api/wiki/queue', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  }))
+  return response.json() as Promise<WikiQueueSettings>
 }

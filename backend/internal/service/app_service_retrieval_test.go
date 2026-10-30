@@ -71,8 +71,8 @@ func TestRerankCandidatesBoostsKeywordCoverage(t *testing.T) {
 
 	service := &AppService{}
 	ranked := service.rerankCandidates(context.Background(), candidates, query)
-	if len(ranked) != len(candidates) {
-		t.Fatalf("expected ranked size %d, got %d", len(candidates), len(ranked))
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 relevant candidates, got %d", len(ranked))
 	}
 	if ranked[0].DocumentID != "doc-whu" {
 		t.Fatalf("expected keyword-related doc to rank first, got %s", ranked[0].DocumentID)

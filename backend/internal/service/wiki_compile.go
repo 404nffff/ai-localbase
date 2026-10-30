@@ -41,14 +41,7 @@ func (s *AppService) wikiModelText(job *model.WikiJob, config model.ChatModelCon
 	if job.ModelCalls >= max(32, job.ModelCallLimit) {
 		return "", &WikiError{422, "needs_split", "model request budget exhausted"}
 	}
-	// 多库任务共用五个模型名额；等待名额不消耗单次请求时限和累计调用次数。
-	select {
-	case s.wikiModelGate <- struct{}{}:
-		defer func() { <-s.wikiModelGate }()
-	case <-s.wikiStop:
-		return "", fmt.Errorf("wiki service is closing")
-	}
-	// 关闭和名额释放可能同时发生，拿到名额后仍需确认服务未关闭。
+	// 任务领取阶段已限制并发；运行中任务在暂停时继续，服务关闭时停止后续模型调用。
 	select {
 	case <-s.wikiStop:
 		return "", fmt.Errorf("wiki service is closing")
@@ -271,7 +264,7 @@ func (s *AppService) indexWikiPage(kbID, pageID string) (model.Document, error) 
 		return document, err
 	}
 	chunks := s.rag.BuildDocumentChunks(document, string(body))
-	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
+	vectors, err := s.rag.EmbedTextsFresh(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
 	if err == nil {
 		err = s.upsertDocumentChunks(kbID, chunks, vectors)
 	}

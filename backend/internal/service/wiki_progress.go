@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -185,6 +186,7 @@ func (s *AppService) WikiProgress(kbID, status string, offset, limit int) (map[s
 	}
 	return map[string]any{
 		"items":            libraries,
+		"queue":            s.state.Config.Wiki.Queue,
 		"autoCompileReady": wikiAutoCompileReady(s.state.Config.Chat),
 		"jobs":             map[string]any{"items": jobs[start:end], "total": total, "nextCursor": nextCursor},
 	}, nil
@@ -204,4 +206,41 @@ func wikiJobSourceNames(job model.WikiJob, documents []model.Document) []string 
 		names = append(names, name)
 	}
 	return names
+}
+
+// UpdateWikiQueue 保存队列控制后唤醒等待者；暂停不取消已领取任务，降低限额等待现有任务自然结束。
+// 与任务领取共用wikiRunMu，保存失败不改变内存配置或运行条件。
+func (s *AppService) UpdateWikiQueue(req model.WikiQueueUpdate) (model.WikiQueueSettings, error) {
+	if req.Paused == nil && req.Concurrency == nil {
+		return model.WikiQueueSettings{}, &WikiError{400, "invalid_queue", "请提交停止状态或同时整理数量"}
+	}
+	if req.Concurrency != nil && (*req.Concurrency < 1 || *req.Concurrency > 20) {
+		return model.WikiQueueSettings{}, &WikiError{400, "invalid_concurrency", "同时整理数量需要在1到20之间"}
+	}
+	s.wikiRunMu.Lock()
+	defer s.wikiRunMu.Unlock()
+	if s.wikiClosed {
+		return model.WikiQueueSettings{}, &WikiError{409, "closing", "整理服务正在关闭"}
+	}
+	s.stateSaveMu.Lock()
+	defer s.stateSaveMu.Unlock()
+	s.state.Mu.Lock()
+	defer s.state.Mu.Unlock()
+
+	next := s.state.Config
+	if req.Paused != nil {
+		next.Wiki.Queue.Paused = *req.Paused
+	}
+	if req.Concurrency != nil {
+		next.Wiki.Queue.Concurrency = *req.Concurrency
+	}
+	if s.store != nil {
+		if err := s.store.Save(persistentAppState{Config: next, KnowledgeBases: s.state.KnowledgeBases}); err != nil {
+			return model.WikiQueueSettings{}, fmt.Errorf("保存整理队列设置失败：%w", err)
+		}
+	}
+	s.state.Config = next
+	close(s.wikiQueueChanged)
+	s.wikiQueueChanged = make(chan struct{})
+	return next.Wiki.Queue, nil
 }

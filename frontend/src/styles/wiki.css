@@ -171,7 +171,17 @@
 .wiki-source pre { white-space: pre-wrap; max-height: 480px; overflow: auto; padding: 16px; background: var(--bg-secondary, #f4f7f5); font-size: 13px; }
 .message > .wiki-reader { order: 3; width: 100%; box-sizing: border-box; }
 .message > .wiki-capture-feedback { order: 4; }
-.message-sources button { font: inherit; color: var(--color-primary, #087d76); background: transparent; border: 0; padding: 2px 5px; text-decoration: underline; cursor: pointer; }
+/* 来源按知识页聚合，标题和操作分层显示；窄屏长标题换行，不挤出消息区域。 */
+.message-wiki-sources { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color); font-size: 12px; }
+.message-wiki-sources-heading { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); margin-bottom: 8px; }
+.message-wiki-source-list { display: grid; gap: 6px; }
+.message-wiki-source-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; width: 100%; padding: 10px 12px; text-align: left; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font: inherit; cursor: pointer; }
+.message-wiki-source-list > button > span { overflow-wrap: anywhere; }
+.message-wiki-source-list > button > small { grid-column: 1; color: var(--text-secondary); font-size: 11px; }
+.message-wiki-source-list > button > svg { grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--color-primary); }
+.message-wiki-source-list > button:hover { background: var(--bg-secondary); border-color: var(--color-primary); }
+.message-wiki-sources-toggle { margin-top: 8px; padding: 4px 0; border: 0; background: transparent; font: inherit; color: var(--color-primary); cursor: pointer; }
+.message-wiki-sources button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 /* 单库和总进度共用任务卡片，阶段与来源覆盖分别表达，不虚构执行百分比。 */
 .wiki-job-list { display: grid; gap: 24px; }

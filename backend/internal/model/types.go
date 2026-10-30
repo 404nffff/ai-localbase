@@ -66,6 +66,8 @@ type AppConfig struct {
 type WikiConfig struct {
 	// ModelTimeoutSeconds 是每次模型调用的上限，不含任务排队时间，范围 30–1800 秒。
 	ModelTimeoutSeconds int `json:"modelTimeoutSeconds"`
+	// Queue 为全站整理队列控制，仅由专用队列接口修改。
+	Queue WikiQueueSettings `json:"queue"`
 }
 
 // DefaultWikiModelTimeoutSeconds 用于新安装及缺少 Wiki 配置的旧状态。
@@ -580,4 +582,16 @@ type IndexJob struct {
 	Items           []IndexJobItem `json:"items,omitempty"`
 	CreatedAt       string         `json:"createdAt"`
 	UpdatedAt       string         `json:"updatedAt"`
+}
+
+// WikiQueueSettings 是当前进程的全站任务限额；暂停保留队列并允许已领取任务结束。
+type WikiQueueSettings struct {
+	Paused      bool `json:"paused"`      // 是否停止领取新任务，不取消运行中任务。
+	Concurrency int  `json:"concurrency"` // 同时执行任务数，范围1–20；同库仍串行。
+}
+
+// WikiQueueUpdate 仅修改明确提交的字段，避免暂停按钮覆盖另一用户保存的并发数。
+type WikiQueueUpdate struct {
+	Paused      *bool `json:"paused"`      // 省略时保留当前暂停状态。
+	Concurrency *int  `json:"concurrency"` // 省略时保留当前并发上限。
 }

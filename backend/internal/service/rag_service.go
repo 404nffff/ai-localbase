@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -16,7 +15,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"ai-localbase/internal/model"
 	"ai-localbase/internal/util"
@@ -237,71 +235,61 @@ func (s *RagService) BuildDocumentChunks(document model.Document, text string) [
 	return chunks
 }
 
+// EmbedTexts 按批复用已校验的模型向量；缺失或失效缓存重新请求模型，任一批失败直接返回错误。
 func (s *RagService) EmbedTexts(ctx context.Context, cfg model.EmbeddingModelConfig, texts []string, vectorSize int) ([][]float64, error) {
 	trimmed := make([]string, 0, len(texts))
 	for _, text := range texts {
-		value := strings.TrimSpace(text)
-		if value != "" {
+		if value := strings.TrimSpace(text); value != "" {
 			trimmed = append(trimmed, value)
 		}
 	}
-	if len(trimmed) == 0 {
-		return nil, nil
-	}
-
 	all := make([][]float64, 0, len(trimmed))
-	useFallback := false
 	for i := 0; i < len(trimmed); i += embeddingBatchSize {
-		end := i + embeddingBatchSize
-		if end > len(trimmed) {
-			end = len(trimmed)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		end := minInt(i+embeddingBatchSize, len(trimmed))
 		batch := trimmed[i:end]
-		if !useFallback {
-			// Check cache first; only call API for uncached texts.
-			batchVectors := make([][]float64, len(batch))
-			uncachedIdx := make([]int, 0, len(batch))
-			uncachedTexts := make([]string, 0, len(batch))
-			for j, text := range batch {
-				key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
-				if cached := s.cache.Get(key); cached != nil {
+		batchVectors := make([][]float64, len(batch))
+		uncachedIdx := make([]int, 0, len(batch))
+		uncachedTexts := make([]string, 0, len(batch))
+		for j, text := range batch {
+			key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
+			cached := s.cache.Get(key)
+			if cached != nil {
+				if _, err := normalizeEmbeddings([][]float64{cached}, vectorSize); err == nil {
 					batchVectors[j] = cached
-				} else {
-					uncachedIdx = append(uncachedIdx, j)
-					uncachedTexts = append(uncachedTexts, text)
+					continue
 				}
 			}
-			if len(uncachedTexts) > 0 {
-				embeddings, err := s.requestEmbeddings(ctx, cfg, uncachedTexts)
-				if err == nil && len(embeddings) == len(uncachedTexts) {
-					normed, err := normalizeEmbeddings(embeddings, vectorSize)
-					if err != nil {
-						return nil, err
-					}
-					for k, idx := range uncachedIdx {
-						batchVectors[idx] = normed[k]
-						key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, batch[idx])
-						s.cache.Set(key, normed[k])
-					}
-				} else if err == nil {
-					return nil, fmt.Errorf("embeddings api returned %d vectors for %d texts", len(embeddings), len(uncachedTexts))
-				} else {
-					// first failure: fall back to deterministic for remaining batches
-					useFallback = true
-				}
+			uncachedIdx = append(uncachedIdx, j)
+			uncachedTexts = append(uncachedTexts, text)
+		}
+		if len(uncachedTexts) > 0 {
+			embeddings, err := s.requestEmbeddings(ctx, cfg, uncachedTexts)
+			if err != nil {
+				return nil, fmt.Errorf("生成向量失败，请检查 Embedding 模型配置与服务：%w", err)
 			}
-			if !useFallback {
-				all = append(all, batchVectors...)
-				continue
+			if len(embeddings) != len(uncachedTexts) {
+				return nil, fmt.Errorf("embeddings api returned %d vectors for %d texts", len(embeddings), len(uncachedTexts))
+			}
+			validated, err := normalizeEmbeddings(embeddings, vectorSize)
+			if err != nil {
+				return nil, err
+			}
+			for k, idx := range uncachedIdx {
+				batchVectors[idx] = validated[k]
+				key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, batch[idx])
+				s.cache.Set(key, validated[k])
 			}
 		}
-		for _, text := range batch {
-			all = append(all, deterministicEmbedding(text, vectorSize))
-		}
+		all = append(all, batchVectors...)
 	}
 	return all, nil
 }
 
+// BuildContext 保留不同检索分块，按知识页、修订及完整引文去重重复来源。
+// 同一知识页多个分块共享来源时只注入一次证据，不合并不同引文或不同版本。
 func (s *RagService) BuildContext(chunks []RetrievedChunk) (string, []map[string]string) {
 	if len(chunks) == 0 {
 		return "", nil
@@ -309,6 +297,7 @@ func (s *RagService) BuildContext(chunks []RetrievedChunk) (string, []map[string
 
 	lines := make([]string, 0, len(chunks))
 	sources := make([]map[string]string, 0, len(chunks))
+	seenRefs := make(map[[7]string]bool)
 	for _, chunk := range chunks {
 		lines = append(lines, fmt.Sprintf("[%s#%d] %s", chunk.DocumentName, chunk.Index+1, chunk.Text))
 		sources = append(sources, map[string]string{
@@ -327,6 +316,11 @@ func (s *RagService) BuildContext(chunks []RetrievedChunk) (string, []map[string
 			source := sources[len(sources)-1]
 			source["pageId"], source["wikiRevision"] = chunk.DocumentID, fmt.Sprint(chunk.WikiRevision)
 			for _, ref := range chunk.SourceRefs {
+				key := [7]string{chunk.KnowledgeBaseID, chunk.DocumentID, fmt.Sprint(chunk.WikiRevision), ref.DocumentID, ref.Checksum, ref.Anchor, ref.Quote}
+				if seenRefs[key] {
+					continue
+				}
+				seenRefs[key] = true
 				lines = append(lines, fmt.Sprintf("[原始证据 %s] %s", ref.DocumentID, ref.Quote))
 				sources = append(sources, map[string]string{"knowledgeBaseId": chunk.KnowledgeBaseID, "documentId": ref.DocumentID, "sourceChecksum": ref.Checksum, "quote": ref.Quote, "anchor": ref.Anchor, "pageId": chunk.DocumentID, "wikiRevision": fmt.Sprint(chunk.WikiRevision), "kind": "source"})
 			}
@@ -609,6 +603,7 @@ func (s *RagService) requestOllamaEmbeddings(ctx context.Context, cfg model.Embe
 	return ollamaResp.Embeddings, nil
 }
 
+// requestOpenAIEmbeddings 与聊天共用地址补全规则，调用方仍负责向量维度校验。
 func (s *RagService) requestOpenAIEmbeddings(ctx context.Context, cfg model.EmbeddingModelConfig, baseURL, modelName string, texts []string) ([][]float64, error) {
 	payload, err := json.Marshal(openAIEmbeddingRequest{
 		Model: modelName,
@@ -618,7 +613,11 @@ func (s *RagService) requestOpenAIEmbeddings(ctx context.Context, cfg model.Embe
 		return nil, fmt.Errorf("marshal embedding request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/embeddings", bytes.NewReader(payload))
+	endpoint, err := openAIEndpoint(baseURL, "embeddings")
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("create embedding request: %w", err)
 	}
@@ -678,6 +677,7 @@ func normalizeChunkText(text string) string {
 	return strings.TrimSpace(strings.Join(cleanedLines, "\n"))
 }
 
+// normalizeEmbeddings 校验模型输出可写入 float32 向量存储，拒绝零向量及非法数值。
 func normalizeEmbeddings(vectors [][]float64, vectorSize int) ([][]float64, error) {
 	if vectorSize <= 0 {
 		return nil, fmt.Errorf("invalid target embedding dimension: %d", vectorSize)
@@ -687,31 +687,21 @@ func normalizeEmbeddings(vectors [][]float64, vectorSize int) ([][]float64, erro
 		if len(vector) != vectorSize {
 			return nil, fmt.Errorf("embedding dimension mismatch at index %d: expected %d, got %d", index, vectorSize, len(vector))
 		}
+		nonzero := false
+		for _, value := range vector {
+			if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > math.MaxFloat32 {
+				return nil, fmt.Errorf("invalid embedding value at index %d", index)
+			}
+			if float32(value) != 0 {
+				nonzero = true
+			}
+		}
+		if !nonzero {
+			return nil, fmt.Errorf("zero embedding vector at index %d", index)
+		}
 		normalized = append(normalized, vector)
 	}
 	return normalized, nil
-}
-
-func deterministicEmbedding(text string, vectorSize int) []float64 {
-	if vectorSize <= 0 {
-		vectorSize = 768
-	}
-
-	vector := make([]float64, vectorSize)
-	if strings.TrimSpace(text) == "" {
-		return vector
-	}
-
-	for _, token := range tokenize(text) {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(token))
-		sum := h.Sum64()
-		index := int(sum % uint64(vectorSize))
-		vector[index] += hashedWeight(sum)
-	}
-
-	normalizeVector(vector)
-	return vector
 }
 
 func float64ToFloat32(input []float64) []float32 {
@@ -723,47 +713,6 @@ func float64ToFloat32(input []float64) []float32 {
 		output[i] = float32(value)
 	}
 	return output
-}
-
-func tokenize(text string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !(r == '_' || r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || r > 127)
-	})
-	result := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if strings.TrimSpace(field) == "" {
-			continue
-		}
-		result = append(result, field)
-	}
-	if len(result) == 0 && utf8.ValidString(text) {
-		result = append(result, text)
-	}
-	return result
-}
-
-func hashedWeight(sum uint64) float64 {
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, sum)
-	value := 0.0
-	for _, item := range buf {
-		value += float64(item)
-	}
-	return 0.5 + math.Mod(value, 100)/100
-}
-
-func normalizeVector(vector []float64) {
-	norm := 0.0
-	for _, value := range vector {
-		norm += value * value
-	}
-	if norm == 0 {
-		return
-	}
-	norm = math.Sqrt(norm)
-	for index := range vector {
-		vector[index] /= norm
-	}
 }
 
 // BuildSparseVector 从文本构建 BM25 风格的稀疏向量
@@ -834,4 +783,42 @@ func splitSparseTokens(text string) []string {
 
 func isCJK(r rune) bool {
 	return r >= 0x4e00 && r <= 0x9fff
+}
+
+// EmbedTextsFresh 对重建分块强制分批调用模型，校验后更新缓存；失败不返回部分向量。
+// 不读查询缓存，避免同名模型更新或历史坏向量导致重建仍复用旧结果。
+func (s *RagService) EmbedTextsFresh(ctx context.Context, cfg model.EmbeddingModelConfig, texts []string, vectorSize int) ([][]float64, error) {
+	trimmed := make([]string, 0, len(texts))
+	for _, text := range texts {
+		if value := strings.TrimSpace(text); value != "" {
+			trimmed = append(trimmed, value)
+		}
+	}
+
+	vectors := make([][]float64, 0, len(trimmed))
+	for start := 0; start < len(trimmed); start += embeddingBatchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		batch := trimmed[start:minInt(start+embeddingBatchSize, len(trimmed))]
+		embeddings, err := s.requestEmbeddings(ctx, cfg, batch)
+		if err != nil {
+			return nil, fmt.Errorf("重建向量失败，请检查 Embedding 模型配置与服务：%w", err)
+		}
+		if len(embeddings) != len(batch) {
+			return nil, fmt.Errorf("embeddings api returned %d vectors for %d texts", len(embeddings), len(batch))
+		}
+		validated, err := normalizeEmbeddings(embeddings, vectorSize)
+		if err != nil {
+			return nil, err
+		}
+
+		// 整批校验通过才替换查询缓存；调用方收到全部向量后发布新索引代际。
+		for index, text := range batch {
+			key := embeddingCacheKey(cfg.Provider, cfg.BaseURL, cfg.Model, text)
+			s.cache.Set(key, validated[index])
+		}
+		vectors = append(vectors, validated...)
+	}
+	return vectors, nil
 }

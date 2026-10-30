@@ -494,6 +494,9 @@ export function WikiJobList({ jobs, enabled, busy, onRetry }: {
 
 /** 历史英文错误补充可操作说明，详细原始原因仍保留供排查。 */
 export function wikiFailureMessage(error: string): string {
+  if (error.includes('failed to read model response')) {
+    return '读取模型响应时中断，这条记录未保存具体原因。可重试失败阶段，已完成的提取结果会保留。'
+  }
   if (error.includes('combined context exceeds compilation budget')) {
     return '旧任务的合并内容超过单次预算。现在已支持分批综合，可直接重试。'
   }
@@ -502,6 +505,9 @@ export function wikiFailureMessage(error: string): string {
   }
   if (error.includes('quote does not belong to source segment')) {
     return '模型引用与原文不一致。现在支持按原文行号生成准确引用，可重试该任务。'
+  }
+  if (error.startsWith('configured chat model failed: ')) {
+    return `模型调用失败：${error.slice('configured chat model failed: '.length)}`
   }
   return error
 }

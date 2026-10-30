@@ -35,7 +35,7 @@ const (
 	lowConfidenceTopScoreThreshold = 0.22
 	lowConfidenceAvgScoreThreshold = 0.18
 
-	// wikiModelConcurrency 限制当前进程全站 Wiki 同时请求模型的数量，同库任务仍串行。
+	// wikiModelConcurrency 是旧配置缺省时的全站任务并发数，同库仍串行。
 	wikiModelConcurrency = 5
 )
 
@@ -67,9 +67,10 @@ type AppService struct {
 	wikiRunning map[string]bool
 	wikiClosed  bool
 	wikiWorkers sync.WaitGroup
-	// ponytail: 当前进程的 Wiki 共用五个名额；多实例部署时需重新评估跨实例并发。
-	wikiModelGate chan struct{} // 容量由 wikiModelConcurrency 指定，不限制普通聊天或外部客户端。
-	wikiStop      chan struct{} // 关闭时广播，唤醒等待模型名额的任务。
+	// ponytail: 限额只覆盖当前进程，多实例部署时需重新评估跨实例调度。
+	wikiActiveJobs   int           // 已领取且尚未结束的任务数量，由wikiRunMu保护。
+	wikiQueueChanged chan struct{} // 配置变更或释放名额时广播，等待者重新检查条件。
+	wikiStop         chan struct{} // 关闭时广播，未领取任务继续保持queued供重启恢复。
 }
 
 // KnowledgeBaseExportKnowledgeBase 描述导出包中的知识库元数据，避免暴露内部文档路径。
@@ -363,23 +364,23 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, chunks []Retriev
 }
 
 // NewAppService 组装文档与模型服务，加载保存的状态并恢复可排队的Wiki任务。
-// 每个服务实例独立持有Wiki模型名额；状态加载或启动持久化错误沿用日志报告，返回已初始化服务。
+// 每个服务实例独立持有Wiki任务名额；状态加载或启动持久化错误沿用日志报告，返回已初始化服务。
 func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory ChatHistoryStore, serverConfig model.ServerConfig) *AppService {
 	stagingDir := strings.TrimSpace(serverConfig.StagingDir)
 	if stagingDir == "" {
 		stagingDir = "data/staging"
 	}
 	service := &AppService{
-		state:         defaultAppState(serverConfig),
-		store:         store,
-		chatHistory:   chatHistory,
-		qdrant:        qdrant,
-		rag:           NewRagService(),
-		staging:       NewUploadStagingService(stagingDir),
-		jobs:          map[string]*indexJobState{},
-		serverConfig:  serverConfig,
-		wikiModelGate: make(chan struct{}, wikiModelConcurrency),
-		wikiStop:      make(chan struct{}),
+		state:            defaultAppState(serverConfig),
+		store:            store,
+		chatHistory:      chatHistory,
+		qdrant:           qdrant,
+		rag:              NewRagService(),
+		staging:          NewUploadStagingService(stagingDir),
+		jobs:             map[string]*indexJobState{},
+		serverConfig:     serverConfig,
+		wikiQueueChanged: make(chan struct{}),
+		wikiStop:         make(chan struct{}),
 	}
 	service.rag.SetQdrantService(qdrant)
 	if strings.TrimSpace(serverConfig.OperationLogFile) != "" {
@@ -428,11 +429,15 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	}
 
 	if len(service.state.KnowledgeBases) == 0 {
-		service.state = defaultAppState(serverConfig)
+		// 空库仍保留用户设置，只补齐原有的默认知识库。
+		service.state.KnowledgeBases = defaultAppState(serverConfig).KnowledgeBases
 	}
 	// 旧状态未保存 Wiki 超时时补齐默认值，并随启动快照持久化。
 	if service.state.Config.Wiki.ModelTimeoutSeconds == 0 {
 		service.state.Config.Wiki.ModelTimeoutSeconds = model.DefaultWikiModelTimeoutSeconds
+	}
+	if service.state.Config.Wiki.Queue.Concurrency == 0 {
+		service.state.Config.Wiki.Queue.Concurrency = wikiModelConcurrency
 	}
 	syncIDCounterFromState(service.state)
 
@@ -450,7 +455,7 @@ func NewAppService(qdrant *QdrantService, store *AppStateStore, chatHistory Chat
 	if err := service.saveState(); err != nil {
 		log.Printf("failed to persist app state during startup: %v", err)
 	}
-	log.Printf("wiki model concurrency limit=%d", cap(service.wikiModelGate))
+	log.Printf("wiki task concurrency limit=%d paused=%t", service.state.Config.Wiki.Queue.Concurrency, service.state.Config.Wiki.Queue.Paused)
 	service.recoverIndexGenerations()
 	service.recoverWikiJobs()
 	service.recoverIndexJobs()
@@ -586,7 +591,7 @@ func defaultAppState(serverConfig model.ServerConfig) *model.AppState {
 	}
 	return &model.AppState{
 		Config: model.AppConfig{
-			Wiki: model.WikiConfig{ModelTimeoutSeconds: model.DefaultWikiModelTimeoutSeconds},
+			Wiki: model.WikiConfig{ModelTimeoutSeconds: model.DefaultWikiModelTimeoutSeconds, Queue: model.WikiQueueSettings{Concurrency: wikiModelConcurrency}},
 			Chat: model.ChatConfig{
 				Provider:            "ollama",
 				BaseURL:             ollamaBaseURL,
@@ -746,23 +751,25 @@ func (s *AppService) UpdateConfig(req model.ConfigUpdateRequest) (model.AppConfi
 		return model.AppConfig{}, fmt.Errorf("sensitive structured documents require local ollama for both chat and embedding")
 	}
 
+	// 与队列设置共用持久化锁，保存成功前不发布新配置，避免失败回滚覆盖并发更新。
+	s.stateSaveMu.Lock()
+	defer s.stateSaveMu.Unlock()
 	s.state.Mu.Lock()
+	defer s.state.Mu.Unlock()
 	previousConfig := s.state.Config
 	nextConfig.Wiki = previousConfig.Wiki
 	if req.Wiki != nil {
-		nextConfig.Wiki = *req.Wiki
+		// 常规模型设置只更新超时，不能覆盖专用接口保存的队列状态。
+		nextConfig.Wiki.ModelTimeoutSeconds = req.Wiki.ModelTimeoutSeconds
 	} else if nextConfig.Wiki.ModelTimeoutSeconds == 0 {
 		nextConfig.Wiki.ModelTimeoutSeconds = model.DefaultWikiModelTimeoutSeconds
 	}
-	s.state.Config = nextConfig
-	s.state.Mu.Unlock()
-
-	if err := s.saveState(); err != nil {
-		s.state.Mu.Lock()
-		s.state.Config = previousConfig
-		s.state.Mu.Unlock()
-		return model.AppConfig{}, err
+	if s.store != nil {
+		if err := s.store.Save(persistentAppState{Config: nextConfig, KnowledgeBases: s.state.KnowledgeBases}); err != nil {
+			return model.AppConfig{}, err
+		}
 	}
+	s.state.Config = nextConfig
 	return nextConfig, nil
 }
 
@@ -1569,10 +1576,11 @@ func (s *AppService) reindexExistingDocument(document model.Document, content st
 		document.ChunkCount = 0
 		document.IndexedAt = util.NowRFC3339()
 		document.IndexError = ""
+		document.IndexErrorCode = ""
 		return s.ReplaceDocument(document.KnowledgeBaseID, document)
 	}
 
-	vectors, err := s.rag.EmbedTexts(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
+	vectors, err := s.rag.EmbedTextsFresh(context.Background(), s.currentEmbeddingConfig(), chunkTexts(chunks), s.qdrantVectorSize())
 	if err != nil {
 		return model.Document{}, err
 	}
@@ -1585,6 +1593,7 @@ func (s *AppService) reindexExistingDocument(document model.Document, content st
 	document.ChunkCount = len(chunks)
 	document.IndexedAt = util.NowRFC3339()
 	document.IndexError = ""
+	document.IndexErrorCode = ""
 	return s.ReplaceDocument(document.KnowledgeBaseID, document)
 }
 
@@ -1885,7 +1894,11 @@ func (s *AppService) ExportConversationMarkdown(conversationID string) (string, 
 	return fileName, builder.String(), nil
 }
 
+// DebugRetrieve 使用实际聊天检索链路验证当前库，未启用向量服务时明确报错。
 func (s *AppService) DebugRetrieve(req model.RetrievalDebugRequest) (model.RetrievalDebugResponse, error) {
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return model.RetrievalDebugResponse{}, fmt.Errorf("调试召回失败：Qdrant 未启用")
+	}
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		return model.RetrievalDebugResponse{}, fmt.Errorf("query is required")
@@ -1967,6 +1980,9 @@ func (s *AppService) upsertDocumentChunks(knowledgeBaseID string, chunks []Docum
 	}
 	if len(vectors) != len(chunks) {
 		return fmt.Errorf("embedding vector count mismatch: expected %d, got %d", len(chunks), len(vectors))
+	}
+	if _, err := normalizeEmbeddings(vectors, s.qdrantVectorSize()); err != nil {
+		return err
 	}
 	points := make([]QdrantPoint, 0, len(chunks))
 	vectorSize := s.qdrantVectorSize()
@@ -2380,6 +2396,9 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 		}
 
 		for _, item := range items {
+			if denseScore, fused := item.Payload["retrieval_dense_score"].(float64); fused {
+				item.Score = denseScore
+			}
 			chunkID := payloadString(item.Payload, "chunk_id", item.ID)
 			if _, exists := seenChunkIDs[chunkID]; exists {
 				continue
@@ -2409,6 +2428,7 @@ func (s *AppService) collectCandidates(knowledgeBaseIDs []string, req model.Chat
 	return s.filterWikiChunks(results, false), nil
 }
 
+// rerankCandidates 按绝对相关度剔除无关候选，混合检索使用保留的原始余弦分数。
 func (s *AppService) rerankCandidates(ctx context.Context, candidates []RetrievedChunk, query string) []RetrievedChunk {
 	if len(candidates) == 0 {
 		return nil
@@ -2416,29 +2436,32 @@ func (s *AppService) rerankCandidates(ctx context.Context, candidates []Retrieve
 
 	if s != nil && s.serverConfig.EnableSemanticReranker && s.reranker != nil {
 		ranked, err := s.reranker.Rerank(ctx, query, candidates)
-		if err == nil && len(ranked) > 0 {
-			return ranked
+		if err == nil {
+			filtered := make([]RetrievedChunk, 0, len(ranked))
+			for _, item := range ranked {
+				if !math.IsNaN(item.Score) && !math.IsInf(item.Score, 0) && item.Score >= lowConfidenceTopScoreThreshold {
+					filtered = append(filtered, item)
+				}
+			}
+			return filtered
 		}
 	}
 
 	ranked := make([]RetrievedChunk, len(candidates))
 	copy(ranked, candidates)
 
-	minScore, maxScore := ranked[0].Score, ranked[0].Score
+	filtered := ranked[:0]
 	for _, item := range ranked {
-		if item.Score < minScore {
-			minScore = item.Score
+		keywordScore := keywordCoverage(query, item.Text)
+		// 使用绝对余弦分数，不把本批最高的低分候选放大成 1。
+		if math.IsNaN(item.Score) || math.IsInf(item.Score, 0) || (item.Score < lowConfidenceTopScoreThreshold && keywordScore < 0.2) {
+			continue
 		}
-		if item.Score > maxScore {
-			maxScore = item.Score
-		}
+		vectorScore := math.Max(0, math.Min(1, item.Score))
+		item.Score = rerankVectorWeight*vectorScore + rerankKeywordWeight*keywordScore + scoreBoost(item.Text)
+		filtered = append(filtered, item)
 	}
-
-	for i := range ranked {
-		vectorScore := normalizeScore(ranked[i].Score, minScore, maxScore)
-		keywordScore := keywordCoverage(query, ranked[i].Text)
-		ranked[i].Score = rerankVectorWeight*vectorScore + rerankKeywordWeight*keywordScore + scoreBoost(ranked[i].Text)
-	}
+	ranked = filtered
 
 	sort.Slice(ranked, func(i, j int) bool {
 		if ranked[i].Score == ranked[j].Score {
@@ -2499,19 +2522,6 @@ func selectWithMMR(candidates []RetrievedChunk, finalTopK, perDocumentLimit int)
 		return selected[i].Score > selected[j].Score
 	})
 	return selected
-}
-
-func normalizeScore(value, minValue, maxValue float64) float64 {
-	if maxValue <= minValue {
-		if value <= 0 {
-			return 0
-		}
-		if value >= 1 {
-			return 1
-		}
-		return value
-	}
-	return (value - minValue) / (maxValue - minValue)
 }
 
 func keywordCoverage(query, text string) float64 {
@@ -2728,23 +2738,47 @@ func logRetrievalMetrics(req model.ChatCompletionRequest, query string, params r
 	)
 }
 
+// splitTerms 对连续中文提取相邻双字词，英文和字段名沿用原有词边界；去重避免长句重复加权。
 func splitTerms(text string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !(unicode.IsLetter(r) || unicode.IsNumber(r))
-	})
-	terms := make([]string, 0, len(fields))
-	seen := make(map[string]struct{}, len(fields))
-	for _, field := range fields {
-		item := strings.TrimSpace(field)
-		if len([]rune(item)) < 2 {
-			continue
+	terms := make([]string, 0)
+	seen := make(map[string]struct{})
+	add := func(term string) {
+		if _, exists := seen[term]; !exists {
+			seen[term] = struct{}{}
+			terms = append(terms, term)
 		}
-		if _, exists := seen[item]; exists {
-			continue
-		}
-		seen[item] = struct{}{}
-		terms = append(terms, item)
 	}
+	var word, han []rune
+	flushWord := func() {
+		if len(word) >= 2 {
+			add(string(word))
+		}
+		word = word[:0]
+	}
+	flushHan := func() {
+		if len(han) == 1 {
+			add(string(han))
+		}
+		for i := 0; i+1 < len(han); i++ {
+			add(string(han[i : i+2]))
+		}
+		han = han[:0]
+	}
+	for _, r := range strings.ToLower(text) {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			flushWord()
+			han = append(han, r)
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			flushHan()
+			word = append(word, r)
+		default:
+			flushWord()
+			flushHan()
+		}
+	}
+	flushWord()
+	flushHan()
 	return terms
 }
 

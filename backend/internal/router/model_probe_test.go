@@ -31,7 +31,7 @@ func TestChatModelProbeUsesRealResult(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if r.URL.Path != "/chat/completions" || body["model"] != "fixture-model" {
+				if r.URL.Path != "/v1/chat/completions" || body["model"] != "fixture-model" {
 					t.Errorf("probe did not call selected model: %s %+v", r.URL.Path, body)
 				}
 				value, present := body["temperature"]

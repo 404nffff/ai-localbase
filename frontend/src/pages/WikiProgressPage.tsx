@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchWikiProgress, wikiRequest, type WikiBatchResult, type WikiJob, type WikiProgressResponse, type WikiRetryBatchResult } from '../services/api'
+import { fetchWikiProgress, updateWikiQueue, wikiRequest, type WikiBatchResult, type WikiJob, type WikiProgressResponse, type WikiRetryBatchResult } from '../services/api'
 import AppIcon from '../components/common/AppIcon'
 import { formatWikiTime, wikiStatusLabel, WikiJobList } from '../components/knowledge/WikiPanel'
 import '../styles/wiki-progress.css'
@@ -32,6 +32,16 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [updatedAt, setUpdatedAt] = useState('')
+  const [queueBusy, setQueueBusy] = useState(false)
+  const [queueError, setQueueError] = useState('')
+  // null代表尚未编辑，空字符串保留用户清空输入的动作。
+  const [concurrencyDraft, setConcurrencyDraft] = useState<string | null>(null)
+  const [queueNotice, setQueueNotice] = useState('')
+  // 点击互斥锁与保存版本号用于隔离并行操作和旧轮询回包。
+  const queueLock = useRef(false)
+  const queueVersion = useRef(0)
+  // 保存回执独立于筛选快照，切库期间仍能防止旧轮询覆盖新设置。
+  const confirmedQueue = useRef<WikiProgressResponse['queue'] | null>(null)
   const retryLock = useRef(false)
   const mounted = useRef(true)
 
@@ -51,11 +61,21 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
     /** 每轮完成后再安排下一轮，错误时保留快照且停止自动读取。 */
     async function refresh() {
       try {
+        const queueRevision = queueVersion.current
         const result = await fetchWikiProgress(params, controller.signal)
         if (controller.signal.aborted) {
           return
         }
-        setData(result)
+        // 保存期间的旧轮询只能刷新任务数据，不能覆盖较新的队列设置。
+        setData((previous) => {
+          if (queueLock.current || queueVersion.current !== queueRevision) {
+            const queue = confirmedQueue.current ?? previous?.queue
+            if (queue) {
+              return { ...result, queue }
+            }
+          }
+          return result
+        })
         setUpdatedAt(new Date().toISOString())
         setError('')
         // 新任务或重试会改变筛选总数，空的末页退回有效的最后一页。
@@ -228,6 +248,11 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
     }
   }
 
+  let queueButtonLabel = data?.queue.paused ? '继续队列' : '停止队列'
+  if (queueBusy) {
+    queueButtonLabel = '保存中…'
+  }
+
   return <section className="wiki-progress-page app-workspace" aria-labelledby="wiki-progress-title">
     <header className="workspace-page-header">
       <div><span className="workspace-page-kicker">知识维护工作区</span><h2 id="wiki-progress-title">整理总进度</h2><p>每个知识库的整理状态，都在这里。</p></div>
@@ -245,7 +270,31 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
 
         <section className="wiki-progress-summary" aria-label="全部知识库整理统计" aria-busy={loading}>
           <div className="wiki-progress-completion"><span>任务完成率</span><div><strong>{data ? `${completion}%` : '—'}</strong><span>{data ? `${totals.succeeded} / ${totals.total} 个任务已完成` : '正在读取统计'}</span></div><progress aria-label="全部任务完成率" value={completion} max={100} /><small>仅已完成任务计入，部分完成与失败单独保留。</small></div>
-          <div><span><i data-tone="active" />正在整理</span><strong>{data ? totals.running : '—'}</strong><small>{totals.queued} 个任务排队中</small></div>
+          <div className="wiki-queue-summary">
+            <span><i data-tone={data?.queue.paused ? 'warning' : 'active'} />{data?.queue.paused ? '队列已停止' : '正在整理'}</span>
+            <strong>{data ? totals.running : '—'}{data?.queue.paused && <span> 个运行中</span>}</strong>
+            <small>{totals.queued} 个任务排队中</small>
+            <div className="wiki-queue-controls">
+              <button disabled={!data || queueBusy || Boolean(error)} onClick={() => {
+                if (data) {
+                  void saveQueue({ paused: !data.queue.paused })
+                }
+              }}>
+                {queueButtonLabel}
+              </button>
+              <form onSubmit={(event) => { event.preventDefault(); void saveQueue({ concurrency: Number(concurrencyDraft ?? data?.queue.concurrency) }) }}>
+                <label htmlFor="wiki-queue-concurrency">同时整理</label>
+                <div>
+                  <input id="wiki-queue-concurrency" type="number" min={1} max={20} step={1} required disabled={!data || queueBusy || Boolean(error)} value={concurrencyDraft ?? data?.queue.concurrency ?? ''} onChange={(event) => setConcurrencyDraft(event.target.value)} aria-describedby="wiki-queue-explanation" />
+                  <span>个</span>
+                  <button type="submit" disabled={!data || queueBusy || Boolean(error) || !concurrencyDraft || Number(concurrencyDraft) === data.queue.concurrency}>保存</button>
+                </div>
+              </form>
+            </div>
+            <small id="wiki-queue-explanation">全站生效，1–20个；同库依次执行。停止后当前任务继续，排队任务保留。</small>
+            {queueError && <small className="wiki-queue-error" role="alert">{queueError}</small>}
+            {queueNotice && <small role="status">{queueNotice}</small>}
+          </div>
           <div><span><i data-tone="warning" />异常任务</span><strong>{data ? totals.attention : '—'}</strong><small>按任务计数，资料另计</small>
             <div className="wiki-progress-summary-links" role="group" aria-label="异常任务分类">{attentionStatuses.map((value) => <button key={value} disabled={!data || loading || retrying || !totals[value]} onClick={() => showLibraryFilter(value)}>{wikiStatusLabel(value)} {data ? totals[value] : '—'}<AppIcon name="chevronRight" size={13} /></button>)}</div>
           </div>
@@ -345,6 +394,45 @@ export default function WikiProgressPage({ initialKnowledgeBaseId = '', onClose 
       if (mounted.current) {
         setRetrying(false)
         setRefreshVersion((version) => version + 1)
+      }
+    }
+  }
+
+  /** 保存后采用服务端回执；失败保留已生效值，离开页面不回写结果。 */
+  async function saveQueue(settings: { paused?: boolean; concurrency?: number }) {
+    if (queueLock.current || !data) {
+      return
+    }
+    if (settings.concurrency !== undefined && (!Number.isInteger(settings.concurrency) || settings.concurrency < 1 || settings.concurrency > 20)) {
+      setQueueError('同时整理数量需要在1到20之间')
+      return
+    }
+    confirmedQueue.current = data.queue
+    queueLock.current = true
+    queueVersion.current += 1
+    setQueueBusy(true)
+    setQueueError('')
+    setQueueNotice('')
+    try {
+      const queue = await updateWikiQueue(settings)
+      if (!mounted.current) {
+        return
+      }
+      confirmedQueue.current = queue
+      setData((previous) => previous ? { ...previous, queue } : previous)
+      if (settings.concurrency !== undefined) {
+        setConcurrencyDraft(null)
+      }
+      setQueueNotice(queue.paused ? '已停止领取新任务，当前任务完成后停止。' : `队列运行中，最多同时整理 ${queue.concurrency} 个任务。`)
+    } catch (reason) {
+      if (mounted.current) {
+        setQueueError(reason instanceof Error ? reason.message : '队列设置保存失败')
+      }
+    } finally {
+      queueVersion.current += 1
+      queueLock.current = false
+      if (mounted.current) {
+        setQueueBusy(false)
       }
     }
   }

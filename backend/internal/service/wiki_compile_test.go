@@ -630,15 +630,17 @@ func TestWikiModelGateAcrossLibraries(t *testing.T) {
 			}
 			last := jobs[5]
 			waiting, err := s.GetWikiJob(last.KnowledgeBaseID, last.ID)
-			if err != nil || waiting.Status != "running" || waiting.ModelCalls != 0 || peak.Load() != 5 {
+			if err != nil || waiting.Status != "queued" || waiting.ModelCalls != 0 || peak.Load() != 5 {
 				t.Fatalf("waiting or concurrency incorrect: %+v, peak=%d, error=%v", waiting, peak.Load(), err)
 			}
 			if name == "close" {
 				closed := make(chan struct{})
 				go func() { _ = s.Close(); close(closed) }()
-				last = waitWikiJob(t, s, last.KnowledgeBaseID, last.ID)
-				if last.Status != "failed" || last.ModelCalls != 0 || !strings.Contains(last.Error, "closing") {
-					t.Fatalf("waiting request did not stop: %+v", last)
+				// 确认调度已经关闭再解除模型阻塞，避免测试依赖goroutine启动时序。
+				select {
+				case <-s.wikiStop:
+				case <-time.After(time.Second):
+					t.Fatal("service did not signal closing")
 				}
 				unblock()
 				select {
@@ -650,12 +652,17 @@ func TestWikiModelGateAcrossLibraries(t *testing.T) {
 				unblock()
 			}
 			for i, job := range jobs {
+				if name == "close" && i == 5 {
+					waiting, err := s.GetWikiJob(job.KnowledgeBaseID, job.ID)
+					if err != nil || waiting.Status != "queued" || waiting.ModelCalls != 0 {
+						t.Fatalf("closing must preserve waiting job: %+v, %v", waiting, err)
+					}
+					continue
+				}
 				finished := waitWikiJob(t, s, job.KnowledgeBaseID, job.ID)
 				expectedStatus, expectedCalls := "succeeded", 1
 				if name == "upstream_error" {
 					expectedStatus = "failed"
-				} else if name == "close" && i == 5 {
-					expectedStatus, expectedCalls = "failed", 0
 				}
 				if finished.Status != expectedStatus || finished.ModelCalls != expectedCalls {
 					t.Fatalf("job did not finish correctly: %+v", finished)

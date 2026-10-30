@@ -117,6 +117,15 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const [selectedIndexIds, setSelectedIndexIds] = useState<string[]>([])
   const [batchIndexBusy, setBatchIndexBusy] = useState(false)
   const [batchIndexResult, setBatchIndexResult] = useState<string[]>([])
+  // total 固定为启动时选中的数量；completed 包含失败项，stopped 表示停止后仍有未执行项。
+  const [batchProgress, setBatchProgress] = useState<{
+    total: number
+    completed: number
+    failed: number
+    current: string
+    stopped: boolean
+  } | null>(null)
+  const batchStop = useRef(false)
   const indexLock = useRef(false)
   const currentLibraryId = useRef(selectedKnowledgeBaseId)
   const libraryGeneration = useRef(0)
@@ -440,6 +449,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
       if (libraryGeneration.current !== generation) {
         return
       }
+      setDebugResult(null)
       // 正常文档重建后健康分可能不变，单独反馈结果，避免被误认为按钮无效。
       setReindexFeedback({
         knowledgeBaseId,
@@ -523,6 +533,7 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     setDocumentDetailError(null)
     setSelectedIndexIds([])
     setBatchIndexResult([])
+    setBatchProgress(null)
     setDebugResult(null)
     setDebugError(null)
     setIsDebugging(false)
@@ -1159,10 +1170,19 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
                           onDrop={(event) => handleDropFiles(selectedKnowledgeBase.id, event)}
                         >
                           <div className="kb-batch-actions">
-                            <button disabled={batchIndexBusy} onClick={() => setSelectedIndexIds(filteredAndSortedDocuments.map((doc) => doc.id))}>全选筛选结果</button>
+                            <button disabled={batchIndexBusy || reindexingDocumentId !== null} onClick={() => setSelectedIndexIds(filteredAndSortedDocuments.map((doc) => doc.id))}>全选筛选结果</button>
                             <button disabled={batchIndexBusy || !selectedIndexIds.length} onClick={() => setSelectedIndexIds([])}>取消选择</button>
-                            <button disabled={batchIndexBusy || reindexingDocumentId !== null || !selectedIndexIds.length} onClick={() => void rebuildSelected()}>{batchIndexBusy ? '批量重建中…' : `批量重建索引（${selectedIndexIds.length}）`}</button>
+                            <button disabled={batchIndexBusy || reindexingDocumentId !== null || !selectedIndexIds.length} onClick={() => void rebuildSelected(selectedIndexIds)}>{`重建所选向量（${selectedIndexIds.length}）`}</button>
+                            <button disabled={batchIndexBusy || reindexingDocumentId !== null || !selectedKnowledgeBase.documents.length} onClick={() => void rebuildSelected(selectedKnowledgeBase.documents.map((doc) => doc.id))}>{`全库重建向量（${selectedKnowledgeBase.documents.length}）`}</button>
+                            {batchIndexBusy && <button onClick={() => { batchStop.current = true; setBatchProgress((old) => old ? { ...old, stopped: true } : old) }}>完成当前项后停止</button>}
                           </div>
+                          <small>所选重建仅处理勾选资料；全库重建包含原始资料和知识页。请保持页面打开，切换知识库会停止后续重建。</small>
+                          {batchProgress && (
+                            <div role="status" aria-live="polite">
+                              <progress value={batchProgress.completed} max={batchProgress.total} aria-label="向量重建进度" />
+                              <span>已处理 {batchProgress.completed}/{batchProgress.total}，成功 {batchProgress.completed - batchProgress.failed}，失败 {batchProgress.failed}{batchIndexBusy && batchProgress.current ? ` · 正在重建：${batchProgress.current}` : ''}{batchProgress.stopped && batchIndexBusy && ' · 正在停止'}{batchProgress.stopped && !batchIndexBusy && ' · 已停止'}</span>
+                            </div>
+                          )}
                           {batchIndexResult.length > 0 && <ul className="kb-batch-results" role="status">{batchIndexResult.map((result, index) => <li key={index}>{result}</li>)}</ul>}
                           <DocumentList
                             selectedIds={selectedIndexIds}
@@ -1283,46 +1303,60 @@ const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
     </>
   )
 
-  /** 顺序调用真实重建接口，逐项展示失败并继续其余资料，结束后只刷新一次健康状态。 */
-  async function rebuildSelected() {
-    if (!selectedKnowledgeBaseId || indexLock.current || !selectedIndexIds.length) {
+  /** 顺序重建快照中的资料和知识页；失败继续，停止只阻止下一项，切库不串写结果。 */
+  async function rebuildSelected(documentIds: string[]) {
+    if (!selectedKnowledgeBaseId || indexLock.current || !documentIds.length) {
       return
     }
     const libraryId = selectedKnowledgeBaseId
     const generation = libraryGeneration.current
-    const ids = [...selectedIndexIds]
+    const ids = [...new Set(documentIds)]
+    const names = new Map(selectedKnowledgeBase?.documents.map((doc) => [doc.id, doc.name]))
     indexLock.current = true
+    batchStop.current = false
     setBatchIndexBusy(true)
     setBatchIndexResult([])
+    setDebugResult(null)
+    setBatchProgress({ total: ids.length, completed: 0, failed: 0, current: '', stopped: false })
     const failures: string[] = []
-    for (const id of ids) {
-      if (libraryGeneration.current !== generation) {
-        break
-      }
-      setReindexingDocumentId(id)
-      const name = selectedKnowledgeBase?.documents.find((doc) => doc.id === id)?.name ?? id
-      try {
-        const document = await onReindexDocument(libraryId, id)
-        if (document.status === 'failed' || document.indexError) {
-          throw new Error(document.indexError || '索引重建失败')
+    let completed = 0
+    try {
+      for (const id of ids) {
+        if (libraryGeneration.current !== generation || batchStop.current) {
+          break
         }
+        setReindexingDocumentId(id)
+        const name = names.get(id) ?? id
+        setBatchProgress((old) => old ? { ...old, current: name } : old)
+        try {
+          const document = await onReindexDocument(libraryId, id)
+          if (document.status === 'failed' || document.indexError) {
+            throw new Error(document.indexError || '向量重建失败')
+          }
+          if (libraryGeneration.current === generation) {
+            setBatchIndexResult((old) => [...old, `${name}：重建完成（${document.chunkCount ?? 0} 个分块）`])
+          }
+        } catch (reason) {
+          failures.push(id)
+          if (libraryGeneration.current === generation) {
+            setBatchIndexResult((old) => [...old, `${name}：失败，${reason instanceof Error ? reason.message : '未知错误'}`])
+          }
+        }
+        completed += 1
         if (libraryGeneration.current === generation) {
-          setBatchIndexResult((old) => [...old, `${name}：重建完成`])
-        }
-      } catch (reason) {
-        failures.push(id)
-        if (libraryGeneration.current === generation) {
-          setBatchIndexResult((old) => [...old, `${name}：失败，${reason instanceof Error ? reason.message : '未知错误'}`])
+          setBatchProgress({ total: ids.length, completed, failed: failures.length, current: '', stopped: batchStop.current && completed < ids.length })
         }
       }
+      if (libraryGeneration.current === generation) {
+        // 保留失败项和未执行项，用户可直接重试所选；成功项不再重复执行。
+        setSelectedIndexIds([...failures, ...ids.slice(completed)])
+        await refreshKnowledgeHealth(libraryId)
+      }
+    } finally {
+      indexLock.current = false
+      setBatchIndexBusy(false)
+      setReindexingDocumentId(null)
     }
-    if (libraryGeneration.current === generation) {
-      setSelectedIndexIds(failures)
-      await refreshKnowledgeHealth(libraryId)
-    }
-    indexLock.current = false
-    setBatchIndexBusy(false)
-    setReindexingDocumentId(null)
   }
 
 }

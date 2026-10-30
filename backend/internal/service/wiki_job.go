@@ -236,7 +236,41 @@ func (s *AppService) scheduleWikiJobs(kbID string) {
 			if next == nil {
 				return
 			}
-			if err := s.runWikiJob(*next); err != nil {
+			// 领取前等待全站名额，等待者保留queued；设置与领取由同一把锁串行化。
+			for {
+				s.wikiRunMu.Lock()
+				if s.wikiClosed {
+					s.wikiRunMu.Unlock()
+					return
+				}
+				s.state.Mu.RLock()
+				queue := s.state.Config.Wiki.Queue
+				s.state.Mu.RUnlock()
+				if !queue.Paused && s.wikiActiveJobs < queue.Concurrency {
+					s.wikiActiveJobs++
+					s.wikiRunMu.Unlock()
+					break
+				}
+				changed := s.wikiQueueChanged
+				s.wikiRunMu.Unlock()
+				select {
+				case <-changed:
+				case <-s.wikiStop:
+					return
+				}
+			}
+			// 等待期间可能关闭知识库或删除任务，领取后核对最新状态。
+			current, runErr := s.GetWikiJob(kbID, next.ID)
+			if runErr == nil && current.Status == "queued" {
+				runErr = s.runWikiJob(current)
+			}
+			// 无论执行成功还是保存失败都释放名额，唤醒其他库重新检查条件。
+			s.wikiRunMu.Lock()
+			s.wikiActiveJobs--
+			close(s.wikiQueueChanged)
+			s.wikiQueueChanged = make(chan struct{})
+			s.wikiRunMu.Unlock()
+			if err := runErr; err != nil {
 				log.Printf("wiki job %s persistence error: %v", next.ID, err)
 				// 无法持久化时不忙循环；该任务仍保留，下一次显式操作可重新调度。
 				persistenceFailed = true

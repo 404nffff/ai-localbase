@@ -2729,7 +2729,7 @@ func handleModelAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch r.URL.Path {
-	case "/embeddings":
+	case "/v1/embeddings":
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -2758,7 +2758,7 @@ func handleModelAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": embeddings})
 	// OpenAI-compatible chat
-	case "/chat/completions":
+	case "/v1/chat/completions":
 		body, _ := io.ReadAll(r.Body)
 		content := "已基于检索上下文回答：Redis 是高性能内存数据库。"
 		if bytes.Contains(body, []byte("这个文档有多少名员工")) && bytes.Contains(body, []byte("数据行数：4")) {

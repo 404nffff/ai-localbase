@@ -119,6 +119,10 @@ func (s *AppService) ReindexDocument(knowledgeBaseID, documentID string) (model.
 		return model.Document{}, fmt.Errorf("app service is nil")
 	}
 
+	if s.qdrant == nil || !s.qdrant.IsEnabled() {
+		return model.Document{}, fmt.Errorf("重建向量失败：Qdrant 未启用")
+	}
+
 	document, err := s.GetDocument(strings.TrimSpace(knowledgeBaseID), strings.TrimSpace(documentID))
 	if err != nil {
 		return model.Document{}, err

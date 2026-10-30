@@ -143,3 +143,15 @@
   .wiki-progress-pagination > span { width: 100%; }
   .wiki-progress-error { flex-wrap: wrap; padding: 16px; }
 }
+
+/* 全站队列控制放在运行统计内，窄屏允许换行，避免挤压任务计数。 */
+.wiki-queue-controls { display: grid; gap: 12px; margin: 16px 0 12px; }
+.wiki-queue-controls > button { width: fit-content; }
+.wiki-queue-controls form { display: grid; gap: 6px; }
+.wiki-queue-controls label { color: var(--text-secondary); font-size: 12px; }
+.wiki-queue-controls form > div { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wiki-queue-controls input { width: 64px; min-height: 36px; padding: 6px 8px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; }
+.wiki-queue-controls form button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.wiki-queue-summary > small { display: block; overflow-wrap: anywhere; font-size: 12px; }
+/* 错误文字采用主题正文色保证浅深背景可读，alert语义与明确文案承担错误提示。 */
+.wiki-queue-summary .wiki-queue-error { color: var(--text-primary); font-weight: 600; }

@@ -177,6 +177,8 @@ func TestGetKnowledgeBaseHealthReportsMissingSourceAndIndexError(t *testing.T) {
 
 func TestReindexDocumentReplacesMetadataWithoutDuplicatingDocument(t *testing.T) {
 	service := NewAppService(nil, nil, nil, model.ServerConfig{UploadDir: t.TempDir()})
+	configureFixtureEmbedding(t, service)
+	service.qdrant = fixtureWritableQdrant(t, 768)
 	knowledgeBase := service.ListKnowledgeBases()[0]
 	path := filepath.Join(t.TempDir(), "reindex.md")
 	if err := os.WriteFile(path, []byte(strings.Repeat("旧内容。", 100)), 0o644); err != nil {
@@ -228,6 +230,7 @@ func TestReindexDocumentReplacesMetadataWithoutDuplicatingDocument(t *testing.T)
 
 func TestReindexDocumentPersistsFailureEvidenceBeforeDeletingPoints(t *testing.T) {
 	service := NewAppService(nil, nil, nil, model.ServerConfig{})
+	service.qdrant = fixtureWritableQdrant(t, 768)
 	knowledgeBase := service.ListKnowledgeBases()[0]
 	service.AddDocument(knowledgeBase.ID, model.Document{
 		ID:              "doc-reindex-missing",

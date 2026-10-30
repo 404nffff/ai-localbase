@@ -89,6 +89,7 @@ func TestIndexGenerationRecovery(t *testing.T) {
 // TestFailedReindexRetainsPublishedGeneration 验证嵌入失败不改变当前指针或抹掉旧索引状态。
 func TestFailedReindexRetainsPublishedGeneration(t *testing.T) {
 	s, kbID, upload := stagedJobFixture(t, nil)
+	s.qdrant = fixtureWritableQdrant(t, 768)
 	job, err := s.StartBatchIndexJob(kbID, []string{upload.ID})
 	if err != nil {
 		t.Fatal(err)

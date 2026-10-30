@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"ai-localbase/internal/model"
 	"ai-localbase/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -307,6 +308,32 @@ func (h *AppHandler) WikiEditPage(c *gin.Context) {
 		return
 	}
 	result, err := h.appService.EditWikiPage(c.Param("id"), c.Param("pageId"), input)
+	if err != nil {
+		wikiHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// WikiUpdateQueue 持久化全站队列暂停状态和任务并发数，失败不改变调度设置。
+// @Summary 设置知识整理队列
+// @Tags Wiki
+// @Accept json
+// @Produce json
+// @Param request body model.WikiQueueUpdate true "至少提交paused或concurrency，数量范围1–20"
+// @Success 200 {object} model.WikiQueueSettings
+// @Failure 400 {object} map[string]string "请求或数量无效"
+// @Failure 401 {object} map[string]string "未通过既有鉴权"
+// @Failure 409 {object} map[string]string "服务正在关闭"
+// @Failure 500 {object} map[string]string "持久化失败"
+// @Router /api/wiki/queue [put]
+func (h *AppHandler) WikiUpdateQueue(c *gin.Context) {
+	var req model.WikiQueueUpdate
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "队列设置格式无效"})
+		return
+	}
+	result, err := h.appService.UpdateWikiQueue(req)
 	if err != nil {
 		wikiHTTPError(c, err)
 		return

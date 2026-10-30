@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// retryWithBackoff 在预算内退避重试；调用方明确标记不可重试时立即返回原错误。
 func retryWithBackoff(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {
 	if attempts <= 0 {
 		attempts = 1
@@ -28,6 +29,10 @@ func retryWithBackoff(ctx context.Context, attempts int, baseDelay time.Duration
 		if err := fn(); err == nil {
 			return nil
 		} else {
+			var stop stopRetryError
+			if errors.As(err, &stop) {
+				return stop.err
+			}
 			lastErr = err
 		}
 

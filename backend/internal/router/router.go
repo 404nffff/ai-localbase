@@ -53,6 +53,7 @@ func NewRouter(appHandler *handler.AppHandler, mcpHandler *handler.MCPHandler, s
 		api.GET("/knowledge-bases/:id/export", appHandler.ExportKnowledgeBase)
 		api.GET("/knowledge-bases/:id/health", appHandler.GetKnowledgeBaseHealth)
 		api.GET("/wiki/progress", appHandler.WikiProgress)
+		api.PUT("/wiki/queue", appHandler.WikiUpdateQueue)
 		api.GET("/wiki/changes", appHandler.WikiChanges)
 		wiki := api.Group("/knowledge-bases/:id/wiki")
 		wiki.GET("", appHandler.WikiGet)

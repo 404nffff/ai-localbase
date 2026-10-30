@@ -642,6 +642,10 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 
 	scores := make(map[string]float64)
 	payloads := make(map[string]map[string]any)
+	denseScores := make(map[string]float64)
+	for _, item := range denseResults {
+		denseScores[item.ID] = item.Score
+	}
 	denseRanks := make(map[string]int)
 	sparseRanks := make(map[string]int)
 	channels := make(map[string]map[string]struct{})
@@ -667,6 +671,8 @@ func rrfFusion(denseResults []SearchResult, sparseResults []SearchResult, topK i
 	for id, score := range scores {
 		payload := payloads[id]
 		payload[qdrantPayloadRetrievalChannels] = sortedChannelList(channels[id])
+		// 保留绝对余弦分数，避免后续把 RRF 排名分当成语义相似度。
+		payload["retrieval_dense_score"] = denseScores[id]
 		payload[qdrantPayloadDenseRank] = denseRanks[id]
 		payload[qdrantPayloadSparseRank] = sparseRanks[id]
 		merged = append(merged, SearchResult{

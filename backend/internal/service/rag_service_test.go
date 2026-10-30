@@ -52,31 +52,18 @@ func TestRagServiceBuildDocumentChunks(t *testing.T) {
 	}
 }
 
-func TestRagServiceEmbedTextsFallback(t *testing.T) {
+func TestRagServiceEmbedTextsReturnsModelFailure(t *testing.T) {
 	rag := NewRagService()
-	cfg := model.EmbeddingModelConfig{
-		Provider: "ollama",
-		BaseURL:  "http://127.0.0.1:0",
-		Model:    "demo-embedding-model",
-	}
-
-	embeddings, err := rag.EmbedTexts(t.Context(), cfg, []string{"redis 缓存", "qdrant 检索"}, 8)
-	if err != nil {
-		t.Fatalf("expected fallback embeddings without error, got %v", err)
-	}
-	if len(embeddings) != 2 {
-		t.Fatalf("expected 2 embeddings, got %d", len(embeddings))
-	}
-	for index, vector := range embeddings {
-		if len(vector) != 8 {
-			t.Fatalf("embedding %d expected dimension 8, got %d", index, len(vector))
-		}
+	cfg := model.EmbeddingModelConfig{Provider: "ollama", BaseURL: "http://127.0.0.1:0", Model: "fixture"}
+	vectors, err := rag.EmbedTexts(t.Context(), cfg, []string{"redis 缓存", "qdrant 检索"}, 8)
+	if err == nil || vectors != nil || !strings.Contains(err.Error(), "生成向量失败") {
+		t.Fatalf("model failure must not produce substitute vectors: %v %v", vectors, err)
 	}
 }
 
 func TestRagServiceEmbedTextsRejectsUnexpectedDimension(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/embeddings" {
+		if r.URL.Path != "/v1/embeddings" {
 			http.NotFound(w, r)
 			return
 		}
@@ -176,6 +163,7 @@ func TestAppServiceIndexDocumentWithExtractedText(t *testing.T) {
 	}
 
 	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	configureFixtureEmbedding(t, service)
 	knowledgeBases := service.ListKnowledgeBases()
 	if len(knowledgeBases) == 0 {
 		t.Fatal("expected default knowledge base")
@@ -211,6 +199,7 @@ func TestAppServiceIndexDocumentCreatesMarkdownArchive(t *testing.T) {
 	}
 
 	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	configureFixtureEmbedding(t, service)
 	knowledgeBases := service.ListKnowledgeBases()
 	if len(knowledgeBases) == 0 {
 		t.Fatal("expected default knowledge base")
@@ -245,7 +234,7 @@ func TestAppServiceIndexDocumentCreatesMarkdownArchive(t *testing.T) {
 
 func TestAppServiceIndexDocumentRemovesMarkdownArchiveWhenEmbeddingFails(t *testing.T) {
 	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/embeddings" {
+		if r.URL.Path != "/v1/embeddings" {
 			http.NotFound(w, r)
 			return
 		}
@@ -322,6 +311,7 @@ func TestAppServiceRewriteDocumentContentRefreshesMarkdownArchive(t *testing.T) 
 	}
 
 	service := NewAppService(nil, NewAppStateStore(""), nil, model.ServerConfig{})
+	configureFixtureEmbedding(t, service)
 	knowledgeBases := service.ListKnowledgeBases()
 	if len(knowledgeBases) == 0 {
 		t.Fatal("expected default knowledge base")
@@ -382,7 +372,7 @@ func TestAppServiceRewriteDocumentContentRefreshesMarkdownArchive(t *testing.T) 
 		t.Fatalf("rewrite failure was not persisted: status=%s chunks=%d indexedAt=%s error=%s, load=%v", failed.Status, failed.ChunkCount, failed.IndexedAt, failed.IndexError, err)
 	}
 	// 上游恢复后使用保留的正文重建，失败标识必须清除。
-	service.qdrant = nil
+	service.qdrant = fixtureWritableQdrant(t, 8)
 	recovered, err := service.ReindexDocument(knowledgeBases[0].ID, indexed.ID)
 	if err != nil || recovered.Status != "indexed" || recovered.IndexError != "" {
 		t.Fatalf("recover failed rewrite: status=%s, error=%v", recovered.Status, err)
@@ -547,7 +537,7 @@ func TestMultiQueryDeduplication(t *testing.T) {
 		"kb-1",
 		3,
 		0,
-		model.EmbeddingModelConfig{Provider: "openai"},
+		fixtureEmbeddingConfig(t, func() int { return 4 }),
 	)
 	if err != nil {
 		t.Fatalf("multi query search: %v", err)
