@@ -10,7 +10,9 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +26,8 @@ const (
 	defaultChunkSize    = 800
 	defaultChunkOverlap = 120
 	defaultTopK         = 5
-	embeddingBatchSize  = 32
+	// CPU 嵌入模型按小批次执行，减少单次计算超时。
+	embeddingBatchSize = 8
 )
 
 type RagService struct {
@@ -177,7 +180,16 @@ type ollamaEmbedResponse struct {
 	Error      string      `json:"error,omitempty"`
 }
 
+// NewRagService 创建向量检索服务；EMBEDDING_TIMEOUT_SECONDS 控制每批请求预算。
+// 超时接受 1–3600 秒，未设置或无效时使用 180 秒；调用方 context 可提前取消请求。
 func NewRagService() *RagService {
+	timeout := 180 * time.Second
+	seconds, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_TIMEOUT_SECONDS")))
+	if err == nil && seconds >= 1 && seconds <= 3600 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+
+	// 两层使用同一预算，避免响应头仍被旧的 45 秒限制提前中断。
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -187,11 +199,11 @@ func NewRagService() *RagService {
 		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 45 * time.Second,
+		ResponseHeaderTimeout: timeout,
 	}
 	return &RagService{
 		client: &http.Client{
-			Timeout:   60 * time.Second,
+			Timeout:   timeout,
 			Transport: transport,
 		},
 		cache: newLRUEmbeddingCache(2048),

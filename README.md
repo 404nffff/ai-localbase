@@ -429,7 +429,7 @@ docker compose up --build
 
 ## 关键环境变量
 
-后端环境变量由 `backend/internal/config/config.go` 加载，常用项如下：
+后端环境变量主要由 `backend/internal/config/config.go` 加载；Embedding 超时在向量服务初始化时读取，常用项如下：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -443,11 +443,14 @@ docker compose up --build
 | `QDRANT_VECTOR_SIZE` | `1024` | 向量维度 |
 | `QDRANT_DISTANCE` | `Cosine` | 距离算法 |
 | `QDRANT_TIMEOUT_SECONDS` | `5` | Qdrant 超时秒数 |
+| `EMBEDDING_TIMEOUT_SECONDS` | `180` | 每批 Embedding 请求超时秒数（1–3600）；同时控制响应头与完整请求，空值或无效值使用默认值 |
 | `ENABLE_HYBRID_SEARCH` | `false` | 启用 Hybrid Search |
 | `ENABLE_SEMANTIC_RERANKER` | `false` | 启用语义重排 |
 | `ENABLE_QUERY_REWRITE` | `false` | 启用 Query Rewrite |
 | `ENABLE_SEMANTIC_CACHE` | `false` | 启用语义缓存 |
 | `ENABLE_CONTEXT_COMPRESSION` | `false` | 启用上下文压缩 |
+
+Embedding 每批最多发送 8 段文本，普通索引、原文重建和 Wiki 重建共用该限制。修改超时后需重启后端；Docker 部署需在 backend 服务的 `environment` 中显式传入该变量，仅修改宿主环境不会自动传入容器。超时按单批计算，整份文档可能包含多批；调用方取消仍会提前结束请求。
 
 > 注意：`QDRANT_VECTOR_SIZE` 必须与所使用的嵌入模型输出维度一致。切换嵌入模型时，如果维度变化，建议清理旧集合或创建新的知识库。
 
